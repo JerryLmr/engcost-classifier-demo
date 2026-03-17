@@ -1,0 +1,9 @@
+import os
+
+
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "90"))
+
+DEFAULT_FALLBACK_LEVEL1 = os.getenv("DEFAULT_FALLBACK_LEVEL1", "公共设施")
+DEFAULT_FALLBACK_LEVEL2 = os.getenv("DEFAULT_FALLBACK_LEVEL2", "公共区域维修")

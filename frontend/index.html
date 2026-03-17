@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>物业工程分类 Demo</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <h1>物业工程名称智能分类 Demo</h1>
+      <div class="sub">
+        支持两种展示方式：<strong>一句话即时分类</strong> 与 <strong>Excel 批量分类</strong>。<br>
+        后端默认接本地 <code>Ollama + qwen3:8b</code>，并采用 <strong>规则优先 + LLM 兜底</strong> 的方式，兼顾稳定性和展示效果。
+      </div>
+      <div class="examples">
+        <div class="example">某小区 3 号楼外墙渗水维修工程</div>
+        <div class="example">地下车库道闸系统更新改造</div>
+        <div class="example">小区生活水泵更换维修</div>
+        <div class="example">屋面漏水及防水层翻修工程</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <label for="projectText">单条工程名称分类</label>
+        <textarea id="projectText" placeholder="输入一句工程名称，例如：某小区 3 号楼外墙渗水维修工程"></textarea>
+        <div class="btns">
+          <button id="classifyBtn">开始分类</button>
+          <button class="secondary" id="clearBtn">清空</button>
+        </div>
+        <div class="result" id="resultBox" hidden>
+          <div class="kv"><strong>工程名称：</strong><span id="rProject"></span></div>
+          <div class="kv"><strong>分类结果：</strong><span class="pill" id="rLevel1"></span><span class="pill" id="rLevel2"></span></div>
+          <div class="kv"><strong>分类方式：</strong><span id="rMethod"></span></div>
+          <div class="kv"><strong>分类依据：</strong><span id="rReason"></span></div>
+        </div>
+        <div class="status" id="singleStatus"></div>
+      </div>
+
+      <div class="card">
+        <label for="excelFile">Excel 批量分类</label>
+        <input id="excelFile" type="file" accept=".xlsx,.xlsm" />
+        <div class="tip">
+          约定：<strong>第一列</strong>为工程名称，系统会在原表后追加“一级分类、二级分类、分类方式、分类依据”四列，随后自动下载结果文件。
+        </div>
+        <div class="btns">
+          <button id="excelBtn">上传并处理 Excel</button>
+        </div>
+        <div class="status" id="excelStatus">建议准备一个 10~50 行的小样本文件用于现场演示。</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.API_BASE = window.API_BASE || "http://127.0.0.1:8000";
+  </script>
+  <script src="./app.js"></script>
+</body>
+</html>

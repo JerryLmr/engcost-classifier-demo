@@ -1,0 +1,153 @@
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: linear-gradient(135deg, #f5f7fb 0%, #eef3ff 100%);
+  color: #1f2937;
+}
+
+.wrap {
+  max-width: 1100px;
+  margin: 40px auto;
+  padding: 0 20px 40px;
+}
+
+.hero {
+  background: white;
+  border-radius: 24px;
+  padding: 32px;
+  box-shadow: 0 16px 40px rgba(16, 24, 40, 0.08);
+  margin-bottom: 24px;
+}
+
+h1 {
+  margin: 0 0 10px;
+  font-size: 32px;
+}
+
+.sub {
+  color: #4b5563;
+  line-height: 1.7;
+  margin-bottom: 24px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 24px;
+}
+
+.card {
+  background: white;
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow: 0 16px 40px rgba(16, 24, 40, 0.08);
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+textarea,
+input[type="file"] {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 16px;
+  padding: 14px 16px;
+  font-size: 15px;
+  background: #fff;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 120px;
+}
+
+.btns {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+button {
+  border: none;
+  border-radius: 14px;
+  padding: 12px 18px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  background: #2563eb;
+  color: white;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.24);
+}
+
+button.secondary {
+  background: #111827;
+  box-shadow: 0 10px 24px rgba(17, 24, 39, 0.18);
+}
+
+.result {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.pill {
+  display: inline-block;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-weight: 700;
+  margin-right: 8px;
+}
+
+.kv {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  line-height: 1.7;
+}
+
+.tip,
+.status {
+  color: #6b7280;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.status {
+  margin-top: 10px;
+}
+
+.examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.example {
+  border: 1px solid #dbeafe;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-radius: 999px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  h1 {
+    font-size: 26px;
+  }
+}
