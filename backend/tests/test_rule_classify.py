@@ -266,6 +266,30 @@ class RuleClassifyTestCase(unittest.TestCase):
         self.assertEqual(result["level1"], "门禁设施")
         self.assertIn(result["level2"], {"门禁更换", "门禁升级", "门禁系统维修"})
 
+    def test_unit_door_paint_refit_is_not_access_control(self):
+        result = classify_text("单元门粉刷翻新")
+        self.assertEqual(result["level1"], "楼道装修")
+        self.assertIn(result["level2"], {"楼道粉刷", "楼道翻新"})
+
+    def test_unit_door_location_does_not_trigger_access_control(self):
+        result = classify_text("单元门附近排水改造")
+        self.assertNotEqual(result["level1"], "门禁设施")
+
+    def test_unit_door_access_control_replacement_still_hits_access_control(self):
+        result = classify_text("单元门门禁更换")
+        self.assertEqual(result["level1"], "门禁设施")
+        self.assertEqual(result["level2"], "门禁更换")
+
+    def test_public_area_paint_prefers_public_facilities(self):
+        result = classify_text("公共区域维修更新粉刷工程")
+        self.assertEqual(result["level1"], "公共设施")
+        self.assertEqual(result["level2"], "公共区域翻新")
+
+    def test_lobby_refit_prefers_public_facilities(self):
+        result = classify_text("大堂过道翻新工程")
+        self.assertEqual(result["level1"], "公共设施")
+        self.assertEqual(result["level2"], "公共区域翻新")
+
 
 if __name__ == "__main__":
     unittest.main()

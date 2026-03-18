@@ -106,6 +106,29 @@ BOUNDARY_RULES: List[BoundaryRule] = [
         "allowed_level2": ["公共区域翻新"],
     },
     {
+        "level1": "楼道装修",
+        "reason": "单元门表面粉刷翻新优先归入楼道装修",
+        "all_keywords": ["单元门"],
+        "any_keywords": ["粉刷", "翻新", "涂装", "饰面"],
+        "allowed_level2": ["楼道粉刷", "楼道翻新"],
+    },
+    {
+        "level1": "公共设施",
+        "reason": "公共区域和公共部位的粉刷翻新优先归入公共设施",
+        "any_keywords": ["公共区域", "公共部位", "大堂", "过道"],
+        "all_keywords": ["粉刷"],
+        "none_keywords": ["外墙", "外立面"],
+        "allowed_level2": ["公共区域翻新"],
+    },
+    {
+        "level1": "公共设施",
+        "reason": "公共区域和公共部位的翻新更新优先归入公共设施",
+        "any_keywords": ["公共区域", "公共部位", "大堂", "过道"],
+        "all_keywords": ["翻新"],
+        "none_keywords": ["外墙", "外立面"],
+        "allowed_level2": ["公共区域翻新"],
+    },
+    {
         "level1": "消防",
         "reason": "消防对象词出现时优先限定在消防分类内",
         "any_keywords": ["消防", "消火栓", "消防栓", "喷淋", "报警", "灭火器", "防火门"],
@@ -121,7 +144,7 @@ BOUNDARY_RULES: List[BoundaryRule] = [
     {
         "level1": "门禁设施",
         "reason": "车牌识别或门禁门体场景优先归入门禁设施",
-        "any_keywords": ["车牌识别", "防盗门", "自动门", "单元门"],
+        "any_keywords": ["车牌识别", "防盗门", "自动门"],
         "allowed_level2": ["门禁系统维修", "门禁更换", "门禁升级", "刷卡人脸系统改造"],
     },
     {
