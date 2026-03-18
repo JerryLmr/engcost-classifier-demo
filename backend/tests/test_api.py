@@ -83,6 +83,46 @@ class ApiTestCase(unittest.TestCase):
         self.assertIn("复合原因", headers)
         self.assertIn("候选分类", headers)
 
+    def test_analyze_excel(self):
+        workbook = openpyxl.Workbook()
+        worksheet = workbook.active
+        headers = [
+            "工程名称",
+            "一级分类",
+            "二级分类",
+            "分类方式",
+            "分类依据",
+            "是否复合工程",
+            "是否建议复核",
+            "结构类型",
+        ]
+        for col, value in enumerate(headers, start=1):
+            worksheet.cell(row=1, column=col, value=value)
+        worksheet.append(["消防喷淋管网维修", "消防", "消防管网维修", "规则优先", "关键词命中", "否", "否", "single_project"])
+        worksheet.append(["某综合项目", "公共设施", "公共区域维修", "LLM 兜底", "模型语义匹配", "是", "是", "composite_project"])
+
+        output = BytesIO()
+        workbook.save(output)
+        output.seek(0)
+
+        response = self.client.post(
+            "/api/analyze-excel",
+            files={
+                "file": (
+                    "classified.xlsx",
+                    output.getvalue(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["summary"]["total_records"], 2)
+        self.assertEqual(data["summary"]["llm_method_count"], 1)
+        self.assertEqual(data["summary"]["composite_count"], 1)
+        self.assertEqual(data["structure_counts"]["composite_project"], 1)
+        self.assertEqual(len(data["focus_samples"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

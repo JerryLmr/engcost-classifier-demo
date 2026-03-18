@@ -12,7 +12,7 @@
       <h1>物业工程名称智能分类 Demo</h1>
       <div class="sub">
         支持两种展示方式：<strong>一句话即时分类</strong> 与 <strong>Excel 批量分类</strong>。<br>
-        后端默认接本地 <code>Ollama + qwen3:8b</code>，并采用 <strong>规则优先 + LLM 兜底</strong> 的方式，兼顾稳定性和展示效果。
+        后端默认接本地 <code>Ollama + qwen3:8b</code>，并采用 <strong>规则优先 + LLM 辅助分类</strong> 的方式，兼顾稳定性和展示效果。
       </div>
       <div class="examples">
         <div class="example">某小区 3 号楼外墙渗水维修工程</div>
@@ -34,6 +34,9 @@
           <div class="kv"><strong>工程名称：</strong><span id="rProject"></span></div>
           <div class="kv"><strong>分类结果：</strong><span class="pill" id="rLevel1"></span><span class="pill" id="rLevel2"></span></div>
           <div class="kv"><strong>分类方式：</strong><span id="rMethod"></span></div>
+          <div class="kv"><strong>结构类型：</strong><span id="rStructureType"></span></div>
+          <div class="kv" id="rCompositeReasonWrap" hidden><strong>复合原因：</strong><span id="rCompositeReason"></span></div>
+          <div class="kv" id="rCandidatesWrap" hidden><strong>候选分类：</strong><span id="rCandidates"></span></div>
           <div class="kv"><strong>分类依据：</strong><span id="rReason"></span></div>
         </div>
         <div class="status" id="singleStatus"></div>
@@ -48,7 +51,73 @@
         <div class="btns">
           <button id="excelBtn">上传并处理 Excel</button>
         </div>
-        <div class="status" id="excelStatus">建议准备一个 10~50 行的小样本文件用于现场演示。</div>
+        <div class="status" id="excelStatus"></div>
+      </div>
+    </div>
+
+    <div class="card analysis-card">
+      <div class="section-head">
+        <div>
+          <h2>结果分析</h2>
+          <p>上传已分类结果 Excel，展示摘要统计与重点样本。</p>
+        </div>
+      </div>
+      <label for="analysisFile">分析已分类结果文件</label>
+      <input id="analysisFile" type="file" accept=".xlsx,.xlsm" />
+      <div class="btns">
+        <button id="analyzeBtn">开始分析</button>
+      </div>
+      <div class="status" id="analysisStatus">请上传已经带“一级分类、二级分类、分类方式、分类依据”等结果列的 Excel 文件。</div>
+
+      <div class="analysis-results" id="analysisResults" hidden>
+        <div class="metrics-grid" id="summaryMetrics"></div>
+        <div class="metrics-grid compact" id="structureMetrics"></div>
+
+        <div class="analysis-grid">
+          <div class="table-card">
+            <h3>一级分类统计</h3>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>一级分类</th><th>数量</th></tr>
+                </thead>
+                <tbody id="level1Table"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="table-card">
+            <h3>二级分类统计</h3>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>二级分类</th><th>数量</th></tr>
+                </thead>
+                <tbody id="level2Table"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-card focus-card">
+          <h3>重点样本</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>工程名称</th>
+                  <th>一级分类</th>
+                  <th>二级分类</th>
+                  <th>分类方式</th>
+                  <th>复合工程</th>
+                  <th>建议复核</th>
+                  <th>结构类型</th>
+                </tr>
+              </thead>
+              <tbody id="focusTable"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   </div>

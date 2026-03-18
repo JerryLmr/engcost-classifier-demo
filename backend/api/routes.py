@@ -1,7 +1,8 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from core.config import OLLAMA_MODEL
-from models.schemas import ClassifyRequest, ClassifyResponse
+from models.schemas import AnalyzeResponse, ClassifyRequest, ClassifyResponse
+from services.analysis_service import analyze_excel_file
 from services.classifier import classify_text
 from services.excel_service import classify_excel_file
 
@@ -25,3 +26,8 @@ def classify(req: ClassifyRequest):
 @router.post("/classify-excel")
 def classify_excel(file: UploadFile = File(...)):
     return classify_excel_file(file)
+
+
+@router.post("/analyze-excel", response_model=AnalyzeResponse)
+def analyze_excel(file: UploadFile = File(...)):
+    return analyze_excel_file(file)

@@ -3,13 +3,20 @@ import argparse
 from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List
+import sys
 
 import openpyxl
+
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND_DIR = ROOT / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from services.analysis_service import load_records_from_path, summarize_records  # noqa: E402
 
 
 SUMMARY_HEADERS = ["指标", "数值"]
 CLASSIFIED_SUFFIXES = ("_分类结果", "_classified")
-FOCUS_SAMPLE_LIMIT = 2000
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,44 +44,6 @@ def should_read_file(path: Path) -> bool:
     )
 
 
-def read_result_rows(path: Path) -> List[Dict[str, object]]:
-    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    worksheet = workbook.active
-    rows = worksheet.iter_rows(values_only=True)
-    header = list(next(rows))
-    index = {name: i for i, name in enumerate(header)}
-
-    required_columns = [
-        "一级分类",
-        "二级分类",
-        "分类方式",
-        "分类依据",
-        "是否复合工程",
-        "是否建议复核",
-        "结构类型",
-    ]
-    missing = [column for column in required_columns if column not in index]
-    if missing:
-        raise ValueError(f"{path.name} 缺少结果列: {', '.join(missing)}")
-
-    result: List[Dict[str, object]] = []
-    for row_num, row in enumerate(rows, start=2):
-        if not any(row):
-            continue
-        project_name = row[0]
-        if project_name is None or str(project_name).strip() == "":
-            continue
-        record = {
-            "来源文件": path.name,
-            "行号": row_num,
-            "工程名称": str(project_name),
-        }
-        for column in required_columns:
-            record[column] = row[index[column]]
-        result.append(record)
-    return result
-
-
 def top_counter_rows(counter: Counter, top_n: int, label: str) -> List[List[object]]:
     rows = [[label, "数量"]]
     for name, count in counter.most_common(top_n):
@@ -89,25 +58,23 @@ def write_sheet(workbook: openpyxl.Workbook, title: str, rows: Iterable[Iterable
 
 
 def build_summary_rows(records: List[Dict[str, object]]) -> List[List[object]]:
-    files = sorted({record["来源文件"] for record in records})
-    method_counter = Counter(record["分类方式"] for record in records)
-    composite_counter = Counter(record["是否复合工程"] for record in records)
-    review_counter = Counter(record["是否建议复核"] for record in records)
-    structure_counter = Counter(record["结构类型"] for record in records)
-
+    files = sorted({record["source_file"] for record in records})
+    analysis = summarize_records(records)
+    summary = analysis["summary"]
+    structure = analysis["structure_counts"]
     rows = [SUMMARY_HEADERS]
     rows.extend(
         [
             ["文件数", len(files)],
             ["总记录数", len(records)],
-            ["规则优先", method_counter.get("规则优先", 0)],
-            ["LLM 兜底", method_counter.get("LLM 兜底", 0)],
-            ["降级兜底", method_counter.get("降级兜底", 0)],
-            ["复合工程=是", composite_counter.get("是", 0)],
-            ["建议复核=是", review_counter.get("是", 0)],
-            ["single_project", structure_counter.get("single_project", 0)],
-            ["multi_system_same_domain", structure_counter.get("multi_system_same_domain", 0)],
-            ["composite_project", structure_counter.get("composite_project", 0)],
+            ["规则优先", summary["rule_method_count"]],
+            ["LLM 兜底", summary["llm_method_count"]],
+            ["降级兜底", summary["fallback_method_count"]],
+            ["复合工程=是", summary["composite_count"]],
+            ["建议复核=是", summary["review_count"]],
+            ["single_project", structure["single_project"]],
+            ["multi_system_same_domain", structure["multi_system_same_domain"]],
+            ["composite_project", structure["composite_project"]],
         ]
     )
     return rows
@@ -127,29 +94,22 @@ def build_focus_rows(records: List[Dict[str, object]]) -> List[List[object]]:
         "分类依据",
     ]
     rows = [headers]
-
-    focus_records: List[Dict[str, object]] = []
-    for record in records:
-        if (
-            record["分类方式"] != "规则优先"
-            or record["是否复合工程"] == "是"
-            or record["是否建议复核"] == "是"
-        ):
-            focus_records.append(record)
-
-    focus_records.sort(
-        key=lambda item: (
-            item["来源文件"],
-            item["分类方式"] != "规则优先",
-            item["是否建议复核"] == "是",
-            item["是否复合工程"] == "是",
-            item["行号"],
-        ),
-        reverse=False,
-    )
-
-    for record in focus_records[:FOCUS_SAMPLE_LIMIT]:
-        rows.append([record[column] for column in headers])
+    focus_records = summarize_records(records)["focus_samples"]
+    for record in focus_records:
+        rows.append(
+            [
+                record["source_file"],
+                record["row_num"],
+                record["project_name"],
+                record["level1"],
+                record["level2"],
+                record["method"],
+                "是" if record["is_composite"] else "否",
+                "是" if record["needs_review"] else "否",
+                record["structure_type"],
+                record["reason"],
+            ]
+        )
     return rows
 
 
@@ -173,14 +133,15 @@ def main() -> int:
 
     records: List[Dict[str, object]] = []
     for path in excel_files:
-        records.extend(read_result_rows(path))
+        records.extend(load_records_from_path(path))
 
     if not records:
         print(f"[ERROR] 未读取到有效分类记录: {input_dir}")
         return 1
 
-    level1_counter = Counter(record["一级分类"] for record in records)
-    level2_counter = Counter(record["二级分类"] for record in records)
+    level1_counter = Counter(record["level1"] for record in records)
+    level2_counter = Counter(record["level2"] for record in records)
+    analysis = summarize_records(records, top_n=args.top_n)
 
     workbook = openpyxl.Workbook()
     workbook.remove(workbook.active)
@@ -192,10 +153,8 @@ def main() -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
 
-    method_counter = Counter(record["分类方式"] for record in records)
-    composite_counter = Counter(record["是否复合工程"] for record in records)
-    review_counter = Counter(record["是否建议复核"] for record in records)
-    structure_counter = Counter(record["结构类型"] for record in records)
+    summary = analysis["summary"]
+    structure = analysis["structure_counts"]
 
     print(f"[DONE] 分析目录: {input_dir}")
     print(f"[DONE] 汇总文件: {output_path}")
@@ -203,17 +162,17 @@ def main() -> int:
     print(f"[DONE] 总记录数: {len(records)}")
     print(
         "[DONE] 分类方式: "
-        f"规则优先={method_counter.get('规则优先', 0)}, "
-        f"LLM兜底={method_counter.get('LLM 兜底', 0)}, "
-        f"降级兜底={method_counter.get('降级兜底', 0)}"
+        f"规则优先={summary['rule_method_count']}, "
+        f"LLM兜底={summary['llm_method_count']}, "
+        f"降级兜底={summary['fallback_method_count']}"
     )
     print(
         "[DONE] 结构统计: "
-        f"复合工程={composite_counter.get('是', 0)}, "
-        f"建议复核={review_counter.get('是', 0)}, "
-        f"single={structure_counter.get('single_project', 0)}, "
-        f"multi_system={structure_counter.get('multi_system_same_domain', 0)}, "
-        f"composite={structure_counter.get('composite_project', 0)}"
+        f"复合工程={summary['composite_count']}, "
+        f"建议复核={summary['review_count']}, "
+        f"single={structure['single_project']}, "
+        f"multi_system={structure['multi_system_same_domain']}, "
+        f"composite={structure['composite_project']}"
     )
     return 0
 
