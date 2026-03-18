@@ -66,7 +66,28 @@ source .venv/bin/activate
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-## 8. 可继续扩展
+## 8. 本地批量跑 Excel 回归
+
+不想通过前端页面逐个上传时，可以直接批量处理一个目录下的 Excel：
+
+```bash
+cd /home/jerrylmr/githubRepository/engcost-classifier-demo
+source backend/.venv/bin/activate
+python scripts/batch_classify_excel.py /path/to/excel_dir
+```
+
+默认会把结果输出到 `/path/to/excel_dir/classified_results/`。
+
+常用参数：
+
+```bash
+python scripts/batch_classify_excel.py /path/to/excel_dir --overwrite
+python scripts/batch_classify_excel.py /path/to/excel_dir -o /path/to/output_dir
+```
+
+脚本默认会跳过已经带 `_分类结果` 或 `_classified` 后缀的文件。
+
+## 9. 可继续扩展
 
 - 把分类体系从代码中迁移到 JSON 配置文件
 - 记录分类日志和命中率

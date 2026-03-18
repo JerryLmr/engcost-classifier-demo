@@ -174,6 +174,98 @@ class RuleClassifyTestCase(unittest.TestCase):
         self.assertFalse(result["is_composite"])
         self.assertEqual(result["structure_type"], "single_project")
 
+    def test_elevator_overhaul_prefers_rule(self):
+        result = classify_text("电梯大修合同 电梯大修")
+        self.assertEqual(result["level1"], "电梯")
+        self.assertEqual(result["level2"], "电梯维修")
+        self.assertEqual(result["method"], "规则优先")
+
+    def test_elevator_traction_machine_replacement(self):
+        result = classify_text("更换曳引机")
+        self.assertEqual(result["level1"], "电梯")
+        self.assertEqual(result["level2"], "电梯部件更换")
+
+    def test_elevator_replacement_stays_elevator(self):
+        result = classify_text("电梯置换")
+        self.assertEqual(result["level1"], "电梯")
+        self.assertEqual(result["level2"], "电梯更换")
+
+    def test_old_elevator_upgrade_prefers_upgrade(self):
+        result = classify_text("电梯老旧改造")
+        self.assertEqual(result["level1"], "电梯")
+        self.assertEqual(result["level2"], "电梯改造升级")
+
+    def test_wall_rebuild(self):
+        result = classify_text("围墙倒塌重建")
+        self.assertEqual(result["level1"], "围墙")
+        self.assertEqual(result["level2"], "围墙新建")
+
+    def test_green_barrier_prefers_wall(self):
+        result = classify_text("绿化围挡改造")
+        self.assertEqual(result["level1"], "围墙")
+        self.assertFalse(result["is_composite"])
+
+    def test_sewage_pump_stays_sewage(self):
+        result = classify_text("污水泵及控制柜更换")
+        self.assertEqual(result["level1"], "污水")
+        self.assertFalse(result["is_composite"])
+
+    def test_plate_recognition_prefers_access_control(self):
+        result = classify_text("车牌识别系统改造")
+        self.assertEqual(result["level1"], "门禁设施")
+        self.assertFalse(result["is_composite"])
+
+    def test_road_monitor_probe_prefers_monitor(self):
+        result = classify_text("小区道路监控探头")
+        self.assertEqual(result["level1"], "监控")
+        self.assertFalse(result["is_composite"])
+
+    def test_elevator_room_does_not_trigger_elevator_composite(self):
+        result = classify_text("电梯房屋顶防水")
+        self.assertEqual(result["level1"], "防水工程")
+        self.assertFalse(result["is_composite"])
+
+    def test_elevator_pit_leak_prefers_waterproof(self):
+        result = classify_text("电梯底坑漏水维修")
+        self.assertEqual(result["level1"], "防水工程")
+        self.assertFalse(result["is_composite"])
+
+    def test_elevator_lobby_wall_paint_is_not_elevator(self):
+        result = classify_text("电梯厅墙面粉刷")
+        self.assertNotEqual(result["level1"], "电梯")
+
+    def test_elevator_door_frame_repair_is_not_elevator(self):
+        result = classify_text("电梯门套维修")
+        self.assertNotEqual(result["level1"], "电梯")
+
+    def test_elevator_monitor_prefers_monitor(self):
+        result = classify_text("电梯监控系统改造")
+        self.assertEqual(result["level1"], "监控")
+        self.assertFalse(result["is_composite"])
+
+    def test_ladder_control_does_not_default_to_elevator(self):
+        result = classify_text("浦江名邸门禁可视对讲及梯控工程")
+        self.assertNotEqual(result["level1"], "电梯")
+
+    def test_house_leak_repair_is_not_elevator(self):
+        result = classify_text("房屋渗水修理工程")
+        self.assertNotEqual(result["level1"], "电梯")
+
+    def test_flood_board_prefers_public_facilities(self):
+        result = classify_text("防汛挡板更换")
+        self.assertEqual(result["level1"], "公共设施")
+        self.assertFalse(result["is_composite"])
+
+    def test_bike_shed_prefers_public_facilities(self):
+        result = classify_text("非机动车棚改造")
+        self.assertEqual(result["level1"], "公共设施")
+        self.assertFalse(result["is_composite"])
+
+    def test_security_door_prefers_access_control(self):
+        result = classify_text("防盗门更新")
+        self.assertEqual(result["level1"], "门禁设施")
+        self.assertIn(result["level2"], {"门禁更换", "门禁升级", "门禁系统维修"})
+
 
 if __name__ == "__main__":
     unittest.main()

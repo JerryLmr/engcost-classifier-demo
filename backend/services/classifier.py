@@ -8,18 +8,18 @@ from data.rules import DETAILED_LEVEL2_RULES, DetailedLevel2Rule, KeywordRule, L
 from services.llm_client import llm_classify
 
 DOMAIN_STRONG_KEYWORDS: Dict[str, List[str]] = {
-    "电梯": ["电梯", "扶梯", "钢丝绳", "主机", "抱闸", "层门"],
+    "电梯": ["电梯", "扶梯", "钢丝绳", "主机", "抱闸", "层门", "曳引机", "限速器", "主钢索", "大修", "修理"],
     "消防": ["消火栓", "消防栓", "喷淋", "报警", "灭火器", "防火门", "稳压泵", "报警阀", "消防水带"],
     "监控": ["监控", "摄像头", "球机", "录像", "存储"],
     "防水工程": ["防水工程", "防水层", "防水维修", "防水施工", "渗漏", "漏水", "渗水", "屋面", "屋顶"],
     "外立面修缮": ["粉刷", "空鼓", "脱落", "裂缝", "翻新", "涂料", "修补"],
-    "给排水": ["给水", "排水", "水泵", "二次供水", "水管"],
-    "污水": ["污水", "化粪池", "污水井", "污水管"],
+    "给排水": ["给水", "排水", "水泵", "生活泵", "供水泵", "直供水", "二次供水", "水管"],
+    "污水": ["污水", "化粪池", "污水井", "污水管", "污水泵", "排污泵", "集水井", "污水总管"],
     "绿化景观": ["绿化", "补种", "景观", "树木", "草坪", "园路"],
-    "停车交通": ["车位", "停车", "道闸", "标线", "交通设施"],
-    "公共设施": ["公共区域", "无障碍通道", "入口通道"],
+    "停车交通": ["车位", "停车", "停车场", "车辆", "出入口", "道闸", "标线", "交通设施"],
+    "公共设施": ["公共区域", "无障碍通道", "入口通道", "防汛挡板", "车棚", "非机动车棚"],
     "弱电系统": ["弱电", "网络", "智能化", "布线", "可视对讲", "楼宇对讲"],
-    "门禁设施": ["门禁", "门禁一体机", "刷卡门禁", "人脸门禁", "门控", "楼宇对讲门禁"],
+    "门禁设施": ["门禁", "门禁一体机", "刷卡门禁", "人脸门禁", "门控", "楼宇对讲门禁", "车牌识别", "防盗门", "自动门", "单元门"],
     "道路工程": ["道路", "路面", "人行道", "拓宽", "路面积水"],
 }
 
@@ -67,9 +67,14 @@ def collect_level1_candidates(text: str) -> List[Tuple[str, int, List[str]]]:
 
 def collect_strong_domain_hits(text: str) -> Dict[str, List[str]]:
     domain_hits: Dict[str, List[str]] = {}
+    has_monitor_context = any(keyword in text for keyword in ["监控", "摄像头", "球机", "录像"])
+    has_sewage_context = any(keyword in text for keyword in ["污水泵", "排污泵", "集水井", "化粪池", "污水井", "污水总管", "排污"])
+    has_elevator_decoration_context = any(keyword in text for keyword in ["墙面", "粉刷", "翻新", "涂料", "装修"])
+    has_waterproof_context = any(keyword in text for keyword in ["屋顶", "屋面", "防水", "漏水", "渗漏", "渗水"])
+    has_access_control_context = any(keyword in text for keyword in ["门禁", "对讲", "可视对讲", "智能化", "门禁系统", "梯控"])
     for level1, keywords in DOMAIN_STRONG_KEYWORDS.items():
         hits = [keyword for keyword in keywords if keyword in text]
-        if level1 == "电梯" and any(keyword in text for keyword in ["监控", "摄像头"]):
+        if level1 == "电梯" and ("电梯房" in text or has_monitor_context):
             explicit_elevator_work = any(
                 keyword in text
                 for keyword in [
@@ -89,10 +94,51 @@ def collect_strong_domain_hits(text: str) -> Dict[str, List[str]]:
             )
             if not explicit_elevator_work:
                 hits = [keyword for keyword in hits if keyword != "电梯"]
+        if level1 == "电梯" and any(keyword in text for keyword in ["电梯厅", "电梯间", "电梯门套"]) and has_elevator_decoration_context:
+            hits = [keyword for keyword in hits if keyword not in {"电梯"}]
+        if level1 == "电梯" and "电梯底坑" in text and has_waterproof_context:
+            hits = [keyword for keyword in hits if keyword not in {"电梯"}]
+        if level1 == "电梯" and has_access_control_context:
+            explicit_elevator_work = any(
+                keyword in text
+                for keyword in [
+                    "钢丝绳",
+                    "主机",
+                    "抱闸",
+                    "层门",
+                    "扶梯",
+                    "曳引机",
+                    "限速器",
+                    "控制柜",
+                    "主钢索",
+                    "电梯维修",
+                    "电梯更换",
+                    "电梯改造",
+                    "电梯更新",
+                    "电梯升级",
+                    "电梯故障",
+                    "电梯抢修",
+                ]
+            )
+            if not explicit_elevator_work:
+                hits = [keyword for keyword in hits if keyword not in {"电梯"}]
+        if level1 == "道路工程" and has_monitor_context:
+            explicit_road_work = any(
+                keyword in text
+                for keyword in ["道路改造", "道路维修", "道路拓宽", "路面维修", "路面翻新", "沥青"]
+            )
+            if not explicit_road_work:
+                hits = [keyword for keyword in hits if keyword not in {"道路", "路面", "人行道"}]
+        if level1 == "给排水" and has_sewage_context:
+            hits = [keyword for keyword in hits if keyword not in {"排水", "水泵", "水管"}]
+        if level1 == "给排水" and "消防泵房" in text:
+            hits = [keyword for keyword in hits if keyword != "水泵"]
         if level1 == "弱电系统" and "门禁" in text:
             hits = [keyword for keyword in hits if keyword not in {"楼宇对讲", "对讲", "可视对讲"}]
         if level1 == "防水工程" and "消防水带" in text:
             hits = [keyword for keyword in hits if keyword not in {"防水", "防水工程", "防水维修", "防水施工"}]
+        if level1 == "污水" and "防汛挡板" in text:
+            hits = []
         if hits:
             domain_hits[level1] = hits
     return domain_hits
