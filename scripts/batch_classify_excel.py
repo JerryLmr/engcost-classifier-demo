@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -11,8 +12,6 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND_DIR = ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
-
-from services.classifier import classify_text  # noqa: E402
 
 
 RESULT_HEADERS = [
@@ -46,6 +45,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="默认会跳过已带 _分类结果 / _classified 后缀的文件；设置后不跳过",
     )
+    parser.add_argument(
+        "--rule-source",
+        choices=["python", "json"],
+        default="json",
+        help="规则来源，默认使用 json 配置规则",
+    )
     return parser.parse_args()
 
 
@@ -58,7 +63,14 @@ def should_skip_file(path: Path, include_classified: bool) -> bool:
     return stem.endswith("_分类结果") or stem.endswith("_classified")
 
 
-def classify_workbook(path: Path, output_path: Path) -> tuple[int, int]:
+def get_classify_text(rule_source: str):
+    os.environ["RULE_SOURCE"] = rule_source
+    from services.classifier import classify_text  # noqa: E402
+
+    return classify_text
+
+
+def classify_workbook(path: Path, output_path: Path, classify_text_func) -> tuple[int, int]:
     workbook = openpyxl.load_workbook(path)
     worksheet = workbook.active
 
@@ -78,7 +90,7 @@ def classify_workbook(path: Path, output_path: Path) -> tuple[int, int]:
             skipped += 1
             continue
 
-        result = classify_text(str(project_name))
+        result = classify_text_func(str(project_name))
         worksheet.cell(row=row, column=result_start_col, value=result["level1"])
         worksheet.cell(row=row, column=result_start_col + 1, value=result["level2"])
         worksheet.cell(row=row, column=result_start_col + 2, value=result["method"])
@@ -125,6 +137,9 @@ def main() -> int:
     print(f"[INFO] 输入目录: {input_dir}")
     print(f"[INFO] 输出目录: {output_dir}")
     print(f"[INFO] 待处理文件数: {len(excel_files)}")
+    print(f"[INFO] 规则来源: {args.rule_source}")
+
+    classify_text_func = get_classify_text(args.rule_source)
 
     for path in excel_files:
         output_path = output_dir / f"{path.stem}_分类结果.xlsx"
@@ -134,7 +149,7 @@ def main() -> int:
 
         print(f"[RUN ] {path.name}")
         try:
-            processed, skipped = classify_workbook(path, output_path)
+            processed, skipped = classify_workbook(path, output_path, classify_text_func)
             total_files += 1
             total_processed += processed
             total_skipped += skipped

@@ -1,0 +1,690 @@
+{
+  "防水工程": {
+    "屋面防水维修": {
+      "object_keywords": [
+        [
+          "屋面",
+          6
+        ],
+        [
+          "屋顶",
+          5
+        ]
+      ],
+      "action_keywords": [
+        [
+          "防水",
+          3
+        ],
+        [
+          "渗漏",
+          3
+        ],
+        [
+          "漏水",
+          3
+        ],
+        [
+          "维修",
+          1
+        ]
+      ],
+      "default_on_object": true,
+      "min_score": 6
+    },
+    "地下室防水": {
+      "object_keywords": [
+        [
+          "地下室",
+          7
+        ],
+        [
+          "电梯底坑",
+          7
+        ]
+      ],
+      "action_keywords": [
+        [
+          "防水",
+          3
+        ],
+        [
+          "渗漏",
+          2
+        ],
+        [
+          "漏水",
+          2
+        ]
+      ],
+      "default_on_object": true,
+      "min_score": 7
+    },
+    "外墙防水": {
+      "object_keywords": [
+        [
+          "外墙",
+          5
+        ],
+        [
+          "外立面",
+          4
+        ]
+      ],
+      "action_keywords": [
+        [
+          "防水",
+          4
+        ],
+        [
+          "渗漏",
+          3
+        ],
+        [
+          "漏水",
+          3
+        ],
+        [
+          "渗水",
+          3
+        ]
+      ],
+      "default_on_object": false,
+      "min_score": 7
+    },
+    "卫生间及管道防水": {
+      "object_keywords": [
+        [
+          "卫生间",
+          7
+        ],
+        [
+          "管道",
+          3
+        ]
+      ],
+      "action_keywords": [
+        [
+          "防水",
+          4
+        ],
+        [
+          "渗漏",
+          2
+        ],
+        [
+          "漏水",
+          2
+        ]
+      ],
+      "default_on_object": true,
+      "min_score": 7
+    }
+  },
+  "外立面修缮": {
+    "外墙渗水维修": {
+      "object_keywords": [
+        [
+          "外墙",
+          5
+        ],
+        [
+          "外立面",
+          4
+        ]
+      ],
+      "action_keywords": [
+        [
+          "渗水",
+          4
+        ],
+        [
+          "修复",
+          2
+        ]
+      ],
+      "weak_keywords": [
+        [
+          "维修",
+          1
+        ]
+      ],
+      "default_on_object": false,
+      "min_score": 7
+    },
+    "外墙空鼓修补": {
+      "object_keywords": [
+        [
+          "外墙",
+          5
+        ],
+        [
+          "外立面",
+          4
+        ]
+      ],
+      "action_keywords": [
+        [
+          "空鼓",
+          5
+        ],
+        [
+          "修补",
+          3
+        ]
+      ],
+      "default_on_object": false,
+      "min_score": 7
+    },
+    "外墙粉刷翻新": {
+      "object_keywords": [
+        [
+          "外墙",
+          5
+        ],
+        [
+          "外立面",
+          4
+        ]
+      ],
+      "action_keywords": [
+        [
+          "粉刷",
+          5
+        ],
+        [
+          "翻新",
+          4
+        ],
+        [
+          "涂料",
+          3
+        ]
+      ],
+      "default_on_object": false,
+      "min_score": 7
+    },
+    "外墙脱落修复": {
+      "object_keywords": [
+        [
+          "外墙",
+          5
+        ],
+        [
+          "外立面",
+          4
+        ]
+      ],
+      "action_keywords": [
+        [
+          "脱落",
+          5
+        ],
+        [
+          "裂缝",
+          4
+        ],
+        [
+          "修复",
+          2
+        ]
+      ],
+      "default_on_object": false,
+      "min_score": 7
+    }
+  },
+  "消防": {
+    "消火栓维修": {
+      "object_keywords": [
+        [
+          "消火栓",
+          8
+        ],
+        [
+          "消防栓",
+          8
+        ]
+      ],
+      "action_keywords": [
+        [
+          "维修",
+          1
+        ],
+        [
+          "损坏",
+          2
+        ],
+        [
+          "无水",
+          2
+        ]
+      ],
+      "default_on_object": true,
+      "min_score": 8
+    },
+    "消防管网维修": {
+      "object_keywords": [
+        [
+          "喷淋管",
+          7
+        ],
+        [
+          "喷淋",
+          6
+        ],
+        [
+          "管网",
+          7
+        ],
+        [
+          "稳压泵",
+          6
+        ],
+        [
+          "报警阀",
+          6
+        ]
+      ],
+      "action_keywords": [
+        [
+          "维修",
+          1
+        ],
+        [
+          "抢修",
+          2
+        ],
+        [
+          "更换",
+          1
+        ]
+      ],
+      "default_on_object": true,
+      "min_score": 7
+    },
+    "消防系统改造": {
+      "object_keywords": [
+        [
+          "报警系统",
+          7
+        ],
+        [
+          "火灾自动报警",
+          7
+        ],
+        [
+          "系统",
+          2
+        ]
+      ],
+      "action_keywords": [
+        [
+          "改造",
+          4
+        ],
+        [
+          "升级",
+          4
+        ],
+        [
+          "更新",
+          3
+        ],
+        [
+          "安装",
+          2
+        ],
+        [
+          "调试",
+          2
+        ]
+      ],
+      "default_on_object": false,
+      "min_score": 6
+    },
+    "消防设备更换": {
+      "object_keywords": [
+        [
+          "灭火器",
+          8
+        ],
+        [
+          "防火门",
+          8
+        ],
+        [
+          "设备",
+          3
+        ],
+        [
+          "设施设备",
+          4
+        ],
+        [
+          "消防设施",
+          3
+        ]
+      ],
+      "action_keywords": [
+        [
+          "更换",
+          4
+        ],
+        [
+          "更新",
+          4
+        ],
+        [
+          "换新",
+          4
+        ]
+      ],
+      "weak_keywords": [
+        [
+          "维修",
+          1
+        ]
+      ],
+      "default_on_object": false,
+      "min_score": 7
+    }
+  },
+  "电梯": {
+    "电梯维修": {
+      "object_keywords": [
+        [
+          "电梯",
+          5
+        ],
+        [
+          "扶梯",
+          5
+        ]
+      ],
+      "action_keywords": [
+        [
+          "维修",
+          3
+        ],
+        [
+          "故障",
+          3
+        ],
+        [
+          "抢修",
+          3
+        ],
+        [
+          "大修",
+          4
+        ],
+        [
+          "修理",
+          4
+        ],
+        [
+          "重大修理",
+          4
+        ]
+      ],
+      "default_on_object": false,
+      "min_score": 7
+    },
+    "电梯更换": {
+      "object_keywords": [
+        [
+          "电梯",
+          5
+        ],
+        [
+          "扶梯",
+          5
+        ]
+      ],
+      "action_keywords": [
+        [
+          "更换",
+          4
+        ],
+        [
+          "换新",
+          4
+        ],
+        [
+          "置换",
+          4
+        ]
+      ],
+      "default_on_object": false,
+      "min_score": 8
+    },
+    "电梯改造升级": {
+      "object_keywords": [
+        [
+          "电梯",
+          5
+        ],
+        [
+          "扶梯",
+          5
+        ]
+      ],
+      "action_keywords": [
+        [
+          "改造",
+          4
+        ],
+        [
+          "升级",
+          4
+        ],
+        [
+          "更新",
+          3
+        ],
+        [
+          "维修改造",
+          4
+        ]
+      ],
+      "default_on_object": false,
+      "min_score": 8
+    },
+    "电梯部件更换": {
+      "object_keywords": [
+        [
+          "钢丝绳",
+          8
+        ],
+        [
+          "主机",
+          8
+        ],
+        [
+          "抱闸",
+          8
+        ],
+        [
+          "层门",
+          7
+        ],
+        [
+          "平层感应器",
+          7
+        ],
+        [
+          "部件",
+          6
+        ],
+        [
+          "曳引机",
+          8
+        ],
+        [
+          "控制柜",
+          7
+        ],
+        [
+          "限速器",
+          7
+        ],
+        [
+          "通讯板",
+          7
+        ],
+        [
+          "主钢索",
+          7
+        ]
+      ],
+      "action_keywords": [
+        [
+          "更换",
+          4
+        ],
+        [
+          "更新",
+          3
+        ]
+      ],
+      "weak_keywords": [
+        [
+          "维修",
+          1
+        ],
+        [
+          "大修",
+          2
+        ]
+      ],
+      "default_on_object": true,
+      "min_score": 8
+    }
+  },
+  "监控": {
+    "监控设备更换": {
+      "object_keywords": [
+        [
+          "监控设备",
+          6
+        ],
+        [
+          "监控",
+          4
+        ],
+        [
+          "摄像头",
+          5
+        ],
+        [
+          "探头",
+          5
+        ]
+      ],
+      "action_keywords": [
+        [
+          "更换",
+          4
+        ],
+        [
+          "换新",
+          4
+        ]
+      ],
+      "default_on_object": false,
+      "min_score": 7
+    },
+    "监控系统升级": {
+      "object_keywords": [
+        [
+          "监控系统",
+          7
+        ],
+        [
+          "监控设备",
+          5
+        ],
+        [
+          "监控",
+          4
+        ]
+      ],
+      "action_keywords": [
+        [
+          "改造",
+          4
+        ],
+        [
+          "升级",
+          4
+        ],
+        [
+          "更新",
+          3
+        ]
+      ],
+      "default_on_object": false,
+      "min_score": 7
+    },
+    "摄像头安装维修": {
+      "object_keywords": [
+        [
+          "摄像头",
+          7
+        ],
+        [
+          "球机",
+          6
+        ],
+        [
+          "探头",
+          6
+        ]
+      ],
+      "action_keywords": [
+        [
+          "安装",
+          3
+        ],
+        [
+          "维修",
+          2
+        ]
+      ],
+      "default_on_object": true,
+      "min_score": 6
+    },
+    "视频存储系统改造": {
+      "object_keywords": [
+        [
+          "存储",
+          7
+        ],
+        [
+          "硬盘",
+          6
+        ],
+        [
+          "录像",
+          5
+        ]
+      ],
+      "action_keywords": [
+        [
+          "改造",
+          4
+        ],
+        [
+          "升级",
+          3
+        ],
+        [
+          "更换",
+          2
+        ]
+      ],
+      "default_on_object": true,
+      "min_score": 7
+    }
+  }
+}

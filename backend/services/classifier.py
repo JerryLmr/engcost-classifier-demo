@@ -1,45 +1,11 @@
 import re
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
+from core.rule_loader import get_ruleset
 from data.boundaries import find_boundary_decision
 from core.config import DEFAULT_FALLBACK_LEVEL1, DEFAULT_FALLBACK_LEVEL2
-from data.categories import CATEGORY_TREE
-from data.rules import DETAILED_LEVEL2_RULES, DetailedLevel2Rule, KeywordRule, LEVEL1_RULES, LEVEL2_RULES
+from data.rules import DetailedLevel2Rule, KeywordRule
 from services.llm_client import llm_classify
-
-DOMAIN_STRONG_KEYWORDS: Dict[str, List[str]] = {
-    "电梯": ["电梯", "扶梯", "钢丝绳", "主机", "抱闸", "层门", "曳引机", "限速器", "主钢索", "大修", "修理"],
-    "消防": ["消火栓", "消防栓", "喷淋", "报警", "灭火器", "防火门", "稳压泵", "报警阀", "消防水带"],
-    "监控": ["监控", "摄像头", "球机", "录像", "存储"],
-    "防水工程": ["防水工程", "防水层", "防水维修", "防水施工", "渗漏", "漏水", "渗水", "屋面", "屋顶"],
-    "外立面修缮": ["粉刷", "空鼓", "脱落", "裂缝", "翻新", "涂料", "修补"],
-    "给排水": ["给水", "排水", "水泵", "生活泵", "供水泵", "直供水", "二次供水", "水管"],
-    "污水": ["污水", "化粪池", "污水井", "污水管", "污水泵", "排污泵", "集水井", "污水总管"],
-    "绿化景观": ["绿化", "补种", "景观", "树木", "草坪", "园路"],
-    "停车交通": ["车位", "停车", "停车场", "车辆", "出入口", "道闸", "标线", "交通设施"],
-    "公共设施": ["公共区域", "无障碍通道", "入口通道", "防汛挡板", "车棚", "非机动车棚"],
-    "弱电系统": ["弱电", "网络", "智能化", "布线", "可视对讲", "楼宇对讲"],
-    "门禁设施": ["门禁", "门禁一体机", "刷卡门禁", "人脸门禁", "门控", "楼宇对讲门禁", "车牌识别", "防盗门", "自动门"],
-    "道路工程": ["道路", "路面", "人行道", "拓宽", "路面积水"],
-}
-
-SAME_DOMAIN_COMPONENTS: Dict[str, Dict[str, List[str]]] = {
-    "消防": {
-        "消火栓": ["消火栓", "消防栓"],
-        "喷淋": ["喷淋", "稳压泵", "报警阀"],
-        "报警": ["报警", "报警系统", "火灾自动报警"],
-        "设备": ["灭火器", "防火门"],
-    },
-    "电梯": {
-        "整梯": ["电梯", "扶梯"],
-        "部件": ["钢丝绳", "主机", "抱闸", "层门", "平层感应器"],
-    },
-    "门禁设施": {
-        "门禁": ["门禁", "门控"],
-        "对讲": ["对讲", "楼宇对讲"],
-        "识别": ["刷卡", "人脸"],
-    },
-}
 
 
 def normalize_text(text: str) -> str:
@@ -57,8 +23,9 @@ def score_keywords(text: str, rules: List[KeywordRule]) -> Tuple[int, List[str]]
 
 
 def collect_level1_candidates(text: str) -> List[Tuple[str, int, List[str]]]:
+    level1_rules = get_ruleset()["level1_rules"]
     candidates: List[Tuple[str, int, List[str]]] = []
-    for name, rules in LEVEL1_RULES.items():
+    for name, rules in level1_rules.items():
         score, hits = score_keywords(text, rules)
         if score > 0:
             candidates.append((name, score, hits))
@@ -66,13 +33,14 @@ def collect_level1_candidates(text: str) -> List[Tuple[str, int, List[str]]]:
 
 
 def collect_strong_domain_hits(text: str) -> Dict[str, List[str]]:
+    domain_strong_keywords = get_ruleset()["domain_strong_keywords"]
     domain_hits: Dict[str, List[str]] = {}
     has_monitor_context = any(keyword in text for keyword in ["监控", "摄像头", "球机", "录像"])
     has_sewage_context = any(keyword in text for keyword in ["污水泵", "排污泵", "集水井", "化粪池", "污水井", "污水总管", "排污"])
     has_elevator_decoration_context = any(keyword in text for keyword in ["墙面", "粉刷", "翻新", "涂料", "装修"])
     has_waterproof_context = any(keyword in text for keyword in ["屋顶", "屋面", "防水", "漏水", "渗漏", "渗水"])
     has_access_control_context = any(keyword in text for keyword in ["门禁", "对讲", "可视对讲", "智能化", "门禁系统", "梯控"])
-    for level1, keywords in DOMAIN_STRONG_KEYWORDS.items():
+    for level1, keywords in domain_strong_keywords.items():
         hits = [keyword for keyword in keywords if keyword in text]
         if level1 == "电梯" and ("电梯房" in text or has_monitor_context):
             explicit_elevator_work = any(
@@ -145,7 +113,7 @@ def collect_strong_domain_hits(text: str) -> Dict[str, List[str]]:
 
 
 def collect_same_domain_components(text: str, primary_level1: str) -> Set[str]:
-    components = SAME_DOMAIN_COMPONENTS.get(primary_level1, {})
+    components = get_ruleset()["same_domain_components"].get(primary_level1, {})
     matched: Set[str] = set()
     for component_name, keywords in components.items():
         if any(keyword in text for keyword in keywords):
@@ -230,7 +198,7 @@ def match_detailed_level2(
     level1: str,
     allowed_level2: Optional[Sequence[str]] = None,
 ) -> Tuple[Optional[str], List[str], int]:
-    rules = DETAILED_LEVEL2_RULES.get(level1)
+    rules = get_ruleset()["detailed_level2_rules"].get(level1)
     if not rules:
         return None, [], 0
 
@@ -361,10 +329,11 @@ def attach_result_metadata(text: str, result: Dict[str, str]) -> Dict[str, objec
 
 
 def rule_classify(text: str):
+    ruleset = get_ruleset()
     normalized = normalize_text(text)
-    boundary = find_boundary_decision(normalized)
+    boundary = find_boundary_decision(normalized, ruleset["boundary_rules"])
     allowed_level1 = [boundary["level1"]] if boundary else None
-    level1_map = filter_rule_map(LEVEL1_RULES, allowed_level1)
+    level1_map = filter_rule_map(ruleset["level1_rules"], allowed_level1)
     level1, level1_hits, _ = match_best_rule(level1_map, normalized)
     if boundary and boundary.get("level1") and not level1:
         level1 = boundary["level1"]
@@ -375,7 +344,7 @@ def rule_classify(text: str):
     allowed_level2 = boundary.get("allowed_level2") if boundary else None
     level2, level2_hits, _ = match_detailed_level2(normalized, level1, allowed_level2)
     if not level2:
-        level2_map = filter_rule_map(LEVEL2_RULES[level1], allowed_level2)
+        level2_map = filter_rule_map(ruleset["level2_rules"][level1], allowed_level2)
         level2, level2_hits, _ = match_best_rule(level2_map, normalized)
     if not level2:
         return None

@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, TypedDict
+from typing import Dict, List, Optional, Sequence, TypedDict
 
 
 class BoundaryDecision(TypedDict, total=False):
@@ -174,8 +174,11 @@ BOUNDARY_RULES: List[BoundaryRule] = [
 ]
 
 
-def find_boundary_decision(text: str) -> Optional[BoundaryDecision]:
-    for rule in BOUNDARY_RULES:
+def find_boundary_decision(
+    text: str,
+    boundary_rules: Optional[Sequence[BoundaryRule]] = None,
+) -> Optional[BoundaryDecision]:
+    for rule in boundary_rules or BOUNDARY_RULES:
         any_keywords = rule.get("any_keywords", [])
         all_keywords = rule.get("all_keywords", [])
         none_keywords = rule.get("none_keywords", [])

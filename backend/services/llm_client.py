@@ -3,15 +3,16 @@ import json
 import requests
 
 from core.config import LLM_TIMEOUT_SECONDS, OLLAMA_BASE_URL, OLLAMA_MODEL
-from data.categories import CATEGORY_LINES, CATEGORY_TREE
+from core.rule_loader import get_ruleset
 
 
 def request_llm_classification(text: str):
+    ruleset = get_ruleset()
     prompt = f"""
 你是物业维修工程分类助手。请根据工程名称，从给定分类体系中选择最合适的一级分类和二级分类。
 
 分类体系：
-{CATEGORY_LINES}
+{ruleset["category_lines"]}
 
 输出要求：
 1. 只能从上述分类中选择。
@@ -50,6 +51,7 @@ def request_llm_classification(text: str):
 
 def llm_classify(text: str):
     from services.classifier import fallback_classify
+    category_tree = get_ruleset()["category_tree"]
 
     try:
         content = request_llm_classification(text)
@@ -58,11 +60,11 @@ def llm_classify(text: str):
 
     level1 = content.get("level1", "")
     level2 = content.get("level2", "")
-    if level1 not in CATEGORY_TREE:
+    if level1 not in category_tree:
         return fallback_classify(text, "LLM 返回了无效一级分类，已降级为默认分类")
 
-    if level2 not in CATEGORY_TREE[level1]:
-        level2 = CATEGORY_TREE[level1][0]
+    if level2 not in category_tree[level1]:
+        level2 = category_tree[level1][0]
 
     return {
         "project_name": text,
