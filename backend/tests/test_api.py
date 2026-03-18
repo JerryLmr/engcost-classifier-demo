@@ -13,7 +13,7 @@ except ImportError:  # pragma: no cover
 
 try:
     from fastapi.testclient import TestClient
-except ImportError:  # pragma: no cover
+except (ImportError, RuntimeError):  # pragma: no cover
     TestClient = None
 
 if TestClient is not None:
@@ -36,6 +36,13 @@ class ApiTestCase(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["level1"], "消防")
         self.assertEqual(data["level2"], "消防管网维修")
+
+    def test_boundary_driven_single_classify(self):
+        response = self.client.post("/api/classify", json={"text": "外墙渗漏水维修"})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["level1"], "防水工程")
+        self.assertEqual(data["level2"], "外墙防水")
 
     @patch("services.llm_client.request_llm_classification", side_effect=RuntimeError("offline"))
     def test_excel_classify(self, _mock_request):

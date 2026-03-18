@@ -8,6 +8,11 @@ from services.classifier import rule_classify
 
 
 class RuleClassifyTestCase(unittest.TestCase):
+    def test_wall_leak_prefers_waterproof(self):
+        result = rule_classify("外墙渗漏水维修")
+        self.assertEqual(result["level1"], "防水工程")
+        self.assertEqual(result["level2"], "外墙防水")
+
     def test_fire_pipeline_repair(self):
         result = rule_classify("消防喷淋管网维修")
         self.assertEqual(result["level1"], "消防")
@@ -23,6 +28,31 @@ class RuleClassifyTestCase(unittest.TestCase):
         result = rule_classify("外墙粉刷翻新工程")
         self.assertEqual(result["level1"], "外立面修缮")
         self.assertEqual(result["level2"], "外墙粉刷翻新")
+
+    def test_facade_leak_stays_consistent(self):
+        result = rule_classify("外立面漏水维修")
+        self.assertEqual(result["level1"], "防水工程")
+        self.assertEqual(result["level2"], "外墙防水")
+
+    def test_fire_door_update_prefers_equipment_replacement(self):
+        result = rule_classify("防火门更新维修")
+        self.assertEqual(result["level1"], "消防")
+        self.assertEqual(result["level2"], "消防设备更换")
+
+    def test_monitor_upgrade_prefers_system_upgrade(self):
+        result = rule_classify("监控设备改造工程")
+        self.assertEqual(result["level1"], "监控")
+        self.assertEqual(result["level2"], "监控系统升级")
+
+    def test_elevator_part_replacement(self):
+        result = rule_classify("电梯钢丝绳更换")
+        self.assertEqual(result["level1"], "电梯")
+        self.assertEqual(result["level2"], "电梯部件更换")
+
+    def test_elevator_update_prefers_upgrade(self):
+        result = rule_classify("电梯更新项目")
+        self.assertEqual(result["level1"], "电梯")
+        self.assertEqual(result["level2"], "电梯改造升级")
 
 
 if __name__ == "__main__":
