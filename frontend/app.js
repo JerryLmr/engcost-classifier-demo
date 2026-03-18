@@ -96,7 +96,7 @@ function renderCountTable(container, rows, emptyLabel) {
 
 function renderFocusSamples(rows) {
   if (!rows.length) {
-    focusTable.innerHTML = '<tr><td colspan="7">当前没有重点样本</td></tr>';
+    focusTable.innerHTML = '<tr><td colspan="9">当前没有重点样本</td></tr>';
     return;
   }
   focusTable.innerHTML = rows
@@ -110,6 +110,8 @@ function renderFocusSamples(rows) {
           <td>${row.is_composite ? "是" : "否"}</td>
           <td>${row.needs_review ? "是" : "否"}</td>
           <td title="${buildFocusTitle(row)}">${getStructureTypeLabel(row.structure_type)}</td>
+          <td>${row.composite_reason || "-"}</td>
+          <td>${Array.isArray(row.secondary_candidates) && row.secondary_candidates.length ? row.secondary_candidates.join("、") : "-"}</td>
         </tr>
       `,
     )

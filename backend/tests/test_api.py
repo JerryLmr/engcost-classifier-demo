@@ -95,11 +95,26 @@ class ApiTestCase(unittest.TestCase):
             "是否复合工程",
             "是否建议复核",
             "结构类型",
+            "复合原因",
+            "候选分类",
         ]
         for col, value in enumerate(headers, start=1):
             worksheet.cell(row=1, column=col, value=value)
-        worksheet.append(["消防喷淋管网维修", "消防", "消防管网维修", "规则优先", "关键词命中", "否", "否", "single_project"])
-        worksheet.append(["某综合项目", "公共设施", "公共区域维修", "LLM 兜底", "模型语义匹配", "是", "是", "composite_project"])
+        worksheet.append(["消防喷淋管网维修", "消防", "消防管网维修", "规则优先", "关键词命中", "否", "否", "single_project", "", ""])
+        worksheet.append(
+            [
+                "某综合项目",
+                "公共设施",
+                "公共区域维修",
+                "LLM 兜底",
+                "模型语义匹配",
+                "是",
+                "是",
+                "composite_project",
+                "同时命中多个工程域：公共设施、道路工程",
+                "道路工程/路面维修 | 停车交通/车位改造",
+            ]
+        )
 
         output = BytesIO()
         workbook.save(output)
@@ -122,6 +137,14 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(data["summary"]["composite_count"], 1)
         self.assertEqual(data["structure_counts"]["composite_project"], 1)
         self.assertEqual(len(data["focus_samples"]), 1)
+        self.assertEqual(
+            data["focus_samples"][0]["composite_reason"],
+            "同时命中多个工程域：公共设施、道路工程",
+        )
+        self.assertEqual(
+            data["focus_samples"][0]["secondary_candidates"],
+            ["道路工程/路面维修", "停车交通/车位改造"],
+        )
 
 
 if __name__ == "__main__":

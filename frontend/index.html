@@ -100,7 +100,8 @@
         </div>
 
         <div class="table-card focus-card">
-          <h3>重点样本</h3>
+          <h3>异常/复杂样本</h3>
+          <div class="status">这些样本可能存在分类不确定性，建议人工复核（如 LLM 辅助分类、非单一工程或结构较复杂）</div>
           <div class="table-wrap">
             <table>
               <thead>
@@ -112,6 +113,8 @@
                   <th>复合工程</th>
                   <th>建议复核</th>
                   <th>结构类型</th>
+                  <th>复合原因</th>
+                  <th>候选分类</th>
                 </tr>
               </thead>
               <tbody id="focusTable"></tbody>

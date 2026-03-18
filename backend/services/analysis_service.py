@@ -17,6 +17,11 @@ REQUIRED_RESULT_COLUMNS = [
     "结构类型",
 ]
 
+OPTIONAL_RESULT_COLUMNS = [
+    "复合原因",
+    "候选分类",
+]
+
 FOCUS_SAMPLE_LIMIT = 2000
 
 
@@ -48,7 +53,17 @@ def _read_result_rows_from_workbook(workbook: openpyxl.Workbook, source_name: st
             "is_composite": row[index["是否复合工程"]] == "是",
             "needs_review": row[index["是否建议复核"]] == "是",
             "structure_type": row[index["结构类型"]],
+            "composite_reason": "",
+            "secondary_candidates": [],
         }
+        if "复合原因" in index:
+            record["composite_reason"] = str(row[index["复合原因"]] or "").strip()
+        if "候选分类" in index:
+            candidates_text = str(row[index["候选分类"]] or "").strip()
+            if candidates_text:
+                record["secondary_candidates"] = [
+                    part.strip() for part in candidates_text.split("|") if part.strip()
+                ]
         records.append(record)
     return records
 
