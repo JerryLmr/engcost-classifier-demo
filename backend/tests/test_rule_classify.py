@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.classifier import rule_classify
+from services.classifier import classify_text, rule_classify
 
 
 class RuleClassifyTestCase(unittest.TestCase):
@@ -53,6 +53,41 @@ class RuleClassifyTestCase(unittest.TestCase):
         result = rule_classify("电梯更新项目")
         self.assertEqual(result["level1"], "电梯")
         self.assertEqual(result["level2"], "电梯改造升级")
+
+    def test_composite_result_has_flags(self):
+        result = classify_text("小区道路改造及绿化补种施工合同 道路拓宽及绿化补种")
+        self.assertTrue(result["is_composite"])
+        self.assertTrue(result["needs_review"])
+        self.assertIsNotNone(result["composite_reason"])
+        self.assertIn("绿化景观", result["secondary_candidates"])
+
+    def test_single_result_has_default_flags(self):
+        result = classify_text("灭火器过期更换")
+        self.assertFalse(result["is_composite"])
+        self.assertFalse(result["needs_review"])
+        self.assertEqual(result["secondary_candidates"], [])
+
+    def test_same_domain_multi_system_is_not_composite(self):
+        result = classify_text("消防栓以及自动报警系统维修")
+        self.assertFalse(result["is_composite"])
+        self.assertTrue(result["needs_review"])
+        self.assertIsNone(result["composite_reason"])
+        self.assertEqual(result["secondary_candidates"], [])
+
+    def test_same_project_multi_building_is_not_composite(self):
+        result = classify_text("A楼和B楼电梯维修")
+        self.assertFalse(result["is_composite"])
+        self.assertFalse(result["needs_review"])
+
+    def test_same_project_multi_part_is_not_composite(self):
+        result = classify_text("外墙及屋顶渗漏水维修")
+        self.assertFalse(result["is_composite"])
+
+    def test_cross_domain_project_is_composite(self):
+        result = classify_text("电梯更新及门禁更换")
+        self.assertTrue(result["is_composite"])
+        self.assertTrue(result["needs_review"])
+        self.assertIn("门禁设施", result["secondary_candidates"])
 
 
 if __name__ == "__main__":

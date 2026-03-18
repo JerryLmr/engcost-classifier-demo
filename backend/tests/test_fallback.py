@@ -16,6 +16,8 @@ class FallbackTestCase(unittest.TestCase):
         self.assertEqual(result["level2"], "公共区域维修")
         self.assertEqual(result["method"], "降级兜底")
         self.assertIn("LLM 不可用", result["reason"])
+        self.assertFalse(result["is_composite"])
+        self.assertTrue(result["needs_review"])
 
 
 if __name__ == "__main__":

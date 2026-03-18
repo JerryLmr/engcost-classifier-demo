@@ -1,11 +1,47 @@
 import re
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from data.boundaries import find_boundary_decision
 from core.config import DEFAULT_FALLBACK_LEVEL1, DEFAULT_FALLBACK_LEVEL2
 from data.categories import CATEGORY_TREE
 from data.rules import DETAILED_LEVEL2_RULES, DetailedLevel2Rule, KeywordRule, LEVEL1_RULES, LEVEL2_RULES
 from services.llm_client import llm_classify
+
+COMPOSITE_CONNECTORS = ["及", "和", "以及", "并", "同时", "+", "兼", "并且"]
+
+DOMAIN_STRONG_KEYWORDS: Dict[str, List[str]] = {
+    "电梯": ["电梯", "扶梯", "钢丝绳", "主机", "抱闸", "层门"],
+    "消防": ["消火栓", "消防栓", "喷淋", "报警", "灭火器", "防火门", "稳压泵", "报警阀"],
+    "监控": ["监控", "摄像头", "球机", "录像", "存储"],
+    "防水工程": ["防水", "渗漏", "漏水", "渗水", "防水层", "屋面", "屋顶", "地下室"],
+    "外立面修缮": ["粉刷", "空鼓", "脱落", "裂缝", "翻新", "涂料", "外立面"],
+    "给排水": ["给水", "排水", "水泵", "二次供水", "水管"],
+    "污水": ["污水", "化粪池", "污水井", "污水管"],
+    "绿化景观": ["绿化", "补种", "景观", "树木", "草坪", "园路"],
+    "停车交通": ["车位", "停车", "道闸", "标线", "交通设施"],
+    "公共设施": ["公共区域", "无障碍通道", "入口通道", "通道"],
+    "弱电系统": ["对讲", "网络", "智能化", "布线", "楼宇对讲"],
+    "门禁设施": ["门禁", "刷卡", "人脸", "门控"],
+    "道路工程": ["道路", "路面", "人行道", "拓宽", "路面积水"],
+}
+
+SAME_DOMAIN_COMPONENTS: Dict[str, Dict[str, List[str]]] = {
+    "消防": {
+        "消火栓": ["消火栓", "消防栓"],
+        "喷淋": ["喷淋", "稳压泵", "报警阀"],
+        "报警": ["报警", "报警系统", "火灾自动报警"],
+        "设备": ["灭火器", "防火门"],
+    },
+    "电梯": {
+        "整梯": ["电梯", "扶梯"],
+        "部件": ["钢丝绳", "主机", "抱闸", "层门", "平层感应器"],
+    },
+    "门禁设施": {
+        "门禁": ["门禁", "门控"],
+        "对讲": ["对讲", "楼宇对讲"],
+        "识别": ["刷卡", "人脸"],
+    },
+}
 
 
 def normalize_text(text: str) -> str:
@@ -20,6 +56,33 @@ def score_keywords(text: str, rules: List[KeywordRule]) -> Tuple[int, List[str]]
             score += weight
             hits.append(keyword)
     return score, hits
+
+
+def collect_level1_candidates(text: str) -> List[Tuple[str, int, List[str]]]:
+    candidates: List[Tuple[str, int, List[str]]] = []
+    for name, rules in LEVEL1_RULES.items():
+        score, hits = score_keywords(text, rules)
+        if score > 0:
+            candidates.append((name, score, hits))
+    return sorted(candidates, key=lambda item: (item[1], len(item[2])), reverse=True)
+
+
+def collect_strong_domain_hits(text: str) -> Dict[str, List[str]]:
+    domain_hits: Dict[str, List[str]] = {}
+    for level1, keywords in DOMAIN_STRONG_KEYWORDS.items():
+        hits = [keyword for keyword in keywords if keyword in text]
+        if hits:
+            domain_hits[level1] = hits
+    return domain_hits
+
+
+def collect_same_domain_components(text: str, primary_level1: str) -> Set[str]:
+    components = SAME_DOMAIN_COMPONENTS.get(primary_level1, {})
+    matched: Set[str] = set()
+    for component_name, keywords in components.items():
+        if any(keyword in text for keyword in keywords):
+            matched.add(component_name)
+    return matched
 
 
 def match_best_rule(rule_map: Dict[str, List[KeywordRule]], text: str) -> Tuple[Optional[str], List[str], int]:
@@ -125,6 +188,83 @@ def fallback_classify(text: str, reason: str):
     }
 
 
+def build_candidate_labels(level1_names: Sequence[str]) -> List[str]:
+    labels: List[str] = []
+    for level1 in level1_names:
+        if level1 not in labels:
+            labels.append(level1)
+        if len(labels) >= 3:
+            break
+    return labels
+
+
+def detect_composite_metadata(
+    text: str,
+    primary_level1: str,
+    method: str,
+) -> Dict[str, object]:
+    normalized = normalize_text(text)
+    connectors = [connector for connector in COMPOSITE_CONNECTORS if connector in text]
+    candidates = collect_level1_candidates(normalized)
+    strong_domain_hits = collect_strong_domain_hits(normalized)
+    same_domain_components = collect_same_domain_components(normalized, primary_level1)
+
+    strong_candidate_names = [
+        level1
+        for level1, score, _hits in candidates
+        if score >= 3 and level1 in strong_domain_hits
+    ]
+    cross_domain = [level1 for level1 in strong_candidate_names if level1 != primary_level1]
+
+    is_composite = False
+    needs_review = method == "降级兜底"
+    composite_reason = None
+    structure_type = "single_project"
+    secondary_candidates: List[str] = []
+
+    if cross_domain and connectors:
+        is_composite = True
+        structure_type = "composite_project"
+        secondary_names = cross_domain[:2]
+        connector_text = f"连接词：{'、'.join(connectors)}；" if connectors else ""
+        composite_reason = (
+            f"{connector_text}同时命中多个工程域：{primary_level1}"
+            + (f"、{'、'.join(secondary_names)}" if secondary_names else "")
+        )
+        secondary_candidates = build_candidate_labels(secondary_names)
+        if len(strong_candidate_names) >= 2:
+            top_score = next(
+                (score for level1, score, _hits in candidates if level1 == primary_level1),
+                0,
+            )
+            second_score = next(
+                (score for level1, score, _hits in candidates if level1 == secondary_names[0]),
+                0,
+            )
+            if top_score - second_score <= 2:
+                needs_review = True
+    elif len(same_domain_components) >= 2:
+        structure_type = "multi_system_same_domain"
+        needs_review = True
+
+    if method == "降级兜底":
+        needs_review = True
+
+    return {
+        "is_composite": is_composite,
+        "needs_review": needs_review,
+        "composite_reason": composite_reason,
+        "secondary_candidates": secondary_candidates,
+        "structure_type": structure_type,
+    }
+
+
+def attach_result_metadata(text: str, result: Dict[str, str]) -> Dict[str, object]:
+    metadata = detect_composite_metadata(text, result["level1"], result["method"])
+    metadata.pop("structure_type", None)
+    return {**result, **metadata}
+
+
 def rule_classify(text: str):
     normalized = normalize_text(text)
     boundary = find_boundary_decision(normalized)
@@ -164,4 +304,5 @@ def rule_classify(text: str):
 
 
 def classify_text(text: str):
-    return rule_classify(text) or llm_classify(text)
+    result = rule_classify(text) or llm_classify(text)
+    return attach_result_metadata(text, result)
