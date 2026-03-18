@@ -27,8 +27,9 @@ def classify_excel_file(file: UploadFile):
     worksheet.cell(row=1, column=result_start_col + 3, value="分类依据")
     worksheet.cell(row=1, column=result_start_col + 4, value="是否复合工程")
     worksheet.cell(row=1, column=result_start_col + 5, value="是否建议复核")
-    worksheet.cell(row=1, column=result_start_col + 6, value="复合原因")
-    worksheet.cell(row=1, column=result_start_col + 7, value="候选分类")
+    worksheet.cell(row=1, column=result_start_col + 6, value="结构类型")
+    worksheet.cell(row=1, column=result_start_col + 7, value="复合原因")
+    worksheet.cell(row=1, column=result_start_col + 8, value="候选分类")
 
     for row in range(2, worksheet.max_row + 1):
         project_name = worksheet.cell(row=row, column=1).value
@@ -42,8 +43,9 @@ def classify_excel_file(file: UploadFile):
         worksheet.cell(row=row, column=result_start_col + 3, value=result["reason"])
         worksheet.cell(row=row, column=result_start_col + 4, value="是" if result["is_composite"] else "否")
         worksheet.cell(row=row, column=result_start_col + 5, value="是" if result["needs_review"] else "否")
-        worksheet.cell(row=row, column=result_start_col + 6, value=result["composite_reason"] or "")
-        worksheet.cell(row=row, column=result_start_col + 7, value=" | ".join(result["secondary_candidates"]))
+        worksheet.cell(row=row, column=result_start_col + 6, value=result["structure_type"])
+        worksheet.cell(row=row, column=result_start_col + 7, value=result["composite_reason"] or "")
+        worksheet.cell(row=row, column=result_start_col + 8, value=" | ".join(result["secondary_candidates"]))
 
     output = io.BytesIO()
     workbook.save(output)

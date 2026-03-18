@@ -7,21 +7,19 @@ from data.categories import CATEGORY_TREE
 from data.rules import DETAILED_LEVEL2_RULES, DetailedLevel2Rule, KeywordRule, LEVEL1_RULES, LEVEL2_RULES
 from services.llm_client import llm_classify
 
-COMPOSITE_CONNECTORS = ["及", "和", "以及", "并", "同时", "+", "兼", "并且"]
-
 DOMAIN_STRONG_KEYWORDS: Dict[str, List[str]] = {
     "电梯": ["电梯", "扶梯", "钢丝绳", "主机", "抱闸", "层门"],
-    "消防": ["消火栓", "消防栓", "喷淋", "报警", "灭火器", "防火门", "稳压泵", "报警阀"],
+    "消防": ["消火栓", "消防栓", "喷淋", "报警", "灭火器", "防火门", "稳压泵", "报警阀", "消防水带"],
     "监控": ["监控", "摄像头", "球机", "录像", "存储"],
-    "防水工程": ["防水", "渗漏", "漏水", "渗水", "防水层", "屋面", "屋顶", "地下室"],
-    "外立面修缮": ["粉刷", "空鼓", "脱落", "裂缝", "翻新", "涂料", "外立面"],
+    "防水工程": ["防水工程", "防水层", "防水维修", "防水施工", "渗漏", "漏水", "渗水", "屋面", "屋顶"],
+    "外立面修缮": ["粉刷", "空鼓", "脱落", "裂缝", "翻新", "涂料", "修补"],
     "给排水": ["给水", "排水", "水泵", "二次供水", "水管"],
     "污水": ["污水", "化粪池", "污水井", "污水管"],
     "绿化景观": ["绿化", "补种", "景观", "树木", "草坪", "园路"],
     "停车交通": ["车位", "停车", "道闸", "标线", "交通设施"],
-    "公共设施": ["公共区域", "无障碍通道", "入口通道", "通道"],
-    "弱电系统": ["对讲", "网络", "智能化", "布线", "楼宇对讲"],
-    "门禁设施": ["门禁", "刷卡", "人脸", "门控"],
+    "公共设施": ["公共区域", "无障碍通道", "入口通道"],
+    "弱电系统": ["弱电", "网络", "智能化", "布线", "可视对讲", "楼宇对讲"],
+    "门禁设施": ["门禁", "门禁一体机", "刷卡门禁", "人脸门禁", "门控", "楼宇对讲门禁"],
     "道路工程": ["道路", "路面", "人行道", "拓宽", "路面积水"],
 }
 
@@ -71,6 +69,30 @@ def collect_strong_domain_hits(text: str) -> Dict[str, List[str]]:
     domain_hits: Dict[str, List[str]] = {}
     for level1, keywords in DOMAIN_STRONG_KEYWORDS.items():
         hits = [keyword for keyword in keywords if keyword in text]
+        if level1 == "电梯" and any(keyword in text for keyword in ["监控", "摄像头"]):
+            explicit_elevator_work = any(
+                keyword in text
+                for keyword in [
+                    "钢丝绳",
+                    "主机",
+                    "抱闸",
+                    "层门",
+                    "扶梯",
+                    "电梯维修",
+                    "电梯更换",
+                    "电梯改造",
+                    "电梯更新",
+                    "电梯升级",
+                    "电梯故障",
+                    "电梯抢修",
+                ]
+            )
+            if not explicit_elevator_work:
+                hits = [keyword for keyword in hits if keyword != "电梯"]
+        if level1 == "弱电系统" and "门禁" in text:
+            hits = [keyword for keyword in hits if keyword not in {"楼宇对讲", "对讲", "可视对讲"}]
+        if level1 == "防水工程" and "消防水带" in text:
+            hits = [keyword for keyword in hits if keyword not in {"防水", "防水工程", "防水维修", "防水施工"}]
         if hits:
             domain_hits[level1] = hits
     return domain_hits
@@ -83,6 +105,36 @@ def collect_same_domain_components(text: str, primary_level1: str) -> Set[str]:
         if any(keyword in text for keyword in keywords):
             matched.add(component_name)
     return matched
+
+
+def should_mark_multi_system(primary_level1: str, same_domain_components: Set[str]) -> bool:
+    if len(same_domain_components) < 2:
+        return False
+    if primary_level1 == "电梯" and same_domain_components == {"整梯", "部件"}:
+        return False
+    if primary_level1 == "门禁设施" and same_domain_components.issubset({"门禁", "对讲"}):
+        return False
+    return True
+
+
+def resolve_structure_type(
+    primary_level1: str,
+    strong_candidate_names: List[str],
+    same_domain_components: Set[str],
+) -> Tuple[str, List[str]]:
+    if len(strong_candidate_names) <= 1:
+        if should_mark_multi_system(primary_level1, same_domain_components):
+            return "multi_system_same_domain", []
+        return "single_project", []
+
+    cross_domain = [level1 for level1 in strong_candidate_names if level1 != primary_level1]
+    if cross_domain:
+        return "composite_project", cross_domain
+
+    if should_mark_multi_system(primary_level1, same_domain_components):
+        return "multi_system_same_domain", []
+
+    return "single_project", []
 
 
 def match_best_rule(rule_map: Dict[str, List[KeywordRule]], text: str) -> Tuple[Optional[str], List[str], int]:
@@ -204,7 +256,6 @@ def detect_composite_metadata(
     method: str,
 ) -> Dict[str, object]:
     normalized = normalize_text(text)
-    connectors = [connector for connector in COMPOSITE_CONNECTORS if connector in text]
     candidates = collect_level1_candidates(normalized)
     strong_domain_hits = collect_strong_domain_hits(normalized)
     same_domain_components = collect_same_domain_components(normalized, primary_level1)
@@ -214,22 +265,22 @@ def detect_composite_metadata(
         for level1, score, _hits in candidates
         if score >= 3 and level1 in strong_domain_hits
     ]
-    cross_domain = [level1 for level1 in strong_candidate_names if level1 != primary_level1]
-
     is_composite = False
     needs_review = method == "降级兜底"
     composite_reason = None
-    structure_type = "single_project"
+    structure_type, cross_domain = resolve_structure_type(
+        primary_level1,
+        strong_candidate_names,
+        same_domain_components,
+    )
     secondary_candidates: List[str] = []
 
-    if cross_domain and connectors:
+    if structure_type == "composite_project":
         is_composite = True
-        structure_type = "composite_project"
         secondary_names = cross_domain[:2]
-        connector_text = f"连接词：{'、'.join(connectors)}；" if connectors else ""
+        reason_domains = strong_candidate_names[:3] if strong_candidate_names else [primary_level1]
         composite_reason = (
-            f"{connector_text}同时命中多个工程域：{primary_level1}"
-            + (f"、{'、'.join(secondary_names)}" if secondary_names else "")
+            f"同时命中多个工程域：{'、'.join(reason_domains)}"
         )
         secondary_candidates = build_candidate_labels(secondary_names)
         if len(strong_candidate_names) >= 2:
@@ -243,8 +294,7 @@ def detect_composite_metadata(
             )
             if top_score - second_score <= 2:
                 needs_review = True
-    elif len(same_domain_components) >= 2:
-        structure_type = "multi_system_same_domain"
+    elif structure_type == "multi_system_same_domain":
         needs_review = True
 
     if method == "降级兜底":
@@ -261,7 +311,6 @@ def detect_composite_metadata(
 
 def attach_result_metadata(text: str, result: Dict[str, str]) -> Dict[str, object]:
     metadata = detect_composite_metadata(text, result["level1"], result["method"])
-    metadata.pop("structure_type", None)
     return {**result, **metadata}
 
 
