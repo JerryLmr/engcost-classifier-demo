@@ -5,6 +5,10 @@ const resultBox = document.getElementById("resultBox");
 const singleStatus = document.getElementById("singleStatus");
 const excelStatus = document.getElementById("excelStatus");
 const excelFile = document.getElementById("excelFile");
+const excelProgressWrap = document.getElementById("excelProgressWrap");
+const excelProgressFill = document.getElementById("excelProgressFill");
+const excelProgressLabel = document.getElementById("excelProgressLabel");
+const excelProgressValue = document.getElementById("excelProgressValue");
 const analysisFile = document.getElementById("analysisFile");
 const analysisStatus = document.getElementById("analysisStatus");
 const analysisResults = document.getElementById("analysisResults");
@@ -32,6 +36,7 @@ const focusSortState = {
   key: null,
   direction: "asc",
 };
+let excelProcessingTimer = null;
 
 function getMethodLabel(method) {
   if (method === "LLM 兜底") {
@@ -212,6 +217,45 @@ function setSingleStatus(message) {
   singleStatus.innerHTML = message;
 }
 
+function clearExcelProcessingTimer() {
+  if (excelProcessingTimer) {
+    clearInterval(excelProcessingTimer);
+    excelProcessingTimer = null;
+  }
+}
+
+function setExcelProgress(percent, label) {
+  const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+  excelProgressWrap.hidden = false;
+  excelProgressFill.style.width = `${safePercent}%`;
+  excelProgressValue.textContent = `${safePercent}%`;
+  if (label) {
+    excelProgressLabel.textContent = label;
+  }
+}
+
+function resetExcelProgress() {
+  clearExcelProcessingTimer();
+  excelProgressWrap.hidden = true;
+  excelProgressFill.style.width = "0%";
+  excelProgressValue.textContent = "0%";
+  excelProgressLabel.textContent = "等待开始";
+}
+
+function startExcelProcessingProgress() {
+  clearExcelProcessingTimer();
+  let current = 72;
+  setExcelProgress(current, "正在处理 Excel，请稍候...");
+  excelProcessingTimer = setInterval(() => {
+    if (current >= 92) {
+      clearExcelProcessingTimer();
+      return;
+    }
+    current += current < 85 ? 3 : 1;
+    setExcelProgress(current, "正在处理 Excel，请稍候...");
+  }, 600);
+}
+
 function resetSingleResult() {
   projectText.value = "";
   resultBox.hidden = true;
@@ -341,32 +385,68 @@ async function handleExcelClassify() {
     return;
   }
 
+  clearExcelProcessingTimer();
   excelStatus.textContent = "正在处理 Excel，请稍候...";
+  setExcelProgress(8, "准备上传文件...");
+
   try {
     const formData = new FormData();
     formData.append("file", excelFile.files[0]);
 
-    const response = await fetch(`${API_BASE}/api/classify-excel`, {
-      method: "POST",
-      body: formData,
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${API_BASE}/api/classify-excel`);
+      xhr.responseType = "blob";
+
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) {
+          setExcelProgress(35, "正在上传 Excel...");
+          return;
+        }
+        const uploadPercent = 10 + (event.loaded / event.total) * 50;
+        setExcelProgress(uploadPercent, "正在上传 Excel...");
+      };
+
+      xhr.upload.onload = () => {
+        startExcelProcessingProgress();
+      };
+
+      xhr.onload = async () => {
+        clearExcelProcessingTimer();
+        if (xhr.status < 200 || xhr.status >= 300) {
+          try {
+            const errorText = await xhr.response.text();
+            const error = JSON.parse(errorText);
+            reject(new Error(error.detail || "Excel 处理失败"));
+          } catch (_error) {
+            reject(new Error("Excel 处理失败"));
+          }
+          return;
+        }
+
+        setExcelProgress(100, "处理完成，准备下载结果...");
+        const blob = xhr.response;
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = excelFile.files[0].name.replace(/\.xlsx?$|\.xlsm$/i, "") + "_分类结果.xlsx";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        excelStatus.textContent = "Excel 处理完成，结果已开始下载";
+        resolve();
+      };
+
+      xhr.onerror = () => {
+        clearExcelProcessingTimer();
+        reject(new Error("Excel 上传或处理失败"));
+      };
+
+      xhr.send(formData);
     });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || "Excel 处理失败");
-    }
-
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = excelFile.files[0].name.replace(/\.xlsx?$|\.xlsm$/i, "") + "_分类结果.xlsx";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    excelStatus.textContent = "Excel 处理完成，结果已开始下载";
   } catch (error) {
+    setExcelProgress(0, "处理失败");
     excelStatus.textContent = `错误：${error.message}`;
   }
 }
@@ -454,5 +534,6 @@ document.querySelectorAll(".sort-trigger").forEach((button) => {
 });
 updateFocusSortIndicators();
 focusSummary.textContent = "当前显示 0 / 0 条";
+resetExcelProgress();
 
 resetSingleResult();
