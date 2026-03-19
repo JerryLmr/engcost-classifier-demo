@@ -13,11 +13,25 @@ const structureMetrics = document.getElementById("structureMetrics");
 const level1Table = document.getElementById("level1Table");
 const level2Table = document.getElementById("level2Table");
 const focusTable = document.getElementById("focusTable");
+const focusSearch = document.getElementById("focusSearch");
+const focusLevel1 = document.getElementById("focusLevel1");
+const focusMethod = document.getElementById("focusMethod");
+const focusStructure = document.getElementById("focusStructure");
+const focusCompositeOnly = document.getElementById("focusCompositeOnly");
+const focusReviewOnly = document.getElementById("focusReviewOnly");
+const clearFocusFilters = document.getElementById("clearFocusFilters");
+const focusSummary = document.getElementById("focusSummary");
 const rStructureType = document.getElementById("rStructureType");
 const rCompositeReasonWrap = document.getElementById("rCompositeReasonWrap");
 const rCompositeReason = document.getElementById("rCompositeReason");
 const rCandidatesWrap = document.getElementById("rCandidatesWrap");
 const rCandidates = document.getElementById("rCandidates");
+
+let focusSamplesRaw = [];
+const focusSortState = {
+  key: null,
+  direction: "asc",
+};
 
 function getMethodLabel(method) {
   if (method === "LLM 兜底") {
@@ -54,6 +68,144 @@ function buildFocusTitle(row) {
     details.push(`候选分类：${row.secondary_candidates.join("、")}`);
   }
   return details.join("\n");
+}
+
+function getMethodRank(method) {
+  if (method === "降级兜底") {
+    return 0;
+  }
+  if (method === "LLM 兜底") {
+    return 1;
+  }
+  return 2;
+}
+
+function getStructureRank(structureType) {
+  if (structureType === "composite_project") {
+    return 0;
+  }
+  if (structureType === "multi_system_same_domain") {
+    return 1;
+  }
+  return 2;
+}
+
+function getBooleanRank(value) {
+  return value ? 0 : 1;
+}
+
+function isTruthyFlag(value) {
+  return value === true || value === "是";
+}
+
+function normalizeFocusSample(row) {
+  return {
+    ...row,
+    is_composite: isTruthyFlag(row.is_composite),
+    needs_review: isTruthyFlag(row.needs_review),
+    secondary_candidates: Array.isArray(row.secondary_candidates) ? row.secondary_candidates : [],
+    composite_reason: row.composite_reason || "",
+  };
+}
+
+function compareText(a, b) {
+  return String(a || "").localeCompare(String(b || ""), "zh-CN");
+}
+
+function updateFocusSortIndicators() {
+  document.querySelectorAll(".sort-trigger").forEach((button) => {
+    const baseLabel = button.dataset.baseLabel || button.textContent;
+    button.dataset.baseLabel = baseLabel;
+    if (button.dataset.sortKey === focusSortState.key) {
+      const arrow = focusSortState.direction === "asc" ? " ↑" : " ↓";
+      button.textContent = `${baseLabel}${arrow}`;
+      button.classList.add("active");
+    } else {
+      button.textContent = baseLabel;
+      button.classList.remove("active");
+    }
+  });
+}
+
+function populateFocusFilterOptions(rows) {
+  const uniqueValues = (key) =>
+    [...new Set(rows.map((row) => row[key]).filter((value) => value && String(value).trim() !== ""))].sort((a, b) =>
+      compareText(a, b),
+    );
+
+  focusLevel1.innerHTML =
+    '<option value="">全部一级分类</option>' +
+    uniqueValues("level1").map((value) => `<option value="${value}">${value}</option>`).join("");
+
+  focusMethod.innerHTML =
+    '<option value="">全部分类方式</option>' +
+    uniqueValues("method")
+      .map((value) => `<option value="${value}">${getMethodLabel(value)}</option>`)
+      .join("");
+
+  focusStructure.innerHTML =
+    '<option value="">全部结构类型</option>' +
+    uniqueValues("structure_type")
+      .map((value) => `<option value="${value}">${getStructureTypeLabel(value)}</option>`)
+      .join("");
+}
+
+function getFilteredAndSortedFocusSamples() {
+  const keyword = focusSearch.value.trim().toLowerCase();
+  let rows = focusSamplesRaw.filter((row) => {
+    if (keyword && !String(row.project_name || "").toLowerCase().includes(keyword)) {
+      return false;
+    }
+    if (focusLevel1.value && row.level1 !== focusLevel1.value) {
+      return false;
+    }
+    if (focusMethod.value && row.method !== focusMethod.value) {
+      return false;
+    }
+    if (focusStructure.value && row.structure_type !== focusStructure.value) {
+      return false;
+    }
+    if (focusCompositeOnly.checked && !isTruthyFlag(row.is_composite)) {
+      return false;
+    }
+    if (focusReviewOnly.checked && !isTruthyFlag(row.needs_review)) {
+      return false;
+    }
+    return true;
+  });
+
+  if (!focusSortState.key) {
+    return rows;
+  }
+
+  rows = [...rows].sort((left, right) => {
+    let result = 0;
+    switch (focusSortState.key) {
+      case "project_name":
+      case "level1":
+      case "level2":
+        result = compareText(left[focusSortState.key], right[focusSortState.key]);
+        break;
+      case "method":
+        result = getMethodRank(left.method) - getMethodRank(right.method);
+        break;
+      case "is_composite":
+      case "needs_review":
+        result = getBooleanRank(left[focusSortState.key]) - getBooleanRank(right[focusSortState.key]);
+        break;
+      case "structure_type":
+        result = getStructureRank(left.structure_type) - getStructureRank(right.structure_type);
+        break;
+      default:
+        result = 0;
+    }
+    if (result === 0) {
+      result = compareText(left.project_name, right.project_name);
+    }
+    return focusSortState.direction === "asc" ? result : -result;
+  });
+
+  return rows;
 }
 
 function setSingleStatus(message) {
@@ -116,6 +268,25 @@ function renderFocusSamples(rows) {
       `,
     )
     .join("");
+}
+
+function refreshFocusSamplesView() {
+  const rows = getFilteredAndSortedFocusSamples();
+  renderFocusSamples(rows);
+  focusSummary.textContent = `当前显示 ${rows.length} / ${focusSamplesRaw.length} 条`;
+  updateFocusSortIndicators();
+}
+
+function resetFocusFilters() {
+  focusSearch.value = "";
+  focusLevel1.value = "";
+  focusMethod.value = "";
+  focusStructure.value = "";
+  focusCompositeOnly.checked = false;
+  focusReviewOnly.checked = false;
+  focusSortState.key = null;
+  focusSortState.direction = "asc";
+  refreshFocusSamplesView();
 }
 
 async function handleSingleClassify() {
@@ -239,7 +410,9 @@ async function handleExcelAnalyze() {
 
     renderCountTable(level1Table, data.level1_top, "暂无一级分类统计");
     renderCountTable(level2Table, data.level2_top, "暂无二级分类统计");
-    renderFocusSamples(data.focus_samples);
+    focusSamplesRaw = (data.focus_samples || []).map(normalizeFocusSample);
+    populateFocusFilterOptions(focusSamplesRaw);
+    resetFocusFilters();
 
     analysisResults.hidden = false;
     analysisStatus.textContent = "分析完成";
@@ -258,5 +431,28 @@ document.getElementById("classifyBtn").addEventListener("click", handleSingleCla
 document.getElementById("clearBtn").addEventListener("click", resetSingleResult);
 document.getElementById("excelBtn").addEventListener("click", handleExcelClassify);
 document.getElementById("analyzeBtn").addEventListener("click", handleExcelAnalyze);
+focusSearch.addEventListener("input", refreshFocusSamplesView);
+focusLevel1.addEventListener("change", refreshFocusSamplesView);
+focusMethod.addEventListener("change", refreshFocusSamplesView);
+focusStructure.addEventListener("change", refreshFocusSamplesView);
+focusCompositeOnly.addEventListener("change", refreshFocusSamplesView);
+focusReviewOnly.addEventListener("change", refreshFocusSamplesView);
+focusCompositeOnly.addEventListener("input", refreshFocusSamplesView);
+focusReviewOnly.addEventListener("input", refreshFocusSamplesView);
+clearFocusFilters.addEventListener("click", resetFocusFilters);
+document.querySelectorAll(".sort-trigger").forEach((button) => {
+  button.addEventListener("click", () => {
+    const key = button.dataset.sortKey;
+    if (focusSortState.key === key) {
+      focusSortState.direction = focusSortState.direction === "asc" ? "desc" : "asc";
+    } else {
+      focusSortState.key = key;
+      focusSortState.direction = "asc";
+    }
+    refreshFocusSamplesView();
+  });
+});
+updateFocusSortIndicators();
+focusSummary.textContent = "当前显示 0 / 0 条";
 
 resetSingleResult();

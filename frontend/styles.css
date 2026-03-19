@@ -216,6 +216,36 @@ button.secondary {
   margin-bottom: 12px;
 }
 
+.focus-controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0 16px;
+}
+
+.focus-controls input[type="text"],
+.focus-controls select {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-size: 14px;
+  background: #fff;
+}
+
+.check-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #374151;
+  margin: 0;
+}
+
+.check-option input {
+  margin: 0;
+}
+
 .table-wrap {
   overflow: auto;
   max-height: 420px;
@@ -242,6 +272,21 @@ thead th {
   z-index: 1;
 }
 
+.sort-trigger {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sort-trigger.active {
+  color: #1d4ed8;
+}
+
 .focus-card .table-wrap {
   max-height: 480px;
 }
@@ -254,6 +299,10 @@ thead th {
   .analysis-grid,
   .metrics-grid,
   .metrics-grid.compact {
+    grid-template-columns: 1fr;
+  }
+
+  .focus-controls {
     grid-template-columns: 1fr;
   }
 
