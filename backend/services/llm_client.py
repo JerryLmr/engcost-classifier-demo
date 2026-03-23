@@ -70,6 +70,6 @@ def llm_classify(text: str):
         "project_name": text,
         "level1": level1,
         "level2": level2,
-        "method": "LLM 兜底",
+        "method": "LLM 辅助分类",
         "reason": content.get("reason", "模型语义匹配"),
     }

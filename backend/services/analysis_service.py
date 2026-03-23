@@ -25,9 +25,18 @@ OPTIONAL_RESULT_COLUMNS = [
 FOCUS_SAMPLE_LIMIT = 2000
 
 
+def normalize_method(method: Any) -> str:
+    text = str(method or "").strip()
+    if text == "LLM 兜底":
+        return "LLM 辅助分类"
+    if text == "降级兜底":
+        return "体系外默认分类"
+    return text
+
+
 def should_review_record(method: str, structure_type: str) -> bool:
     return (
-        method == "降级兜底"
+        method == "体系外默认分类"
         or structure_type == "multi_system_same_domain"
         or structure_type == "composite_project"
     )
@@ -56,7 +65,7 @@ def _read_result_rows_from_workbook(workbook: openpyxl.Workbook, source_name: st
             "project_name": str(project_name),
             "level1": row[index["一级分类"]],
             "level2": row[index["二级分类"]],
-            "method": row[index["分类方式"]],
+            "method": normalize_method(row[index["分类方式"]]),
             "reason": row[index["分类依据"]],
             "is_composite": row[index["是否复合工程"]] == "是",
             "structure_type": row[index["结构类型"]],
@@ -117,8 +126,8 @@ def summarize_records(records: List[Dict[str, Any]], top_n: int = 20) -> Dict[st
         "summary": {
             "total_records": len(records),
             "rule_method_count": method_counter.get("规则优先", 0),
-            "llm_method_count": method_counter.get("LLM 兜底", 0),
-            "fallback_method_count": method_counter.get("降级兜底", 0),
+            "llm_method_count": method_counter.get("LLM 辅助分类", 0),
+            "fallback_method_count": method_counter.get("体系外默认分类", 0),
             "composite_count": sum(1 for record in records if record["is_composite"]),
             "review_count": sum(1 for record in records if record["needs_review"]),
         },

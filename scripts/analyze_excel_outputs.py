@@ -68,8 +68,8 @@ def build_summary_rows(records: List[Dict[str, object]]) -> List[List[object]]:
             ["文件数", len(files)],
             ["总记录数", len(records)],
             ["规则优先", summary["rule_method_count"]],
-            ["LLM 兜底", summary["llm_method_count"]],
-            ["降级兜底", summary["fallback_method_count"]],
+            ["LLM 辅助分类", summary["llm_method_count"]],
+            ["体系外默认分类", summary["fallback_method_count"]],
             ["复合工程=是", summary["composite_count"]],
             ["建议复核=是", summary["review_count"]],
             ["single_project", structure["single_project"]],
@@ -163,8 +163,8 @@ def main() -> int:
     print(
         "[DONE] 分类方式: "
         f"规则优先={summary['rule_method_count']}, "
-        f"LLM兜底={summary['llm_method_count']}, "
-        f"降级兜底={summary['fallback_method_count']}"
+        f"LLM辅助分类={summary['llm_method_count']}, "
+        f"体系外默认分类={summary['fallback_method_count']}"
     )
     print(
         "[DONE] 结构统计: "

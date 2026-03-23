@@ -249,7 +249,7 @@ def fallback_classify(text: str, reason: str):
         "project_name": text,
         "level1": DEFAULT_FALLBACK_LEVEL1,
         "level2": DEFAULT_FALLBACK_LEVEL2,
-        "method": "降级兜底",
+        "method": "体系外默认分类",
         "reason": reason,
     }
 
@@ -280,7 +280,7 @@ def detect_composite_metadata(
         if score >= 3 and level1 in strong_domain_hits
     ]
     is_composite = False
-    needs_review = method == "降级兜底"
+    needs_review = method == "体系外默认分类"
     composite_reason = None
     structure_type, cross_domain = resolve_structure_type(
         primary_level1,
@@ -301,7 +301,7 @@ def detect_composite_metadata(
     elif structure_type == "multi_system_same_domain":
         needs_review = True
 
-    if method == "降级兜底":
+    if method == "体系外默认分类":
         needs_review = True
 
     return {

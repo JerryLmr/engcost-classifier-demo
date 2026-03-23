@@ -177,6 +177,7 @@ class ApiTestCase(unittest.TestCase):
             ["道路工程/路面维修", "停车交通/车位改造"],
         )
         self.assertTrue(all(sample["needs_review"] for sample in data["focus_samples"]))
+        self.assertEqual(data["focus_samples"][0]["method"], "LLM 辅助分类")
 
 
 if __name__ == "__main__":

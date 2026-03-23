@@ -39,6 +39,9 @@ const focusSortState = {
 let excelProcessingTimer = null;
 
 function getMethodLabel(method) {
+  if (method === "LLM 辅助分类" || method === "体系外默认分类") {
+    return method;
+  }
   if (method === "LLM 兜底") {
     return "LLM 辅助分类";
   }
@@ -76,10 +79,10 @@ function buildFocusTitle(row) {
 }
 
 function getMethodRank(method) {
-  if (method === "降级兜底") {
+  if (method === "体系外默认分类" || method === "降级兜底") {
     return 0;
   }
-  if (method === "LLM 兜底") {
+  if (method === "LLM 辅助分类" || method === "LLM 兜底") {
     return 1;
   }
   return 2;

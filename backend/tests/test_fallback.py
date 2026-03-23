@@ -14,7 +14,7 @@ class FallbackTestCase(unittest.TestCase):
         result = classify_text("某小区公共区域综合整治提升项目")
         self.assertEqual(result["level1"], "公共设施")
         self.assertEqual(result["level2"], "公共区域维修")
-        self.assertEqual(result["method"], "降级兜底")
+        self.assertEqual(result["method"], "体系外默认分类")
         self.assertIn("LLM 不可用", result["reason"])
         self.assertFalse(result["is_composite"])
         self.assertTrue(result["needs_review"])
