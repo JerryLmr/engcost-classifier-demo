@@ -115,6 +115,34 @@ class ApiTestCase(unittest.TestCase):
                 "道路工程/路面维修 | 停车交通/车位改造",
             ]
         )
+        worksheet.append(
+            [
+                "历史复合工程样本",
+                "防水工程",
+                "外墙防水",
+                "规则优先",
+                "历史结果",
+                "是",
+                "否",
+                "composite_project",
+                "同时命中多个工程域：防水工程、外立面修缮",
+                "外立面修缮/外墙粉刷翻新",
+            ]
+        )
+        worksheet.append(
+            [
+                "历史同域多系统样本",
+                "消防",
+                "消火栓维修",
+                "规则优先",
+                "历史结果",
+                "否",
+                "否",
+                "multi_system_same_domain",
+                "",
+                "",
+            ]
+        )
 
         output = BytesIO()
         workbook.save(output)
@@ -132,11 +160,14 @@ class ApiTestCase(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertEqual(data["summary"]["total_records"], 2)
+        self.assertEqual(data["summary"]["total_records"], 4)
         self.assertEqual(data["summary"]["llm_method_count"], 1)
-        self.assertEqual(data["summary"]["composite_count"], 1)
-        self.assertEqual(data["structure_counts"]["composite_project"], 1)
-        self.assertEqual(len(data["focus_samples"]), 1)
+        self.assertEqual(data["summary"]["fallback_method_count"], 0)
+        self.assertEqual(data["summary"]["composite_count"], 2)
+        self.assertEqual(data["structure_counts"]["composite_project"], 2)
+        self.assertEqual(data["structure_counts"]["multi_system_same_domain"], 1)
+        self.assertEqual(data["summary"]["review_count"], 3)
+        self.assertEqual(len(data["focus_samples"]), 3)
         self.assertEqual(
             data["focus_samples"][0]["composite_reason"],
             "同时命中多个工程域：公共设施、道路工程",
@@ -145,6 +176,7 @@ class ApiTestCase(unittest.TestCase):
             data["focus_samples"][0]["secondary_candidates"],
             ["道路工程/路面维修", "停车交通/车位改造"],
         )
+        self.assertTrue(all(sample["needs_review"] for sample in data["focus_samples"]))
 
 
 if __name__ == "__main__":

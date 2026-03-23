@@ -25,6 +25,14 @@ OPTIONAL_RESULT_COLUMNS = [
 FOCUS_SAMPLE_LIMIT = 2000
 
 
+def should_review_record(method: str, structure_type: str) -> bool:
+    return (
+        method == "降级兜底"
+        or structure_type == "multi_system_same_domain"
+        or structure_type == "composite_project"
+    )
+
+
 def _read_result_rows_from_workbook(workbook: openpyxl.Workbook, source_name: str) -> List[Dict[str, Any]]:
     worksheet = workbook.active
     rows = worksheet.iter_rows(values_only=True)
@@ -51,11 +59,11 @@ def _read_result_rows_from_workbook(workbook: openpyxl.Workbook, source_name: st
             "method": row[index["分类方式"]],
             "reason": row[index["分类依据"]],
             "is_composite": row[index["是否复合工程"]] == "是",
-            "needs_review": row[index["是否建议复核"]] == "是",
             "structure_type": row[index["结构类型"]],
             "composite_reason": "",
             "secondary_candidates": [],
         }
+        record["needs_review"] = should_review_record(record["method"], record["structure_type"])
         if "复合原因" in index:
             record["composite_reason"] = str(row[index["复合原因"]] or "").strip()
         if "候选分类" in index:

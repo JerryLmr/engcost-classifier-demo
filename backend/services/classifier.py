@@ -297,17 +297,7 @@ def detect_composite_metadata(
             f"同时命中多个工程域：{'、'.join(reason_domains)}"
         )
         secondary_candidates = build_candidate_labels(secondary_names)
-        if len(strong_candidate_names) >= 2:
-            top_score = next(
-                (score for level1, score, _hits in candidates if level1 == primary_level1),
-                0,
-            )
-            second_score = next(
-                (score for level1, score, _hits in candidates if level1 == secondary_names[0]),
-                0,
-            )
-            if top_score - second_score <= 2:
-                needs_review = True
+        needs_review = True
     elif structure_type == "multi_system_same_domain":
         needs_review = True
 

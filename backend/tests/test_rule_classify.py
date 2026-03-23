@@ -111,6 +111,7 @@ class RuleClassifyTestCase(unittest.TestCase):
         self.assertTrue(result["is_composite"])
         self.assertEqual(result["structure_type"], "composite_project")
         self.assertIn("绿化景观", result["secondary_candidates"])
+        self.assertTrue(result["needs_review"])
 
     def test_single_project_number_ranges_is_not_composite(self):
         result = classify_text("1-5号楼外墙渗漏水维修")
@@ -121,6 +122,7 @@ class RuleClassifyTestCase(unittest.TestCase):
         self.assertTrue(result["is_composite"])
         self.assertEqual(result["structure_type"], "composite_project")
         self.assertIn("外立面修缮", result["secondary_candidates"])
+        self.assertTrue(result["needs_review"])
 
     def test_elevator_single_part_is_single_project(self):
         result = classify_text("4号楼北电梯钢丝绳断裂紧急维修")
