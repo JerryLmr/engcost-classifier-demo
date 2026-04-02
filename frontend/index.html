@@ -9,25 +9,46 @@
 <body>
   <div class="wrap">
     <div class="hero">
-      <h1>物业工程名称智能分类 Demo</h1>
-      <div class="sub">
-        支持两种展示方式：<strong>一句话即时分类</strong> 与 <strong>Excel 批量分类</strong>。<br>
-        后端默认接本地 <code>Ollama + qwen3:8b</code>，并采用 <strong>规则优先 + LLM 辅助分类</strong> 的方式，兼顾稳定性和展示效果。
+      <div class="hero-title-wrap">
+        <h1>物业工程名称智能分类</h1>
+        <div class="hero-rule">✧ 规则优先 + LLM 辅助分类</div>
       </div>
-      <div class="examples">
-        <div class="example">某小区 3 号楼外墙渗水维修工程</div>
-        <div class="example">地下车库道闸系统更新改造</div>
-        <div class="example">小区生活水泵更换维修</div>
-        <div class="example">屋面漏水及防水层翻修工程</div>
+      <div class="sub hero-sub">
+        输入一句工程描述，系统即可自动识别一级/二级工程类别，支持单条即时分类与 Excel 批量分析。
+      </div>
+      <div class="hero-badges">
+        <span class="hero-badge hero-badge-orange">⚡ 单条即时分类</span>
+        <span class="hero-badge hero-badge-blue">⬡ Excel 批量处理</span>
+        <span class="hero-badge hero-badge-green">▭ 本地模型部署</span>
       </div>
     </div>
 
-    <div class="grid">
-      <div class="card">
-        <label for="projectText">单条工程名称分类</label>
-        <textarea id="projectText" placeholder="输入一句工程名称，例如：某小区 3 号楼外墙渗水维修工程"></textarea>
-        <div class="btns">
-          <button id="classifyBtn">开始分类</button>
+    <div class="feature-shell">
+      <div class="feature-switch">
+        <button class="feature-pill active" id="singleModeBtn" type="button">⚡ 单条分类</button>
+        <button class="feature-pill" id="excelModeBtn" type="button">🗂 批量分类</button>
+      </div>
+    </div>
+
+    <div class="feature-panels">
+      <div class="card feature-card single-feature-card feature-panel active" id="singleFeaturePanel">
+        <div class="feature-card-head">
+          <h2>单条工程名称分类</h2>
+          <p>输入一句工程名称，系统即时输出一级/二级分类及解释依据。</p>
+        </div>
+        <div class="search-bar">
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input id="projectText" class="feature-input" type="text" placeholder="输入一句工程名称，例如：某小区 3 号楼外墙渗水维修工程" />
+          <button id="classifyBtn" class="search-submit" type="button">⚡ 分析</button>
+        </div>
+        <div class="examples examples-inline">
+          <span class="example-hint">可直接体验以下示例：</span>
+          <div class="example">某小区 3 号楼外墙渗水维修工程</div>
+          <div class="example">地下车库道闸系统更新改造</div>
+          <div class="example">小区生活水泵更换维修</div>
+          <div class="example">屋面漏水及防水层翻修工程</div>
+        </div>
+        <div class="btns single-feature-actions">
           <button class="secondary" id="clearBtn">清空</button>
         </div>
         <div class="result" id="resultBox" hidden>
@@ -42,9 +63,21 @@
         <div class="status" id="singleStatus"></div>
       </div>
 
-      <div class="card">
-        <label for="excelFile">Excel 批量分类</label>
-        <input id="excelFile" type="file" accept=".xlsx,.xlsm" />
+      <div class="card feature-card excel-feature-card feature-panel" id="excelFeaturePanel" hidden>
+        <div class="feature-card-head">
+          <h2>Excel 批量分类</h2>
+          <p>上传工程名称清单，系统会在原表后追加分类结果并自动下载。</p>
+        </div>
+        <div class="upload-panel">
+          <div class="upload-icon" aria-hidden="true">⇪</div>
+          <div class="upload-title">点击或选择 Excel 文件</div>
+          <div class="upload-sub">支持 .xlsx、.xlsm 格式，建议第一列为工程名称</div>
+          <div class="upload-actions">
+            <label class="file-trigger" for="excelFile">点击选择文件</label>
+            <span class="analysis-file-name" id="excelFileName">未选择任何文件</span>
+          </div>
+        </div>
+        <input id="excelFile" type="file" accept=".xlsx,.xlsm" hidden />
         <div class="tip">
           约定：<strong>第一列</strong>为工程名称，系统会在原表后追加“一级分类、二级分类、分类方式、分类依据”四列，随后自动下载结果文件。
         </div>
@@ -65,22 +98,69 @@
     </div>
 
     <div class="card analysis-card">
-      <div class="section-head">
-        <div>
-          <h2>结果分析</h2>
-          <p>上传已分类结果 Excel，展示摘要统计与重点样本。</p>
+      <div class="analysis-head">
+        <div class="analysis-title">
+          <div class="analysis-icon" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <div>
+            <h2>分类结果分析</h2>
+            <p>上传已分类结果 Excel，展示摘要统计与重点样本。</p>
+          </div>
         </div>
-      </div>
-      <label for="analysisFile">分析已分类结果文件</label>
-      <input id="analysisFile" type="file" accept=".xlsx,.xlsm" />
-      <div class="btns">
-        <button id="analyzeBtn">开始分析</button>
+        <div class="analysis-actions">
+          <label class="file-trigger" for="analysisFile">选择文件</label>
+          <span class="analysis-file-name" id="analysisFileName">未选择文件</span>
+          <input id="analysisFile" type="file" accept=".xlsx,.xlsm" hidden />
+          <button id="analyzeBtn">开始分析</button>
+        </div>
       </div>
       <div class="status" id="analysisStatus">请上传已经带“一级分类、二级分类、分类方式、分类依据”等结果列的 Excel 文件。</div>
 
       <div class="analysis-results" id="analysisResults" hidden>
-        <div class="metrics-grid" id="summaryMetrics"></div>
-        <div class="metrics-grid compact" id="structureMetrics"></div>
+        <div class="dashboard-grid" id="summaryMetrics"></div>
+
+        <div class="analysis-overview">
+          <div class="overview-card source-card">
+            <div class="overview-card-head">
+              <h3>分类来源分析</h3>
+            </div>
+            <div class="source-body">
+              <div class="source-chart-wrap">
+                <svg id="sourceDonut" class="source-donut" viewBox="0 0 120 120" aria-hidden="true"></svg>
+              </div>
+              <div class="source-legend" id="sourceLegend"></div>
+            </div>
+          </div>
+
+          <div class="overview-card structure-card">
+            <div class="overview-card-head">
+              <h3>工程结构分布</h3>
+            </div>
+            <div class="structure-bars" id="structureBars"></div>
+            <div class="structure-note">
+              工程结构决定了分类的复杂程度。复合工程与同域多系统通常需要更高优先级的复核。
+            </div>
+          </div>
+        </div>
+
+        <div class="risk-panel">
+          <div class="risk-panel-head">
+            <div class="risk-title">
+              <div class="risk-icon" aria-hidden="true">!</div>
+              <div>
+                <h3>风险提示与复核建议</h3>
+              </div>
+            </div>
+            <span class="risk-chip" id="riskChip">共 0 项待处理</span>
+          </div>
+          <div class="risk-grid" id="riskMetrics"></div>
+        </div>
+
+        <div class="detail-section-head">
+          <h3>详细结果</h3>
+          <p>以下保留完整统计与异常/复杂样本明细，便于进一步筛选和复核。</p>
+        </div>
 
         <div class="analysis-grid">
           <div class="table-card">

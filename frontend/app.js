@@ -1,10 +1,15 @@
 const API_BASE = window.API_BASE || "http://127.0.0.1:8000";
 
 const projectText = document.getElementById("projectText");
+const singleModeBtn = document.getElementById("singleModeBtn");
+const excelModeBtn = document.getElementById("excelModeBtn");
+const singleFeaturePanel = document.getElementById("singleFeaturePanel");
+const excelFeaturePanel = document.getElementById("excelFeaturePanel");
 const resultBox = document.getElementById("resultBox");
 const singleStatus = document.getElementById("singleStatus");
 const excelStatus = document.getElementById("excelStatus");
 const excelFile = document.getElementById("excelFile");
+const excelFileName = document.getElementById("excelFileName");
 const excelProgressWrap = document.getElementById("excelProgressWrap");
 const excelProgressFill = document.getElementById("excelProgressFill");
 const excelProgressLabel = document.getElementById("excelProgressLabel");
@@ -12,8 +17,13 @@ const excelProgressValue = document.getElementById("excelProgressValue");
 const analysisFile = document.getElementById("analysisFile");
 const analysisStatus = document.getElementById("analysisStatus");
 const analysisResults = document.getElementById("analysisResults");
+const analysisFileName = document.getElementById("analysisFileName");
 const summaryMetrics = document.getElementById("summaryMetrics");
-const structureMetrics = document.getElementById("structureMetrics");
+const sourceLegend = document.getElementById("sourceLegend");
+const sourceDonut = document.getElementById("sourceDonut");
+const structureBars = document.getElementById("structureBars");
+const riskMetrics = document.getElementById("riskMetrics");
+const riskChip = document.getElementById("riskChip");
 const level1Table = document.getElementById("level1Table");
 const level2Table = document.getElementById("level2Table");
 const focusTable = document.getElementById("focusTable");
@@ -220,6 +230,16 @@ function setSingleStatus(message) {
   singleStatus.innerHTML = message;
 }
 
+function switchFeatureMode(mode) {
+  const singleMode = mode === "single";
+  singleFeaturePanel.hidden = !singleMode;
+  excelFeaturePanel.hidden = singleMode;
+  singleFeaturePanel.classList.toggle("active", singleMode);
+  excelFeaturePanel.classList.toggle("active", !singleMode);
+  singleModeBtn.classList.toggle("active", singleMode);
+  excelModeBtn.classList.toggle("active", !singleMode);
+}
+
 function clearExcelProcessingTimer() {
   if (excelProcessingTimer) {
     clearInterval(excelProcessingTimer);
@@ -274,9 +294,161 @@ function renderMetrics(container, items) {
   container.innerHTML = items
     .map(
       (item) => `
-        <div class="metric">
-          <span class="label">${item.label}</span>
-          <span class="value">${item.value}</span>
+        <div class="dashboard-metric ${item.tone || ""}">
+          <div>
+            <span class="label">${item.label}</span>
+            <span class="value">${item.value}</span>
+          </div>
+          <span class="metric-icon" aria-hidden="true">${item.icon || ""}</span>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderSourceAnalysis(summary) {
+  const items = [
+    {
+      label: "规则优先",
+      value: summary.rule_method_count,
+      color: "#3b82f6",
+    },
+    {
+      label: "LLM辅助",
+      value: summary.llm_method_count,
+      color: "#8b5cf6",
+    },
+    {
+      label: "体系外默认",
+      value: summary.fallback_method_count,
+      color: "#f59e0b",
+    },
+  ];
+  const total = Math.max(
+    1,
+    items.reduce((sum, item) => sum + item.value, 0),
+  );
+  let offset = 0;
+  const radius = 42;
+  const circumference = 2 * Math.PI * radius;
+
+  sourceDonut.innerHTML = `
+    <circle class="donut-track" cx="60" cy="60" r="${radius}"></circle>
+    ${items
+      .map((item) => {
+        const length = (item.value / total) * circumference;
+        const circle = `
+          <circle
+            class="donut-segment"
+            cx="60"
+            cy="60"
+            r="${radius}"
+            stroke="${item.color}"
+            stroke-dasharray="${length} ${circumference - length}"
+            stroke-dashoffset="${-offset}"
+          ></circle>
+        `;
+        offset += length;
+        return circle;
+      })
+      .join("")}
+    <circle class="donut-hole" cx="60" cy="60" r="28"></circle>
+  `;
+
+  sourceLegend.innerHTML = items
+    .map((item) => {
+      const percent = total ? ((item.value / total) * 100).toFixed(1) : "0.0";
+      return `
+        <div class="legend-item">
+          <div class="legend-item-main">
+            <span class="legend-dot" style="background:${item.color}"></span>
+            <span class="legend-label">${item.label}</span>
+          </div>
+          <div class="legend-item-meta">
+            <strong>${item.value}</strong>
+            <span>(${percent}%)</span>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderStructureBars(counts) {
+  const items = [
+    {
+      label: "单一工程",
+      value: counts.single_project,
+      color: "#22c55e",
+    },
+    {
+      label: "复合工程",
+      value: counts.composite_project,
+      color: "#f43f5e",
+    },
+    {
+      label: "同域多系统",
+      value: counts.multi_system_same_domain,
+      color: "#fb923c",
+    },
+  ];
+  const total = Math.max(
+    1,
+    items.reduce((sum, item) => sum + item.value, 0),
+  );
+  structureBars.innerHTML = items
+    .map((item) => {
+      const percent = (item.value / total) * 100;
+      return `
+        <div class="structure-row">
+          <div class="structure-row-head">
+            <span>${item.label}</span>
+            <strong>${item.value}</strong>
+          </div>
+          <div class="structure-track">
+            <div class="structure-fill" style="width:${percent}%;background:${item.color}"></div>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderRiskMetrics(summary, counts) {
+  const items = [
+    {
+      label: "需复核数据",
+      value: summary.review_count,
+      desc: "包含所有异常分类项",
+      tone: "pink",
+    },
+    {
+      label: "复合工程",
+      value: summary.composite_count,
+      desc: "结构复杂，需人工确认",
+      tone: "yellow",
+    },
+    {
+      label: "同域多系统",
+      value: counts.multi_system_same_domain,
+      desc: "跨系统关联风险",
+      tone: "orange",
+    },
+    {
+      label: "默认分类",
+      value: summary.fallback_method_count,
+      desc: "规则未覆盖项",
+      tone: "slate",
+    },
+  ];
+  riskChip.textContent = `共 ${summary.review_count} 项待处理`;
+  riskMetrics.innerHTML = items
+    .map(
+      (item) => `
+        <div class="risk-item ${item.tone}">
+          <div class="risk-item-label">${item.label}</div>
+          <div class="risk-item-value">${item.value}</div>
+          <div class="risk-item-desc">${item.desc}</div>
         </div>
       `,
     )
@@ -477,19 +649,14 @@ async function handleExcelAnalyze() {
     }
 
     renderMetrics(summaryMetrics, [
-      { label: "总记录数", value: data.summary.total_records },
-      { label: "规则优先", value: data.summary.rule_method_count },
-      { label: "LLM 辅助分类", value: data.summary.llm_method_count },
-      { label: "体系外默认分类", value: data.summary.fallback_method_count },
-      { label: "复合工程", value: data.summary.composite_count },
-      { label: "建议复核", value: data.summary.review_count },
+      { label: "总数据量", value: data.summary.total_records, icon: "▦", tone: "blue" },
+      { label: "自动分类（规则）", value: data.summary.rule_method_count, icon: "✓", tone: "green" },
+      { label: "LLM 辅助分类", value: data.summary.llm_method_count, icon: "≋", tone: "violet" },
+      { label: "建议复核", value: data.summary.review_count, icon: "!", tone: "red" },
     ]);
-
-    renderMetrics(structureMetrics, [
-      { label: "单一工程", value: data.structure_counts.single_project },
-      { label: "同域多系统", value: data.structure_counts.multi_system_same_domain },
-      { label: "复合工程", value: data.structure_counts.composite_project },
-    ]);
+    renderSourceAnalysis(data.summary);
+    renderStructureBars(data.structure_counts);
+    renderRiskMetrics(data.summary, data.structure_counts);
 
     renderCountTable(level1Table, data.level1_top, "暂无一级分类统计");
     renderCountTable(level2Table, data.level2_top, "暂无二级分类统计");
@@ -514,6 +681,22 @@ document.getElementById("classifyBtn").addEventListener("click", handleSingleCla
 document.getElementById("clearBtn").addEventListener("click", resetSingleResult);
 document.getElementById("excelBtn").addEventListener("click", handleExcelClassify);
 document.getElementById("analyzeBtn").addEventListener("click", handleExcelAnalyze);
+singleModeBtn.addEventListener("click", () => switchFeatureMode("single"));
+excelModeBtn.addEventListener("click", () => switchFeatureMode("excel"));
+projectText.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    handleSingleClassify();
+  }
+});
+excelFile.addEventListener("change", () => {
+  if (excelFileName) {
+    excelFileName.textContent = excelFile.files.length ? excelFile.files[0].name : "未选择任何文件";
+  }
+});
+analysisFile.addEventListener("change", () => {
+  analysisFileName.textContent = analysisFile.files.length ? analysisFile.files[0].name : "未选择文件";
+});
 focusSearch.addEventListener("input", refreshFocusSamplesView);
 focusLevel1.addEventListener("change", refreshFocusSamplesView);
 focusMethod.addEventListener("change", refreshFocusSamplesView);
@@ -539,4 +722,5 @@ updateFocusSortIndicators();
 focusSummary.textContent = "当前显示 0 / 0 条";
 resetExcelProgress();
 
+switchFeatureMode("single");
 resetSingleResult();
