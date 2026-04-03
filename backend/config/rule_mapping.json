@@ -1,0 +1,210 @@
+{
+  "version": "v1.0",
+  "updated_at": "2026-04-02",
+  "description": "维修对象到审计语义标签的映射表。标签层不直接输出结论，只决定进入哪条规则路径。",
+  "tag_definitions": {
+    "repairable_object": "可进入维修资金审计范围的维修对象",
+    "shared_part": "共用部位",
+    "shared_facility": "共用设施设备",
+    "daily_service_exclusion": "属于物业日常服务，应排除",
+    "daily_greening": "绿化养护类排除",
+    "cleaning_sanitation": "清洁卫生类排除",
+    "inspection_testing": "检测、年检、试验类排除",
+    "new_construction": "新增、加装、扩建类排除",
+    "emergency_scope": "符合紧急维修范围",
+    "gray_case": "边界不清或需补证判断的灰区对象",
+    "multi_project": "输入中包含多个不同工程，需拆分或人工复核",
+    "unknown": "无法识别对象"
+  },
+  "flow_binding_rules": {
+    "daily_service_exclusion": "exclusion_flow",
+    "daily_greening": "exclusion_flow",
+    "cleaning_sanitation": "exclusion_flow",
+    "inspection_testing": "exclusion_flow",
+    "new_construction": "exclusion_flow",
+    "gray_case_strong": "manual_review_flow",
+    "gray_case_weak": "gray_case_review_flow",
+    "emergency_scope": "emergency_flow",
+    "repairable_object": "normal_flow",
+    "multi_project": "input_check_flow",
+    "unknown": "input_check_flow"
+  },
+  "mappings": [
+    {
+      "mapping_id": "MAP_001",
+      "match_text": ["树木修剪", "乔木修剪", "回缩修剪", "绿化补种", "乔木移除"],
+      "normalized_name": "绿化养护事项",
+      "normalized_tags": ["daily_greening", "daily_service_exclusion"],
+      "audit_domain": "排除类审计",
+      "default_flow": "exclusion_flow",
+      "mapping_confidence": "high",
+      "gray_case_type": null,
+      "notes": "绿化修剪、补种、回缩等统一归入物业日常绿化养护"
+    },
+    {
+      "mapping_id": "MAP_002",
+      "match_text": ["垃圾清运", "大件垃圾清运", "垃圾桶更换", "干湿垃圾桶更换"],
+      "normalized_name": "清洁卫生事项",
+      "normalized_tags": ["cleaning_sanitation", "daily_service_exclusion"],
+      "audit_domain": "排除类审计",
+      "default_flow": "exclusion_flow",
+      "mapping_confidence": "high",
+      "gray_case_type": null,
+      "notes": "垃圾清运、垃圾桶更换等归入清洁卫生服务"
+    },
+    {
+      "mapping_id": "MAP_003",
+      "match_text": ["电梯年检", "制动试验", "125%制动试验", "检测检查"],
+      "normalized_name": "电梯检测检查事项",
+      "normalized_tags": ["inspection_testing"],
+      "audit_domain": "排除类审计",
+      "default_flow": "exclusion_flow",
+      "mapping_confidence": "high",
+      "gray_case_type": null,
+      "notes": "检测、试验、年检类归入 inspection_testing"
+    },
+    {
+      "mapping_id": "MAP_004",
+      "match_text": ["新增摄像头", "监控系统工程", "增加高清摄像头", "新增停车位", "加装急停开关", "加装限位装置"],
+      "normalized_name": "新增建设/加装事项",
+      "normalized_tags": ["new_construction"],
+      "audit_domain": "排除类审计",
+      "default_flow": "exclusion_flow",
+      "mapping_confidence": "high",
+      "gray_case_type": null,
+      "notes": "新增、加装、扩建类统一排除"
+    },
+    {
+      "mapping_id": "MAP_005",
+      "match_text": ["电梯曳引机更换", "曳引机", "缓冲器维修", "电梯维修"],
+      "normalized_name": "电梯维修对象",
+      "normalized_tags": ["repairable_object", "shared_facility"],
+      "audit_domain": "使用范围审计",
+      "default_flow": "normal_flow",
+      "mapping_confidence": "high",
+      "gray_case_type": null,
+      "notes": "电梯维修对象进入正常审计流程"
+    },
+    {
+      "mapping_id": "MAP_006",
+      "match_text": ["外墙渗漏", "外墙脱落", "外墙空鼓", "外墙开裂", "外墙维修"],
+      "normalized_name": "外墙维修对象",
+      "normalized_tags": ["repairable_object", "shared_part"],
+      "audit_domain": "使用范围审计",
+      "default_flow": "normal_flow",
+      "mapping_confidence": "high",
+      "gray_case_type": null,
+      "notes": "外墙安全和渗漏类进入正常流程"
+    },
+    {
+      "mapping_id": "MAP_007",
+      "match_text": ["屋面防水", "屋顶渗漏", "屋面维修", "屋顶维修"],
+      "normalized_name": "屋面维修对象",
+      "normalized_tags": ["repairable_object", "shared_part"],
+      "audit_domain": "使用范围审计",
+      "default_flow": "normal_flow",
+      "mapping_confidence": "high",
+      "gray_case_type": null,
+      "notes": "屋面防水和渗漏类进入正常流程"
+    },
+    {
+      "mapping_id": "MAP_008",
+      "match_text": ["水泵故障", "排水管爆裂", "污水管堵塞", "给排水维修"],
+      "normalized_name": "给排水维修对象",
+      "normalized_tags": ["repairable_object", "shared_facility", "emergency_scope"],
+      "audit_domain": "应急/普通维修审计",
+      "default_flow": "emergency_flow",
+      "mapping_confidence": "medium",
+      "gray_case_type": null,
+      "notes": "给排水对象可能进入应急流程，最终由字段 is_emergency 决定"
+    },
+    {
+      "mapping_id": "MAP_009",
+      "match_text": ["消防喷淋维修", "消火栓维修", "火灾报警系统维修", "消防系统故障"],
+      "normalized_name": "消防维修对象",
+      "normalized_tags": ["repairable_object", "shared_facility", "emergency_scope"],
+      "audit_domain": "应急/普通维修审计",
+      "default_flow": "emergency_flow",
+      "mapping_confidence": "high",
+      "gray_case_type": null,
+      "notes": "消防故障类优先视为可能应急对象"
+    },
+    {
+      "mapping_id": "MAP_010",
+      "match_text": ["绿化翻新", "景观提升", "公共景观绿化", "绿化整修"],
+      "normalized_name": "绿化翻新事项",
+      "normalized_tags": ["gray_case"],
+      "audit_domain": "灰区审计",
+      "default_flow": "manual_review_flow",
+      "mapping_confidence": "medium",
+      "gray_case_type": "strong",
+      "notes": "绿化翻新属于强灰区"
+    },
+    {
+      "mapping_id": "MAP_011",
+      "match_text": ["外墙粉刷", "立面翻新", "外墙美化", "外墙清洗"],
+      "normalized_name": "外墙美化事项",
+      "normalized_tags": ["gray_case"],
+      "audit_domain": "灰区审计",
+      "default_flow": "manual_review_flow",
+      "mapping_confidence": "medium",
+      "gray_case_type": "strong",
+      "notes": "维修与美化边界不稳"
+    },
+    {
+      "mapping_id": "MAP_012",
+      "match_text": ["楼道窗户玻璃维修", "楼道玻璃维修", "公共窗户玻璃"],
+      "normalized_name": "共用部位玻璃事项",
+      "normalized_tags": ["gray_case"],
+      "audit_domain": "灰区审计",
+      "default_flow": "gray_case_review_flow",
+      "mapping_confidence": "medium",
+      "gray_case_type": "weak",
+      "notes": "需补充部位、责任边界、损坏范围等材料"
+    },
+    {
+      "mapping_id": "MAP_013",
+      "match_text": ["楼道门窗维修", "公共门窗维修", "门厅玻璃门维修"],
+      "normalized_name": "共用门窗事项",
+      "normalized_tags": ["gray_case"],
+      "audit_domain": "灰区审计",
+      "default_flow": "gray_case_review_flow",
+      "mapping_confidence": "medium",
+      "gray_case_type": "weak",
+      "notes": "需判断共用部位属性和物业维保边界"
+    },
+    {
+      "mapping_id": "MAP_014",
+      "match_text": ["弱电线路优化调整", "位置调整", "线路迁改", "弱电优化"],
+      "normalized_name": "弱电优化调整事项",
+      "normalized_tags": ["gray_case"],
+      "audit_domain": "灰区审计",
+      "default_flow": "manual_review_flow",
+      "mapping_confidence": "medium",
+      "gray_case_type": "strong",
+      "notes": "维修、优化、新增三者边界不稳"
+    },
+    {
+      "mapping_id": "MAP_015",
+      "match_text": ["弱电维修", "门禁维修", "电子防盗门维修", "对讲门维修"],
+      "normalized_name": "弱电维修对象",
+      "normalized_tags": ["repairable_object", "shared_facility"],
+      "audit_domain": "使用范围审计",
+      "default_flow": "normal_flow",
+      "mapping_confidence": "medium",
+      "gray_case_type": null,
+      "notes": "修复类先进入正常流程，如涉及升级/迁改再转灰区"
+    },
+    {
+      "mapping_id": "MAP_016",
+      "match_text": ["零星维修", "零星修理", "外墙零星维修", "电梯零星修理"],
+      "normalized_name": "零星维修事项",
+      "normalized_tags": ["gray_case"],
+      "audit_domain": "灰区审计",
+      "default_flow": "manual_review_flow",
+      "mapping_confidence": "medium",
+      "gray_case_type": "strong",
+      "notes": "已确认：零星维修统一作为强灰区"
+    }
+  ]
+}

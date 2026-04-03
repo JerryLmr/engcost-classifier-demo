@@ -1,0 +1,29 @@
+{
+  "version": "v1.0",
+  "schema_name": "maintenance_fund_audit_output",
+  "internal_result_enum": [
+    "compliant",
+    "non_compliant",
+    "need_supplement",
+    "manual_review"
+  ],
+  "display_mapping": {
+    "compliant": "初步符合",
+    "non_compliant": "疑似违规",
+    "need_supplement": "需补充材料",
+    "manual_review": "建议人工复核"
+  },
+  "fields": {
+    "project_name": { "type": "string", "required": true },
+    "matched_object_ids": { "type": "array", "required": false },
+    "normalized_tags": { "type": "array", "required": false },
+    "overall_result": { "type": "string", "required": true },
+    "display_result": { "type": "string", "required": true },
+    "reason_codes": { "type": "array", "required": true },
+    "reasons": { "type": "array", "required": true },
+    "basis_documents": { "type": "array", "required": false },
+    "missing_items": { "type": "array", "required": false },
+    "audit_path": { "type": "array", "required": true },
+    "manual_review_required": { "type": "boolean", "required": true }
+  }
+}
