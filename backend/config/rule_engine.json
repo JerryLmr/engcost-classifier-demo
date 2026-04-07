@@ -1,7 +1,7 @@
 {
-  "version": "v1.0",
+  "version": "v1.1",
   "engine_name": "maintenance_fund_audit_engine",
-  "updated_at": "2026-04-02",
+  "updated_at": "2026-04-07",
   "description": "维修资金审计规则引擎。标签层不直接出结果，规则引擎根据路径输出柔性结论：初步符合、疑似违规、需补充材料、建议人工复核。",
 
   "result_policy": {
@@ -47,10 +47,13 @@
       "repair_scope_description",
       "repair_extent",
       "is_property_service_scope",
+      "gray_case_evidence_complete",
+      "gray_case_type",
       "is_function_restoration",
       "is_upgrade",
       "is_relocation",
-      "split_projects"
+      "split_projects",
+      "catalog_domains"
     ]
   },
 
@@ -71,6 +74,7 @@
     "OUTSIDE_CATALOG": "未命中对象目录",
     "INSUFFICIENT_INFO": "输入信息不足",
     "MULTI_PROJECT": "输入中包含多个不同工程",
+    "CROSS_DOMAIN_PROJECT": "跨域复合工程",
     "GREENING_MAINTENANCE": "属于绿化养护",
     "CLEANING_SANITATION": "属于清洁卫生服务",
     "INSPECTION_TESTING": "属于检测检查",
@@ -97,9 +101,40 @@
   "rules": [
     {
       "rule_id": "INPUT_001",
-      "name": "多工程输入识别",
+      "name": "跨域复合工程输入识别",
       "stage": "INPUT_CHECK",
       "priority": 10,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "multi_project" },
+          { "field": "catalog_domains", "op": "length_gt", "value": 1 }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["MULTI_PROJECT", "CROSS_DOMAIN_PROJECT"],
+        "message": "输入包含多个不同对象域，建议拆分后分别审计"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "输入规范规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "系统输入规范规则"
+      },
+      "is_active": true
+    },
+
+    {
+      "rule_id": "INPUT_002",
+      "name": "多工程输入识别",
+      "stage": "INPUT_CHECK",
+      "priority": 11,
       "when": {
         "any": [
           { "field": "normalized_tags", "op": "contains", "value": "multi_project" },
@@ -127,8 +162,8 @@
     },
 
     {
-      "rule_id": "INPUT_002",
-      "name": "信息不足",
+      "rule_id": "INPUT_003",
+      "name": "项目名称为空",
       "stage": "INPUT_CHECK",
       "priority": 20,
       "when": {
@@ -157,13 +192,67 @@
     },
 
     {
+      "rule_id": "INPUT_004",
+      "name": "输入过于泛化",
+      "stage": "INPUT_CHECK",
+      "priority": 21,
+      "when": {
+        "all": [
+          {
+            "field": "project_name",
+            "op": "empty_after_strip_terms",
+            "terms": [
+              "工程",
+              "项目",
+              "维修",
+              "修缮",
+              "整修",
+              "改造",
+              "更新",
+              "维护",
+              "设施",
+              "系统",
+              "设备",
+              "小区",
+              "公共",
+              "区域",
+              "楼栋",
+              "楼道",
+              "单元"
+            ],
+            "strip_chars": "-_/"
+          }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["INSUFFICIENT_INFO"],
+        "message": "输入信息过于泛化，无法识别具体维修对象"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "输入规范规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "系统输入规范规则"
+      },
+      "is_active": true
+    },
+
+    {
       "rule_id": "CATALOG_001",
       "name": "目录外对象",
       "stage": "CATALOG_CHECK",
       "priority": 30,
       "when": {
         "all": [
-          { "field": "matched_object_ids", "op": "empty_array" }
+          { "field": "matched_object_ids", "op": "empty_array" },
+          { "field": "normalized_tags", "op": "contains", "value": "unknown" }
         ]
       },
       "then": {
@@ -347,9 +436,14 @@
           { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
           { "field": "gray_case_type", "op": "eq", "value": "weak" },
           {
-            "field": "gray_case_evidence_complete",
-            "op": "eq",
-            "value": false
+            "any": [
+              { "field": "gray_case_evidence_complete", "op": "empty_or_null" },
+              {
+                "field": "gray_case_evidence_complete",
+                "op": "eq",
+                "value": false
+              }
+            ]
           }
         ]
       },
@@ -567,6 +661,80 @@
         "clause_label": null,
         "public_access": true,
         "display_name": "维修资金和公共收益管理基本制度—公示制度"
+      },
+      "is_active": true
+    },
+
+    {
+      "rule_id": "NORMAL_999",
+      "name": "正常维修默认补件提示",
+      "stage": "PROCESS_CHECK",
+      "priority": 999,
+      "when": {
+        "any": [
+          {
+            "all": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "is_emergency", "op": "not_eq", "value": true }
+            ]
+          },
+          {
+            "all": [
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
+              { "field": "gray_case_type", "op": "eq", "value": "weak" },
+              { "field": "gray_case_evidence_complete", "op": "eq", "value": true },
+              { "field": "is_property_service_scope", "op": "is_false" },
+              { "field": "is_common_part", "op": "eq", "value": true }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": [],
+        "message": "建议补充表决、公示及审价等流程材料"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "正常维修流程补件规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "正常维修流程补件规则"
+      },
+      "is_active": true
+    },
+
+    {
+      "rule_id": "OUTPUT_001",
+      "name": "未命中明确结论规则时默认补充材料",
+      "stage": "OUTPUT_BUILD",
+      "priority": 999,
+      "when": {
+        "all": [
+          { "field": "project_name", "op": "not_empty_or_null" }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": [],
+        "message": "当前未命中明确结论规则，需补充进一步审计材料"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "输出兜底规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "输出兜底规则"
       },
       "is_active": true
     }
