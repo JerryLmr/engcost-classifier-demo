@@ -24,6 +24,8 @@
     "basis_documents": { "type": "array", "required": false },
     "missing_items": { "type": "array", "required": false },
     "audit_path": { "type": "array", "required": true },
-    "manual_review_required": { "type": "boolean", "required": true }
+    "manual_review_required": { "type": "boolean", "required": true },
+    "sub_audits": { "type": "object", "required": true },
+    "document_extraction_targets": { "type": "object", "required": false }
   }
 }

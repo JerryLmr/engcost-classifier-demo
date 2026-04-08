@@ -116,38 +116,59 @@
         <button class="secondary" id="auditResetBtn" type="button">重新开始</button>
       </div>
       <div class="result audit-result" id="auditResultBox" hidden>
-        <div class="audit-summary-card">
-          <div class="audit-summary-head">
-            <span class="audit-summary-label">审计结论</span>
-            <strong id="auditDisplayResult"></strong>
+        <section class="audit-section audit-overview-section">
+          <div class="audit-summary-card">
+            <div class="audit-summary-head">
+              <span class="audit-summary-label">审计结论</span>
+              <strong id="auditDisplayResult"></strong>
+            </div>
+            <div class="audit-manual-review" id="auditManualReview" hidden>建议人工复核</div>
           </div>
-          <div class="audit-manual-review" id="auditManualReview" hidden>建议人工复核</div>
-        </div>
-        <div class="kv"><strong>项目名称：</strong><span id="auditProjectName"></span></div>
-        <div class="kv">
-          <strong>匹配对象：</strong>
-          <div class="audit-list-block" id="auditMappedObjects"></div>
-        </div>
-        <div class="kv">
-          <strong>标签：</strong>
-          <div class="audit-pill-list" id="auditTags"></div>
-        </div>
-        <div class="kv">
-          <strong>原因说明：</strong>
-          <div class="audit-list-block" id="auditReasons"></div>
-        </div>
-        <div class="kv">
-          <strong>原因码：</strong>
-          <div class="audit-pill-list" id="auditReasonCodes"></div>
-        </div>
-        <div class="kv">
-          <strong>依据：</strong>
-          <div class="audit-list-block" id="auditBasisDocuments"></div>
-        </div>
-        <div class="kv">
-          <strong>审计路径：</strong>
-          <div class="audit-pill-list" id="auditPath"></div>
-        </div>
+          <div class="kv"><strong>项目名称：</strong><span id="auditProjectName"></span></div>
+        </section>
+
+        <section class="audit-section">
+          <div class="audit-section-head">
+            <h3>核心原因与依据</h3>
+          </div>
+          <div class="kv">
+            <strong>原因说明：</strong>
+            <div class="audit-list-block" id="auditReasons"></div>
+          </div>
+          <div class="kv">
+            <strong>原因码：</strong>
+            <div class="audit-pill-list" id="auditReasonCodes"></div>
+          </div>
+          <div class="kv">
+            <strong>依据：</strong>
+            <div class="audit-list-block" id="auditBasisDocuments"></div>
+          </div>
+        </section>
+
+        <section class="audit-section">
+          <div class="audit-section-head">
+            <h3>分项审计结果</h3>
+          </div>
+          <div class="audit-sub-audits" id="auditSubAudits"></div>
+        </section>
+
+        <section class="audit-section">
+          <div class="audit-section-head">
+            <h3>其他技术信息</h3>
+          </div>
+          <div class="kv">
+            <strong>匹配对象：</strong>
+            <div class="audit-list-block" id="auditMappedObjects"></div>
+          </div>
+          <div class="kv">
+            <strong>标签：</strong>
+            <div class="audit-pill-list" id="auditTags"></div>
+          </div>
+          <div class="kv">
+            <strong>审计路径：</strong>
+            <div class="audit-pill-list" id="auditPath"></div>
+          </div>
+        </section>
       </div>
       <div class="status" id="auditStatus">输入工程描述后开始审计</div>
     </div>

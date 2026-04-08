@@ -54,6 +54,7 @@ const auditReasons = document.getElementById("auditReasons");
 const auditReasonCodes = document.getElementById("auditReasonCodes");
 const auditBasisDocuments = document.getElementById("auditBasisDocuments");
 const auditPath = document.getElementById("auditPath");
+const auditSubAudits = document.getElementById("auditSubAudits");
 
 let focusSamplesRaw = [];
 const focusSortState = {
@@ -64,6 +65,19 @@ let excelProcessingTimer = null;
 let isAuditLoading = false;
 let auditResult = null;
 let auditError = "";
+
+const SUB_AUDIT_META = [
+  { key: "scope_audit", title: "使用范围审计" },
+  { key: "process_audit", title: "流程合规审计" },
+  { key: "document_completeness_audit", title: "资料完整性审计" },
+];
+
+const RESULT_BADGE_LABELS = {
+  compliant: "通过",
+  non_compliant: "疑似违规",
+  need_supplement: "需补充材料",
+  manual_review: "建议人工复核",
+};
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -330,6 +344,10 @@ function formatMatchScore(score) {
   return typeof score === "number" ? score.toFixed(2) : "-";
 }
 
+function formatFactField(name) {
+  return String(name || "");
+}
+
 function renderAuditPillList(container, values, emptyLabel) {
   if (!Array.isArray(values) || !values.length) {
     container.innerHTML = `<span class="audit-empty">${escapeHtml(emptyLabel)}</span>`;
@@ -381,6 +399,126 @@ function renderBasisDocuments(documents) {
   renderAuditList(auditBasisDocuments, items, "暂无明确法规依据展示");
 }
 
+function getDocumentGroupKey(document) {
+  const sourceType = String(document.source_type || "").toLowerCase();
+  if (sourceType.includes("law") || sourceType.includes("regulation") || sourceType.includes("public")) {
+    return "regulation";
+  }
+  if (sourceType.includes("system") || sourceType.includes("rule")) {
+    return "system";
+  }
+  return "other";
+}
+
+function renderGroupedBasisDocuments(documents) {
+  const safeDocuments = Array.isArray(documents) ? documents : [];
+  if (!safeDocuments.length) {
+    return '<div class="audit-empty">暂无明确依据展示</div>';
+  }
+
+  const groups = {
+    regulation: [],
+    system: [],
+    other: [],
+  };
+  safeDocuments.forEach((document) => {
+    groups[getDocumentGroupKey(document)].push(document);
+  });
+
+  const orderedGroups = [
+    { key: "regulation", title: "法规依据" },
+    { key: "system", title: "系统规则" },
+    { key: "other", title: "其他依据" },
+  ];
+
+  const html = orderedGroups
+    .filter((group) => groups[group.key].length)
+    .map((group) => {
+      const items = groups[group.key]
+        .map((document) => {
+          const primary = document.display_name || document.title || "未命名依据";
+          const secondary = [document.title, document.article, document.section]
+            .filter((value) => value && value !== primary)
+            .join(" / ");
+          return `
+            <div class="audit-list-item">
+              <strong>${escapeHtml(primary)}</strong>
+              <div class="audit-doc-meta">${escapeHtml(secondary || "暂无条款定位信息")}</div>
+            </div>
+          `;
+        })
+        .join("");
+      return `
+        <div class="sub-audit-evidence-group">
+          <div class="sub-audit-evidence-title">${escapeHtml(group.title)}</div>
+          <div class="audit-list-block">${items}</div>
+        </div>
+      `;
+    })
+    .join("");
+
+  return html || '<div class="audit-empty">暂无明确依据展示</div>';
+}
+
+function resolveSubAuditBadge(subAudit) {
+  if (!subAudit || subAudit.applicable === false) {
+    return { label: "不适用", tone: "na" };
+  }
+  const result = subAudit.result;
+  return {
+    label: subAudit.display_result || RESULT_BADGE_LABELS[result] || "-",
+    tone: result || "na",
+  };
+}
+
+function renderFactPills(values, emptyLabel) {
+  const safeValues = Array.isArray(values) ? values : [];
+  if (!safeValues.length) {
+    return `<span class="audit-empty">${escapeHtml(emptyLabel)}</span>`;
+  }
+  return safeValues.map((value) => `<span class="pill">${escapeHtml(formatFactField(value))}</span>`).join("");
+}
+
+function renderSubAuditReasons(reasons) {
+  const safeReasons = Array.isArray(reasons) ? reasons : [];
+  if (!safeReasons.length) {
+    return '<div class="audit-empty">暂无明确原因说明</div>';
+  }
+  return safeReasons.map((reason) => `<div class="audit-list-item">${escapeHtml(reason)}</div>`).join("");
+}
+
+function renderSubAudits(subAudits) {
+  const safeSubAudits = subAudits && typeof subAudits === "object" ? subAudits : {};
+  auditSubAudits.innerHTML = SUB_AUDIT_META.map((meta) => {
+    const subAudit = safeSubAudits[meta.key] || {};
+    const badge = resolveSubAuditBadge(subAudit);
+    return `
+      <article class="sub-audit-card">
+        <div class="sub-audit-card-head">
+          <h4>${escapeHtml(meta.title)}</h4>
+          <span class="sub-audit-result-badge tone-${escapeHtml(badge.tone)}">${escapeHtml(badge.label)}</span>
+        </div>
+        <div class="sub-audit-section">
+          <strong>原因说明</strong>
+          <div class="audit-list-block">${renderSubAuditReasons(subAudit.reasons)}</div>
+        </div>
+        <div class="sub-audit-section">
+          <strong>当前缺失项</strong>
+          <div class="audit-pill-list">${renderFactPills(subAudit.missing_items, "暂无明确缺失项")}</div>
+        </div>
+        <div class="sub-audit-section">
+          <strong>本次检查过的事实</strong>
+          <div class="audit-pill-list">${renderFactPills(subAudit.facts_used, "暂无可展示的核查字段")}</div>
+        </div>
+        <div class="sub-audit-section">
+          <strong>依据</strong>
+          ${renderGroupedBasisDocuments(subAudit.basis_documents)}
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
 function renderAuditResult(data) {
   auditResult = data;
   auditError = "";
@@ -393,6 +531,7 @@ function renderAuditResult(data) {
   renderReasons(data.reasons);
   renderAuditPillList(auditReasonCodes, data.reason_codes, "暂无原因码");
   renderBasisDocuments(data.basis_documents);
+  renderSubAudits(data.sub_audits);
   renderAuditPillList(auditPath, data.audit_path, "暂无审计路径");
 }
 
@@ -409,6 +548,7 @@ function resetAuditResult() {
   auditReasons.innerHTML = "";
   auditReasonCodes.innerHTML = "";
   auditBasisDocuments.innerHTML = "";
+  auditSubAudits.innerHTML = "";
   auditPath.innerHTML = "";
   setAuditLoadingState(false);
   setAuditStatus("输入工程描述后开始审计");

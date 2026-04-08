@@ -1,0 +1,2596 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>维修资金使用项目审计智能体 - 完整流程</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+        }
+        
+        :root {
+            --primary-color: #1a73e8;
+            --primary-dark: #0d47a1;
+            --secondary-color: #34a853;
+            --warning-color: #fbbc05;
+            --danger-color: #ea4335;
+            --light-bg: #f8f9fa;
+            --dark-bg: #202124;
+            --text-color: #333;
+            --text-light: #666;
+            --border-color: #ddd;
+            --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            --transition: all 0.3s ease;
+        }
+        
+        body {
+            background-color: #f5f7fa;
+            color: var(--text-color);
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        /* 头部 */
+        header {
+            background: linear-gradient(135deg, var(--primary-dark) 0%, var(--primary-color) 100%);
+            color: white;
+            padding: 30px 35px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 250px;
+            height: 250px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            transform: translate(30%, -30%);
+        }
+        
+        .header-content {
+            position: relative;
+            z-index: 2;
+        }
+        
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+        
+        header .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            max-width: 1000px;
+            margin-bottom: 20px;
+        }
+        
+        .ai-badge {
+            display: inline-block;
+            background: linear-gradient(90deg, #ff6b6b, #ffa726);
+            color: white;
+            padding: 8px 20px;
+            border-radius: 25px;
+            font-size: 1rem;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        
+        /* 流程步骤指示器 */
+        .process-steps {
+            display: flex;
+            justify-content: space-between;
+            margin: 40px 0 60px;
+            position: relative;
+        }
+        
+        .process-steps::before {
+            content: '';
+            position: absolute;
+            top: 25px;
+            left: 50px;
+            right: 50px;
+            height: 4px;
+            background: var(--border-color);
+            z-index: 1;
+        }
+        
+        .step {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            z-index: 2;
+            flex: 1;
+        }
+        
+        .step-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: white;
+            border: 4px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            color: var(--text-light);
+            margin-bottom: 15px;
+            transition: var(--transition);
+        }
+        
+        .step.active .step-icon {
+            background: var(--primary-color);
+            border-color: var(--primary-color);
+            color: white;
+            transform: scale(1.1);
+            box-shadow: 0 6px 15px rgba(26, 115, 232, 0.3);
+        }
+        
+        .step.completed .step-icon {
+            background: var(--secondary-color);
+            border-color: var(--secondary-color);
+            color: white;
+        }
+        
+        .step-label {
+            font-weight: 600;
+            color: var(--text-light);
+            text-align: center;
+            font-size: 1rem;
+        }
+        
+        .step.active .step-label {
+            color: var(--primary-color);
+        }
+        
+        .step.completed .step-label {
+            color: var(--secondary-color);
+        }
+        
+        /* 主内容区域 */
+        .main-content {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 30px;
+        }
+        
+        @media (max-width: 1100px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .process-content {
+            background: white;
+            border-radius: 15px;
+            padding: 35px;
+            box-shadow: var(--card-shadow);
+            min-height: 600px;
+            position: relative;
+        }
+        
+        .process-content h2 {
+            font-size: 1.8rem;
+            color: var(--primary-color);
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .process-content h3 {
+            font-size: 1.4rem;
+            margin-bottom: 20px;
+            color: var(--text-color);
+        }
+        
+        /* 侧边栏 */
+        .sidebar {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: var(--card-shadow);
+            height: fit-content;
+        }
+        
+        .sidebar h3 {
+            font-size: 1.4rem;
+            color: var(--primary-color);
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        /* 数据源选择 */
+        .data-source-options {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .source-option {
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            padding: 25px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        
+        .source-option:hover {
+            border-color: var(--primary-color);
+            transform: translateY(-5px);
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .source-option.selected {
+            border-color: var(--primary-color);
+            background: #f0f7ff;
+            box-shadow: 0 8px 15px rgba(26, 115, 232, 0.15);
+        }
+        
+        .source-icon {
+            font-size: 2.5rem;
+            color: var(--primary-color);
+            margin-bottom: 15px;
+        }
+        
+        .source-option h4 {
+            margin-bottom: 10px;
+            font-size: 1.1rem;
+        }
+        
+        /* 文件上传区域 */
+        .upload-area {
+            border: 3px dashed var(--primary-color);
+            border-radius: 15px;
+            padding: 50px 30px;
+            text-align: center;
+            background: #f8f9ff;
+            margin-bottom: 30px;
+            transition: var(--transition);
+        }
+        
+        .upload-area:hover {
+            background: #f0f4ff;
+        }
+        
+        .upload-area i {
+            font-size: 4rem;
+            color: var(--primary-color);
+            margin-bottom: 20px;
+        }
+        
+        .upload-area h3 {
+            margin-bottom: 10px;
+        }
+        
+        /* 项目信息展示 */
+        .project-info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+            margin-bottom: 30px;
+        }
+        
+        .info-card {
+            padding: 20px;
+            border-radius: 12px;
+            background: #f8f9fa;
+            border-left: 5px solid var(--primary-color);
+        }
+        
+        .info-card h4 {
+            margin-bottom: 15px;
+            color: var(--primary-color);
+            font-size: 1.1rem;
+        }
+        
+        .info-item {
+            display: flex;
+            margin-bottom: 10px;
+        }
+        
+        .info-label {
+            font-weight: 600;
+            min-width: 120px;
+            color: var(--text-color);
+        }
+        
+        .info-value {
+            color: var(--text-color);
+            flex: 1;
+        }
+        
+        /* 知识库选择 - 优化 */
+        .knowledge-base-options {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .kb-option {
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            padding: 25px 20px;
+            cursor: pointer;
+            transition: var(--transition);
+            position: relative;
+        }
+        
+        .kb-option:hover {
+            border-color: var(--primary-color);
+            transform: translateY(-3px);
+        }
+        
+        .kb-option.selected {
+            border-color: var(--primary-color);
+            background: #f0f7ff;
+            box-shadow: 0 6px 12px rgba(26, 115, 232, 0.1);
+        }
+        
+        .kb-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 12px;
+            background: #e8f0fe;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 15px;
+            font-size: 1.5rem;
+            color: var(--primary-color);
+        }
+        
+        .kb-option h4 {
+            margin-bottom: 10px;
+            font-size: 1.1rem;
+        }
+        
+        .kb-stats {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 15px;
+            font-size: 0.9rem;
+            color: var(--text-light);
+        }
+        
+        .kb-view-details {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: rgba(26, 115, 232, 0.1);
+            color: var(--primary-color);
+            border: none;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        
+        .kb-view-details:hover {
+            background: rgba(26, 115, 232, 0.2);
+            transform: scale(1.1);
+        }
+        
+        /* 知识库详情模态框 */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+        
+        .modal-content {
+            background: white;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 1000px;
+            max-height: 85vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+        
+        .modal-header {
+            padding: 25px 30px;
+            border-bottom: 2px solid #f0f0f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .modal-header h2 {
+            color: var(--primary-color);
+            font-size: 1.8rem;
+        }
+        
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            color: var(--text-light);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        
+        .modal-close:hover {
+            color: var(--danger-color);
+        }
+        
+        .modal-body {
+            padding: 25px 30px;
+        }
+        
+        /* 知识库分类 */
+        .knowledge-categories {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .category-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: var(--card-shadow);
+            transition: var(--transition);
+            cursor: pointer;
+            border: 2px solid transparent;
+        }
+        
+        .category-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--primary-color);
+        }
+        
+        .category-card.active {
+            border-color: var(--primary-color);
+            background: #f0f7ff;
+        }
+        
+        .category-icon {
+            width: 50px;
+            height: 50px;
+            background: #e8f0fe;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 15px;
+            color: var(--primary-color);
+            font-size: 1.3rem;
+        }
+        
+        .category-card h3 {
+            margin-bottom: 8px;
+            font-size: 1.1rem;
+        }
+        
+        .category-card p {
+            color: var(--text-light);
+            font-size: 0.9rem;
+            margin-bottom: 15px;
+        }
+        
+        .rule-count {
+            display: inline-block;
+            background: var(--primary-color);
+            color: white;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+        }
+        
+        /* 规则列表 */
+        .rules-list {
+            margin-top: 25px;
+            display: none;
+        }
+        
+        .rules-list.active {
+            display: block;
+        }
+        
+        .rule-item {
+            padding: 15px;
+            background: var(--light-bg);
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 4px solid var(--primary-color);
+        }
+        
+        .rule-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .rule-name {
+            font-weight: 600;
+            color: var(--text-color);
+        }
+        
+        .rule-status {
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        
+        .status-enabled {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .rule-source {
+            font-size: 0.85rem;
+            color: var(--text-light);
+            margin-bottom: 10px;
+        }
+        
+        .rule-content {
+            color: var(--text-color);
+            font-size: 0.95rem;
+        }
+        
+        /* AI审计流程图 - 优化版 */
+        .audit-process-container {
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+        }
+        
+        .audit-timeline {
+            position: relative;
+            padding-left: 100px;
+            min-height: 500px;
+        }
+        
+        .audit-timeline::before {
+            content: '';
+            position: absolute;
+            left: 45px;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            background: linear-gradient(to bottom, var(--primary-color), var(--secondary-color));
+            border-radius: 2px;
+        }
+        
+        .timeline-step {
+            position: relative;
+            margin-bottom: 40px;
+            display: flex;
+            align-items: flex-start;
+        }
+        
+        .step-number {
+            position: absolute;
+            left: -55px;
+            width: 40px;
+            height: 40px;
+            background: white;
+            border: 3px solid var(--border-color);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            color: var(--text-light);
+            z-index: 2;
+            transition: var(--transition);
+        }
+        
+        .timeline-step.active .step-number {
+            background: var(--primary-color);
+            border-color: var(--primary-color);
+            color: white;
+            transform: scale(1.1);
+            box-shadow: 0 4px 10px rgba(26, 115, 232, 0.3);
+        }
+        
+        .timeline-step.completed .step-number {
+            background: var(--secondary-color);
+            border-color: var(--secondary-color);
+            color: white;
+        }
+        
+        .step-content-wrapper {
+            flex: 1;
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: var(--card-shadow);
+            border-left: 5px solid var(--border-color);
+            transition: var(--transition);
+        }
+        
+        .timeline-step.active .step-content-wrapper {
+            border-left-color: var(--primary-color);
+            box-shadow: 0 8px 20px rgba(26, 115, 232, 0.15);
+        }
+        
+        .timeline-step.completed .step-content-wrapper {
+            border-left-color: var(--secondary-color);
+        }
+        
+        .step-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: var(--text-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .step-status {
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        
+        .status-waiting {
+            background: #f1f3f4;
+            color: var(--text-light);
+        }
+        
+        .status-processing {
+            background: #cce5ff;
+            color: #004085;
+        }
+        
+        .status-passed {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .step-description {
+            color: var(--text-light);
+            margin-bottom: 20px;
+        }
+        
+        .step-details {
+            margin-top: 20px;
+        }
+        
+        .audit-checks {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+        }
+        
+        .audit-check {
+            display: flex;
+            align-items: center;
+            padding: 12px 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid var(--border-color);
+        }
+        
+        .audit-check.passed {
+            border-left-color: var(--secondary-color);
+            background: #e8f5e9;
+        }
+        
+        .audit-check.failed {
+            border-left-color: var(--danger-color);
+            background: #fce8e6;
+        }
+        
+        .audit-check.warning {
+            border-left-color: var(--warning-color);
+            background: #fef7e0;
+        }
+        
+        .check-icon {
+            margin-right: 10px;
+            font-size: 1.2rem;
+        }
+        
+        .check-passed {
+            color: var(--secondary-color);
+        }
+        
+        .check-failed {
+            color: var(--danger-color);
+        }
+        
+        .check-warning {
+            color: var(--warning-color);
+        }
+        
+        .check-text {
+            flex: 1;
+        }
+        
+        /* 审计详情数据展示 */
+        .audit-data-display {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f8f9ff;
+            border-radius: 10px;
+        }
+        
+        .data-item {
+            display: flex;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px dashed #e0e0e0;
+        }
+        
+        .data-item:last-child {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+        
+        .data-label {
+            font-weight: 600;
+            min-width: 180px;
+            color: var(--text-color);
+        }
+        
+        .data-value {
+            color: var(--text-color);
+            flex: 1;
+        }
+        
+        /* 审计结果 - 优化 */
+        .audit-results-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+        
+        @media (max-width: 1100px) {
+            .audit-results-container {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .compliance-overview {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .overview-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            box-shadow: var(--card-shadow);
+        }
+        
+        .overview-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 15px;
+            font-size: 1.5rem;
+        }
+        
+        .overview-icon.compliant {
+            background: #e8f5e9;
+            color: var(--secondary-color);
+        }
+        
+        .overview-icon.non-compliant {
+            background: #fce8e6;
+            color: var(--danger-color);
+        }
+        
+        .overview-icon.warning {
+            background: #fef7e0;
+            color: var(--warning-color);
+        }
+        
+        .overview-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+        
+        .overview-label {
+            color: var(--text-light);
+            font-size: 0.95rem;
+        }
+        
+        /* 合规性分布图表 */
+        .compliance-chart-container {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: var(--card-shadow);
+            margin-bottom: 30px;
+        }
+        
+        .compliance-chart-container h3 {
+            margin-bottom: 20px;
+            color: var(--primary-color);
+        }
+        
+        .chart-wrapper {
+            height: 250px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        /* 审计要点汇总 */
+        .audit-points-summary {
+            margin-top: 30px;
+        }
+        
+        .audit-points-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        
+        .audit-points-table th {
+            text-align: left;
+            padding: 15px;
+            background: var(--light-bg);
+            color: var(--text-color);
+            font-weight: 600;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .audit-points-table td {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .audit-points-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .audit-points-table tr:hover {
+            background: #f8f9ff;
+        }
+        
+        .point-status {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        
+        .point-passed {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .point-failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        /* 按钮区域 */
+        .button-area {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 40px;
+            padding-top: 30px;
+            border-top: 2px solid #f0f0f0;
+        }
+        
+        .btn {
+            padding: 14px 30px;
+            border-radius: 10px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.05rem;
+        }
+        
+        .btn-primary {
+            background: var(--primary-color);
+            color: white;
+        }
+        
+        .btn-primary:hover:not(:disabled) {
+            background: var(--primary-dark);
+            transform: translateY(-3px);
+            box-shadow: 0 7px 15px rgba(26, 115, 232, 0.25);
+        }
+        
+        .btn-secondary {
+            background: #f1f3f4;
+            color: var(--text-color);
+        }
+        
+        .btn-secondary:hover:not(:disabled) {
+            background: #e8eaed;
+        }
+        
+        .btn-success {
+            background: var(--secondary-color);
+            color: white;
+        }
+        
+        .btn-success:hover:not(:disabled) {
+            background: #2d924a;
+            transform: translateY(-3px);
+            box-shadow: 0 7px 15px rgba(52, 168, 83, 0.25);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .btn i {
+            margin-right: 10px;
+        }
+        
+        /* 侧边栏内容 */
+        .sidebar-placeholder {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-light);
+        }
+        
+        .sidebar-placeholder i {
+            font-size: 3rem;
+            margin-bottom: 15px;
+            color: var(--border-color);
+        }
+        
+        .project-summary {
+            margin-bottom: 30px;
+            display: none; /* 初始隐藏 */
+        }
+        
+        .summary-item {
+            display: flex;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .summary-label {
+            font-weight: 600;
+            min-width: 120px;
+            color: var(--text-color);
+        }
+        
+        .summary-value {
+            color: var(--text-color);
+            flex: 1;
+        }
+        
+        .audit-progress {
+            margin-top: 30px;
+        }
+        
+        .progress-bar {
+            height: 12px;
+            background: #f0f0f0;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
+            border-radius: 6px;
+            transition: width 0.5s ease;
+            width: 20%;
+        }
+        
+        .progress-text {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            color: var(--text-light);
+        }
+        
+        /* 响应式调整 */
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            
+            header {
+                padding: 25px 20px;
+            }
+            
+            header h1 {
+                font-size: 2rem;
+            }
+            
+            .process-steps {
+                margin: 30px 0 40px;
+            }
+            
+            .step-icon {
+                width: 50px;
+                height: 50px;
+                font-size: 1.2rem;
+            }
+            
+            .step-label {
+                font-size: 0.9rem;
+            }
+            
+            .process-content {
+                padding: 25px;
+            }
+            
+            .project-info-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .data-source-options,
+            .knowledge-base-options {
+                grid-template-columns: 1fr;
+            }
+            
+            .audit-timeline {
+                padding-left: 70px;
+            }
+            
+            .step-number {
+                left: -45px;
+                width: 35px;
+                height: 35px;
+            }
+            
+            .audit-checks {
+                grid-template-columns: 1fr;
+            }
+            
+            .button-area {
+                flex-direction: column;
+                gap: 15px;
+            }
+            
+            .btn {
+                width: 100%;
+            }
+        }
+        
+        /* 步骤内容隐藏/显示 */
+        .step-content {
+            display: none;
+        }
+        
+        .step-content.active {
+            display: block;
+            animation: fadeIn 0.5s ease;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 页面头部 -->
+        <header>
+            <div class="header-content">
+                <h1>维修资金使用项目审计智能体</h1>
+                <p class="subtitle">从项目导入到审计结果的全流程AI合规审计系统。本系统面向住房保障中心、住建/房管部门、维修资金管理机构，提供维修资金使用全过程的"AI + 规则"合规审计服务。</p>
+                <div class="ai-badge">立项与启动条件审计智能体 - 完整流程</div>
+            </div>
+        </header>
+        
+        <!-- 流程步骤指示器 -->
+        <div class="process-steps">
+            <div class="step active" id="step1">
+                <div class="step-icon">
+                    <i class="fas fa-database"></i>
+                </div>
+                <div class="step-label">选择数据源</div>
+            </div>
+            <div class="step" id="step2">
+                <div class="step-icon">
+                    <i class="fas fa-robot"></i>
+                </div>
+                <div class="step-label">AI提取信息</div>
+            </div>
+            <div class="step" id="step3">
+                <div class="step-icon">
+                    <i class="fas fa-book"></i>
+                </div>
+                <div class="step-label">选择知识库</div>
+            </div>
+            <div class="step" id="step4">
+                <div class="step-icon">
+                    <i class="fas fa-sitemap"></i>
+                </div>
+                <div class="step-label">审计流程</div>
+            </div>
+            <div class="step" id="step5">
+                <div class="step-icon">
+                    <i class="fas fa-chart-bar"></i>
+                </div>
+                <div class="step-label">审计结果</div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <!-- 主流程内容区域 -->
+            <div class="process-content">
+                <!-- 步骤1：选择数据源 -->
+                <div id="step1-content" class="step-content active">
+                    <h2>选择数据源</h2>
+                    <p style="margin-bottom: 25px; color: var(--text-light);">请选择项目数据的来源方式，系统支持多种数据接入方式。</p>
+                    
+                    <div class="data-source-options">
+                        <div class="source-option selected" data-source="file">
+                            <div class="source-icon">
+                                <i class="fas fa-file-upload"></i>
+                            </div>
+                            <h4>文件上传</h4>
+                            <p>上传Excel、PDF等格式的项目文件</p>
+                        </div>
+                        
+                        <div class="source-option" data-source="database">
+                            <div class="source-icon">
+                                <i class="fas fa-database"></i>
+                            </div>
+                            <h4>数据库连接</h4>
+                            <p>连接业务数据库获取项目数据</p>
+                        </div>
+                        
+                        <div class="source-option" data-source="api">
+                            <div class="source-icon">
+                                <i class="fas fa-plug"></i>
+                            </div>
+                            <h4>API接口</h4>
+                            <p>通过API接口获取项目数据</p>
+                        </div>
+                        
+                        <div class="source-option" data-source="manual">
+                            <div class="source-icon">
+                                <i class="fas fa-keyboard"></i>
+                            </div>
+                            <h4>手动输入</h4>
+                            <p>手动填写项目信息</p>
+                        </div>
+                    </div>
+                    
+                    <div class="upload-area">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <h3>拖放文件到此处或点击选择文件</h3>
+                        <p>支持 Excel (.xlsx, .xls), CSV, PDF, Word (.docx) 格式，单个文件不超过50MB</p>
+                        <button class="btn btn-primary" id="selectFileBtn" style="margin-top: 20px;">
+                            <i class="fas fa-folder-open"></i> 选择项目文件
+                        </button>
+                    </div>
+                    
+                    <div id="selectedFiles" style="display: none;">
+                        <h3>已选择文件</h3>
+                        <div class="file-list">
+                            <!-- 文件列表会动态生成 -->
+                        </div>
+                    </div>
+                    
+                    <div class="button-area">
+                        <div></div> <!-- 空div用于占位 -->
+                        <button class="btn btn-primary" id="nextStep1Btn">
+                            下一步：AI提取信息 <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 步骤2：AI提取项目信息 -->
+                <div id="step2-content" class="step-content">
+                    <h2>AI提取项目信息</h2>
+                    <p style="margin-bottom: 25px; color: var(--text-light);">AI智能体正在分析您上传的文件，提取项目信息...</p>
+                    
+                    <div class="ai-processing" style="display: flex; align-items: center; background: #f0f7ff; padding: 20px; border-radius: 12px; margin: 25px 0;">
+                        <i class="fas fa-robot"></i>
+                        <div>
+                            <strong>AI智能体正在分析文件中...</strong>
+                            <p>正在使用OCR技术和自然语言处理技术提取项目信息，预计需要10-15秒。</p>
+                        </div>
+                    </div>
+                    
+                    <div id="extractedInfo" style="display: none;">
+                        <h3>提取的项目信息</h3>
+                        <p style="margin-bottom: 20px; color: var(--text-light);">请确认AI提取的项目信息是否正确，如有错误可手动修改。</p>
+                        
+                        <div class="project-info-grid">
+                            <div class="info-card">
+                                <h4>项目基本信息</h4>
+                                <div class="info-item">
+                                    <div class="info-label">项目名称：</div>
+                                    <div class="info-value">阳光小区3号楼屋面防水维修工程</div>
+                                </div>
+                                <div class="info-item">
+                                    <div class="info-label">申请单位：</div>
+                                    <div class="info-value">阳光小区业主委员会</div>
+                                </div>
+                                <div class="info-item">
+                                    <div class="info-label">维修类型：</div>
+                                    <div class="info-value">屋面防水维修</div>
+                                </div>
+                                <div class="info-item">
+                                    <div class="info-label">申请金额：</div>
+                                    <div class="info-value">¥245,800.00</div>
+                                </div>
+                            </div>
+                            
+                            <div class="info-card">
+                                <h4>时间节点信息</h4>
+                                <div class="info-item">
+                                    <div class="info-label">表决开始：</div>
+                                    <div class="info-value">2023-10-05</div>
+                                </div>
+                                <div class="info-item">
+                                    <div class="info-label">表决结束：</div>
+                                    <div class="info-value">2023-10-15</div>
+                                </div>
+                                <div class="info-item">
+                                    <div class="info-label">公示开始：</div>
+                                    <div class="info-value">2023-10-22</div>
+                                </div>
+                                <div class="info-item">
+                                    <div class="info-label">公示结束：</div>
+                                    <div class="info-value">2023-10-28</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="info-card" style="margin-top: 20px;">
+                            <h4>表决与公示信息</h4>
+                            <div class="info-item">
+                                <div class="info-label">总业主户数：</div>
+                                <div class="info-value">86户</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">参与表决户数：</div>
+                                <div class="info-value">78户</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">同意户数：</div>
+                                <div class="info-value">72户</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">同意比例：</div>
+                                <div class="info-value">83.72%</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">公示位置：</div>
+                                <div class="info-value">小区公告栏、单元门口、微信公众号</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="button-area">
+                        <button class="btn btn-secondary" id="prevStep2Btn">
+                            <i class="fas fa-arrow-left"></i> 返回上一步
+                        </button>
+                        <button class="btn btn-primary" id="nextStep2Btn">
+                            下一步：选择知识库 <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 步骤3：选择审计知识库 -->
+                <div id="step3-content" class="step-content">
+                    <h2>选择审计知识库</h2>
+                    <p style="margin-bottom: 25px; color: var(--text-light);">请选择审计规则知识库，系统将基于所选知识库进行合规性审计。点击知识库卡片右上角的<i class="fas fa-eye" style="margin: 0 5px;"></i>按钮可查看详情。</p>
+                    
+                    <div class="knowledge-base-options">
+                        <div class="kb-option selected" data-kb="standard">
+                            <button class="kb-view-details" data-kb="standard">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                            <div class="kb-icon">
+                                <i class="fas fa-balance-scale"></i>
+                            </div>
+                            <h4>标准审计知识库</h4>
+                            <p>包含《住宅专项维修资金管理办法》及通用实施细则的全部审计规则。</p>
+                            <div class="kb-stats">
+                                <span><i class="fas fa-ruler"></i> 86条规则</span>
+                                <span><i class="fas fa-sync-alt"></i> 最新更新: 2023-10</span>
+                            </div>
+                        </div>
+                        
+                        <div class="kb-option" data-kb="strict">
+                            <button class="kb-view-details" data-kb="strict">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                            <div class="kb-icon">
+                                <i class="fas fa-gavel"></i>
+                            </div>
+                            <h4>严格审计知识库</h4>
+                            <p>包含最严格的审计规则，适用于风险较高的项目审计。</p>
+                            <div class="kb-stats">
+                                <span><i class="fas fa-ruler"></i> 112条规则</span>
+                                <span><i class="fas fa-sync-alt"></i> 最新更新: 2023-09</span>
+                            </div>
+                        </div>
+                        
+                        <div class="kb-option" data-kb="local">
+                            <button class="kb-view-details" data-kb="local">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                            <div class="kb-icon">
+                                <i class="fas fa-map-marker-alt"></i>
+                            </div>
+                            <h4>地方规定知识库</h4>
+                            <p>包含地方性维修资金管理规定的审计规则。</p>
+                            <div class="kb-stats">
+                                <span><i class="fas fa-ruler"></i> 94条规则</span>
+                                <span><i class="fas fa-sync-alt"></i> 最新更新: 2023-11</span>
+                            </div>
+                        </div>
+                        
+                        <div class="kb-option" data-kb="custom">
+                            <button class="kb-view-details" data-kb="custom">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                            <div class="kb-icon">
+                                <i class="fas fa-cog"></i>
+                            </div>
+                            <h4>自定义知识库</h4>
+                            <p>使用您自定义的审计规则进行审计。</p>
+                            <div class="kb-stats">
+                                <span><i class="fas fa-ruler"></i> 自定义规则</span>
+                                <span><i class="fas fa-sync-alt"></i> 由您管理</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="button-area">
+                        <button class="btn btn-secondary" id="prevStep3Btn">
+                            <i class="fas fa-arrow-left"></i> 返回上一步
+                        </button>
+                        <button class="btn btn-primary" id="nextStep3Btn">
+                            下一步：开始审计 <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 步骤4：审计流程 -->
+                <div id="step4-content" class="step-content">
+                    <h2>AI审计流程</h2>
+                    <p style="margin-bottom: 25px; color: var(--text-light);">AI智能体将按照以下流程对项目进行合规性审计，请点击"开始审计"按钮启动审计流程。</p>
+                    
+                    <div class="audit-process-container">
+                        <div class="audit-timeline">
+                            <!-- 步骤1：数据验证 -->
+                            <div class="timeline-step" id="timeline-step1">
+                                <div class="step-number">1</div>
+                                <div class="step-content-wrapper">
+                                    <div class="step-title">
+                                        <span>数据验证</span>
+                                        <span class="step-status status-waiting">等待开始</span>
+                                    </div>
+                                    <div class="step-description">验证项目数据的完整性和准确性，检查是否存在缺失字段或异常值。</div>
+                                    <div class="step-details" style="display: none;">
+                                        <div class="audit-checks">
+                                            <div class="audit-check">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">检查项目名称是否完整</div>
+                                            </div>
+                                            <div class="audit-check">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">检查申请单位信息</div>
+                                            </div>
+                                            <div class="audit-check">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">验证维修类型是否明确</div>
+                                            </div>
+                                            <div class="audit-check">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">检查申请金额格式</div>
+                                            </div>
+                                        </div>
+                                        <div class="audit-data-display">
+                                            <div class="data-item">
+                                                <div class="data-label">项目名称：</div>
+                                                <div class="data-value">阳光小区3号楼屋面防水维修工程</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">维修类型：</div>
+                                                <div class="data-value">屋面防水维修</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">申请金额：</div>
+                                                <div class="data-value">¥245,800.00</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 步骤2：范围审计 -->
+                            <div class="timeline-step" id="timeline-step2">
+                                <div class="step-number">2</div>
+                                <div class="step-content-wrapper">
+                                    <div class="step-title">
+                                        <span>范围审计</span>
+                                        <span class="step-status status-waiting">等待开始</span>
+                                    </div>
+                                    <div class="step-description">检查维修内容是否属于《住宅专项维修资金管理办法》及相关地方规定允许的使用范围。</div>
+                                    <div class="step-details" style="display: none;">
+                                        <div class="audit-checks">
+                                            <div class="audit-check">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">检查维修类型：屋面防水维修</div>
+                                            </div>
+                                            <div class="audit-check">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">验证是否属于维修资金使用范围</div>
+                                            </div>
+                                            <div class="audit-check">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">检查是否有超出范围的维修内容</div>
+                                            </div>
+                                        </div>
+                                        <div class="audit-data-display">
+                                            <div class="data-item">
+                                                <div class="data-label">维修类型：</div>
+                                                <div class="data-value">屋面防水维修</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">维修内容：</div>
+                                                <div class="data-value">屋面防水层整体维修，总面积850平方米</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">适用规则：</div>
+                                                <div class="data-value">《住宅专项维修资金管理办法》第十七条：屋面防水损坏造成渗漏的，可以使用维修资金进行维修。</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 步骤3：流程审计 -->
+                            <div class="timeline-step" id="timeline-step3">
+                                <div class="step-number">3</div>
+                                <div class="step-content-wrapper">
+                                    <div class="step-title">
+                                        <span>流程审计</span>
+                                        <span class="step-status status-waiting">等待开始</span>
+                                    </div>
+                                    <div class="step-description">检查项目是否完成法定表决流程，表决比例是否符合规定，公示流程是否合规。</div>
+                                    <div class="step-details" style="display: none;">
+                                        <div class="audit-checks">
+                                            <div class="audit-check passed">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">检查是否完成业主表决</div>
+                                            </div>
+                                            <div class="audit-check passed">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">验证表决比例是否符合规定（≥2/3）</div>
+                                            </div>
+                                            <div class="audit-check passed">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">检查是否完成公示流程</div>
+                                            </div>
+                                            <div class="audit-check warning">
+                                                <i class="fas fa-exclamation-triangle check-icon check-warning"></i>
+                                                <div class="check-text">检查公示位置是否符合要求</div>
+                                            </div>
+                                        </div>
+                                        <div class="audit-data-display">
+                                            <div class="data-item">
+                                                <div class="data-label">总业主户数：</div>
+                                                <div class="data-value">86户</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">同意户数：</div>
+                                                <div class="data-value">72户 (83.72%)</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">公示位置：</div>
+                                                <div class="data-value">小区公告栏、单元门口、微信公众号</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">合规要求：</div>
+                                                <div class="data-value">表决比例需≥66.67% (2/3)，当前比例83.72% ✓</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 步骤4：资料审计 -->
+                            <div class="timeline-step" id="timeline-step4">
+                                <div class="step-number">4</div>
+                                <div class="step-content-wrapper">
+                                    <div class="step-title">
+                                        <span>资料审计</span>
+                                        <span class="step-status status-waiting">等待开始</span>
+                                    </div>
+                                    <div class="step-description">检查所有必要资料是否齐全，包括申请表、表决结果、施工方案、预算审核报告等。</div>
+                                    <div class="step-details" style="display: none;">
+                                        <div class="audit-checks">
+                                            <div class="audit-check passed">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">检查维修资金使用申请表</div>
+                                            </div>
+                                            <div class="audit-check passed">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">检查业主表决结果文件</div>
+                                            </div>
+                                            <div class="audit-check passed">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">检查施工方案及预算文件</div>
+                                            </div>
+                                            <div class="audit-check failed">
+                                                <i class="fas fa-times-circle check-icon check-failed"></i>
+                                                <div class="check-text">检查维修部位现状照片</div>
+                                            </div>
+                                            <div class="audit-check failed">
+                                                <i class="fas fa-times-circle check-icon check-failed"></i>
+                                                <div class="check-text">检查业主委员会决议文件</div>
+                                            </div>
+                                        </div>
+                                        <div class="audit-data-display">
+                                            <div class="data-item">
+                                                <div class="data-label">已提交资料：</div>
+                                                <div class="data-value">维修资金使用申请表、业主表决结果、施工方案及预算、预算审核报告</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">缺失资料：</div>
+                                                <div class="data-value">维修部位现状照片、业主委员会决议文件</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">资料完整性：</div>
+                                                <div class="data-value">6/8 (75%) - 不合规</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 步骤5：时序审计 -->
+                            <div class="timeline-step" id="timeline-step5">
+                                <div class="step-number">5</div>
+                                <div class="step-content-wrapper">
+                                    <div class="step-title">
+                                        <span>时序审计</span>
+                                        <span class="step-status status-waiting">等待开始</span>
+                                    </div>
+                                    <div class="step-description">检查各环节时间顺序是否合规，包括表决、公示、申请提交等环节的时间逻辑关系。</div>
+                                    <div class="step-details" style="display: none;">
+                                        <div class="audit-checks">
+                                            <div class="audit-check passed">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">检查表决开始与结束时间</div>
+                                            </div>
+                                            <div class="audit-check passed">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">检查公示开始与结束时间</div>
+                                            </div>
+                                            <div class="audit-check failed">
+                                                <i class="fas fa-times-circle check-icon check-failed"></i>
+                                                <div class="check-text">验证表决完成在公示开始前</div>
+                                            </div>
+                                            <div class="audit-check failed">
+                                                <i class="fas fa-times-circle check-icon check-failed"></i>
+                                                <div class="check-text">检查公示期是否符合规定</div>
+                                            </div>
+                                        </div>
+                                        <div class="audit-data-display">
+                                            <div class="data-item">
+                                                <div class="data-label">表决结束日期：</div>
+                                                <div class="data-value">2023-10-15</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">公示开始日期：</div>
+                                                <div class="data-value">2023-10-22</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">时序问题：</div>
+                                                <div class="data-value">表决结束(10-15)晚于公示开始(10-22)，时序倒置</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">公示期：</div>
+                                                <div class="data-value">7天 (10-22至10-28)，不符合≥10天要求</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 步骤6：AI综合研判 -->
+                            <div class="timeline-step" id="timeline-step6">
+                                <div class="step-number">6</div>
+                                <div class="step-content-wrapper">
+                                    <div class="step-title">
+                                        <span>AI综合研判</span>
+                                        <span class="step-status status-waiting">等待开始</span>
+                                    </div>
+                                    <div class="step-description">综合分析所有审计要点的结果，考虑各问题之间的关联性和整体合规性。</div>
+                                    <div class="step-details" style="display: none;">
+                                        <div class="audit-checks">
+                                            <div class="audit-check passed">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">整合各审计要点结果</div>
+                                            </div>
+                                            <div class="audit-check passed">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">评估整体合规风险</div>
+                                            </div>
+                                            <div class="audit-check passed">
+                                                <i class="fas fa-check-circle check-icon check-passed"></i>
+                                                <div class="check-text">生成初步审计结论</div>
+                                            </div>
+                                        </div>
+                                        <div class="audit-data-display">
+                                            <div class="data-item">
+                                                <div class="data-label">审计要点总数：</div>
+                                                <div class="data-value">6个审计要点</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">通过要点数：</div>
+                                                <div class="data-value">2个 (范围审计、流程审计)</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">不合规要点数：</div>
+                                                <div class="data-value">4个 (资料审计、时序审计等)</div>
+                                            </div>
+                                            <div class="data-item">
+                                                <div class="data-label">AI审计结论：</div>
+                                                <div class="data-value">项目启动条件不合规，存在4项不合规问题</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="button-area">
+                            <button class="btn btn-secondary" id="prevStep4Btn">
+                                <i class="fas fa-arrow-left"></i> 返回上一步
+                            </button>
+                            <button class="btn btn-success" id="startAuditBtn">
+                                <i class="fas fa-play-circle"></i> 开始AI审计
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 步骤5：审计结果 -->
+                <div id="step5-content" class="step-content">
+                    <h2>审计结果</h2>
+                    <p style="margin-bottom: 25px; color: var(--text-light);">AI智能体已完成对项目的合规性审计，以下是审计结果。</p>
+                    
+                    <div class="compliance-overview">
+                        <div class="overview-card">
+                            <div class="overview-icon non-compliant">
+                                <i class="fas fa-times-circle"></i>
+                            </div>
+                            <div class="overview-value">不合规</div>
+                            <div class="overview-label">总体合规性</div>
+                        </div>
+                        
+                        <div class="overview-card">
+                            <div class="overview-icon compliant">
+                                <i class="fas fa-check-circle"></i>
+                            </div>
+                            <div class="overview-value">2/6</div>
+                            <div class="overview-label">审计要点通过</div>
+                        </div>
+                        
+                        <div class="overview-card">
+                            <div class="overview-icon warning">
+                                <i class="fas fa-exclamation-triangle"></i>
+                            </div>
+                            <div class="overview-value">4</div>
+                            <div class="overview-label">不合规问题</div>
+                        </div>
+                        
+                        <div class="overview-card">
+                            <div class="overview-icon">
+                                <i class="fas fa-chart-line"></i>
+                            </div>
+                            <div class="overview-value">87.3%</div>
+                            <div class="overview-label">AI审计置信度</div>
+                        </div>
+                    </div>
+                    
+                    <div class="audit-results-container">
+                        <div>
+                            <!-- 合规性分布图表 -->
+                            <div class="compliance-chart-container">
+                                <h3>合规性分布</h3>
+                                <div class="chart-wrapper">
+                                    <canvas id="complianceChart" width="300" height="300"></canvas>
+                                </div>
+                            </div>
+                            
+                            <!-- 不合规问题列表 -->
+                            <div class="issues-list">
+                                <h3>不合规问题详情</h3>
+                                
+                                <div class="issue-item">
+                                    <div class="issue-header">
+                                        <div class="issue-title">表决与公示时序不合规</div>
+                                        <div class="issue-severity severity-high">严重</div>
+                                    </div>
+                                    <div class="issue-desc">
+                                        表决结束日期(2023-10-15)晚于公示开始日期(2023-10-22)，但根据规定，公示开始前必须完成表决。
+                                    </div>
+                                    <div class="issue-recommendation">
+                                        <strong>补正建议：</strong> 调整公示开始日期，确保在表决完成后开始公示。
+                                    </div>
+                                </div>
+                                
+                                <div class="issue-item">
+                                    <div class="issue-header">
+                                        <div class="issue-title">缺失必要资料</div>
+                                        <div class="issue-severity severity-high">严重</div>
+                                    </div>
+                                    <div class="issue-desc">
+                                        缺失以下必要资料：1) 维修部位现状照片；2) 业主委员会关于本次维修的决议文件。
+                                    </div>
+                                    <div class="issue-recommendation">
+                                        <strong>补正建议：</strong> 补充缺失资料后重新提交申请。
+                                    </div>
+                                </div>
+                                
+                                <div class="issue-item">
+                                    <div class="issue-header">
+                                        <div class="issue-title">公示期不足</div>
+                                        <div class="issue-severity severity-medium">中等</div>
+                                    </div>
+                                    <div class="issue-desc">
+                                        公示期仅7天，但根据地方规定，维修资金使用公示期应不少于10天。
+                                    </div>
+                                    <div class="issue-recommendation">
+                                        <strong>补正建议：</strong> 延长公示期至不少于10天，并重新公示。
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <!-- 审计要点汇总 -->
+                            <div class="compliance-chart-container">
+                                <h3>审计要点汇总</h3>
+                                <table class="audit-points-table">
+                                    <thead>
+                                        <tr>
+                                            <th>审计要点</th>
+                                            <th>状态</th>
+                                            <th>风险等级</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>维修内容是否在允许范围内</td>
+                                            <td><span class="point-status point-passed">通过</span></td>
+                                            <td>低风险</td>
+                                        </tr>
+                                        <tr>
+                                            <td>是否完成法定表决流程</td>
+                                            <td><span class="point-status point-passed">通过</span></td>
+                                            <td>低风险</td>
+                                        </tr>
+                                        <tr>
+                                            <td>是否完成法定公示流程</td>
+                                            <td><span class="point-status point-failed">不通过</span></td>
+                                            <td>高风险</td>
+                                        </tr>
+                                        <tr>
+                                            <td>资料是否齐全</td>
+                                            <td><span class="point-status point-failed">不通过</span></td>
+                                            <td>高风险</td>
+                                        </tr>
+                                        <tr>
+                                            <td>时序是否合规</td>
+                                            <td><span class="point-status point-failed">不通过</span></td>
+                                            <td>高风险</td>
+                                        </tr>
+                                        <tr>
+                                            <td>预算金额是否合理</td>
+                                            <td><span class="point-status point-passed">通过</span></td>
+                                            <td>低风险</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            
+                            <!-- 审计报告摘要 -->
+                            <div class="compliance-chart-container" style="margin-top: 20px;">
+                                <h3>审计报告摘要</h3>
+                                <div style="padding: 15px; background: #f8f9ff; border-radius: 10px;">
+                                    <p><strong>项目名称：</strong> 阳光小区3号楼屋面防水维修工程</p>
+                                    <p><strong>审计结论：</strong> 项目启动条件<strong>不符合</strong>维修资金使用相关规定，存在4项不合规问题，其中2项为严重问题。</p>
+                                    <p><strong>总体建议：</strong> 建议暂缓项目启动，按照补正建议清单完善相关材料和流程后重新申请。</p>
+                                    <p><strong>AI审计说明：</strong> 本审计结果基于AI智能体对项目数据的分析，并结合了《住宅专项维修资金管理办法》及地方实施细则的86条审计规则。审计置信度87.3%。</p>
+                                    <p><strong>报告生成时间：</strong> 2023-11-05 15:42:28</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="button-area">
+                        <button class="btn btn-secondary" id="prevStep5Btn">
+                            <i class="fas fa-arrow-left"></i> 返回上一步
+                        </button>
+                        <div>
+                            <button class="btn btn-secondary">
+                                <i class="fas fa-download"></i> 导出审计报告
+                            </button>
+                            <button class="btn btn-primary" id="newProjectBtn" style="margin-left: 15px;">
+                                <i class="fas fa-plus-circle"></i> 开始新项目
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 侧边栏 -->
+            <div class="sidebar">
+                <!-- 第一步显示占位符 -->
+                <div id="sidebar-step1" class="sidebar-placeholder">
+                    <i class="fas fa-database"></i>
+                    <h3>等待导入项目数据</h3>
+                    <p>请先在左侧选择数据源并导入项目数据，项目概览将在此显示。</p>
+                </div>
+                
+                <!-- 第二步及之后显示项目概览 -->
+                <div id="sidebar-project-summary" class="project-summary">
+                    <h3>项目概览</h3>
+                    
+                    <div class="summary-item">
+                        <div class="summary-label">项目名称：</div>
+                        <div class="summary-value" id="sidebar-project-name">阳光小区3号楼屋面防水维修工程</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-label">申请单位：</div>
+                        <div class="summary-value">阳光小区业主委员会</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-label">维修类型：</div>
+                        <div class="summary-value">屋面防水维修</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-label">申请金额：</div>
+                        <div class="summary-value">¥245,800.00</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-label">数据来源：</div>
+                        <div class="summary-value">文件上传</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-label">审计知识库：</div>
+                        <div class="summary-value" id="sidebar-knowledge-base">标准审计知识库</div>
+                    </div>
+                </div>
+                
+                <div class="audit-progress">
+                    <h3>审计进度</h3>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill" style="width: 20%;"></div>
+                    </div>
+                    <div class="progress-text">
+                        <span>当前步骤：</span>
+                        <span id="current-step-text">选择数据源</span>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 30px; padding: 20px; background: #f8f9ff; border-radius: 12px;">
+                    <h4 style="margin-bottom: 10px; color: var(--primary-color);">AI审计说明</h4>
+                    <p style="font-size: 0.95rem; color: var(--text-light);">
+                        本系统基于"AI + 规则"双核引擎进行合规审计。AI模型基于历史3000+维修资金使用案例训练，规则引擎包含86条审计规则。
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 知识库详情模态框 -->
+    <div class="modal-overlay" id="knowledgeBaseModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modal-title">标准审计知识库详情</h2>
+                <button class="modal-close" id="modalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="knowledge-categories">
+                    <div class="category-card active" data-category="scope">
+                        <div class="category-icon">
+                            <i class="fas fa-crosshairs"></i>
+                        </div>
+                        <h3>使用范围审计</h3>
+                        <p>维修内容是否属于维修资金使用范围</p>
+                        <div class="rule-count">24条规则</div>
+                    </div>
+                    
+                    <div class="category-card" data-category="process">
+                        <div class="category-icon">
+                            <i class="fas fa-tasks"></i>
+                        </div>
+                        <h3>流程合规审计</h3>
+                        <p>表决、公示等法定流程是否合规</p>
+                        <div class="rule-count">18条规则</div>
+                    </div>
+                    
+                    <div class="category-card" data-category="documents">
+                        <div class="category-icon">
+                            <i class="fas fa-file-alt"></i>
+                        </div>
+                        <h3>资料完整性审计</h3>
+                        <p>检查必要资料是否齐全、有效</p>
+                        <div class="rule-count">15条规则</div>
+                    </div>
+                    
+                    <div class="category-card" data-category="timing">
+                        <div class="category-icon">
+                            <i class="fas fa-clock"></i>
+                        </div>
+                        <h3>时序合规审计</h3>
+                        <p>检查各环节时间顺序是否合规</p>
+                        <div class="rule-count">12条规则</div>
+                    </div>
+                    
+                    <div class="category-card" data-category="amount">
+                        <div class="category-icon">
+                            <i class="fas fa-calculator"></i>
+                        </div>
+                        <h3>金额合理性审计</h3>
+                        <p>维修预算是否合理、符合标准</p>
+                        <div class="rule-count">8条规则</div>
+                    </div>
+                    
+                    <div class="category-card" data-category="emergency">
+                        <div class="category-icon">
+                            <i class="fas fa-exclamation-triangle"></i>
+                        </div>
+                        <h3>应急维修审计</h3>
+                        <p>应急维修项目特殊规则审计</p>
+                        <div class="rule-count">6条规则</div>
+                    </div>
+                </div>
+                
+                <!-- 使用范围审计规则 -->
+                <div class="rules-list active" id="scope-rules">
+                    <h3 style="margin-bottom: 15px;">使用范围审计规则 (24条)</h3>
+                    
+                    <div class="rule-item">
+                        <div class="rule-header">
+                            <div class="rule-name">规则 SC-001: 屋面防水维修</div>
+                            <div class="rule-status status-enabled">启用中</div>
+                        </div>
+                        <div class="rule-source">来源: 《住宅专项维修资金管理办法》第十七条</div>
+                        <div class="rule-content">屋面防水损坏造成渗漏的，可以使用维修资金进行维修。</div>
+                    </div>
+                    
+                    <div class="rule-item">
+                        <div class="rule-header">
+                            <div class="rule-name">规则 SC-002: 电梯维修更换</div>
+                            <div class="rule-status status-enabled">启用中</div>
+                        </div>
+                        <div class="rule-source">来源: 《住宅专项维修资金管理办法》第十八条</div>
+                        <div class="rule-content">电梯需要更新或改造的，可以使用维修资金。</div>
+                    </div>
+                    
+                    <div class="rule-item">
+                        <div class="rule-header">
+                            <div class="rule-name">规则 SC-003: 消防设施维修</div>
+                            <div class="rule-status status-enabled">启用中</div>
+                        </div>
+                        <div class="rule-source">来源: 《住宅专项维修资金管理办法》第十七条</div>
+                        <div class="rule-content">消防系统出现故障或损坏，需要维修、更新和改造的，可以使用维修资金。</div>
+                    </div>
+                    
+                    <div class="rule-item">
+                        <div class="rule-header">
+                            <div class="rule-name">规则 SC-004: 外墙维修限制</div>
+                            <div class="rule-status status-enabled">启用中</div>
+                        </div>
+                        <div class="rule-source">来源: 《住宅专项维修资金管理办法》第二十条</div>
+                        <div class="rule-content">仅因安全原因需要维修的外墙可以使用维修资金，单纯的美化、装饰不得使用。</div>
+                    </div>
+                </div>
+                
+                <!-- 流程合规审计规则 -->
+                <div class="rules-list" id="process-rules">
+                    <h3 style="margin-bottom: 15px;">流程合规审计规则 (18条)</h3>
+                    
+                    <div class="rule-item">
+                        <div class="rule-header">
+                            <div class="rule-name">规则 PC-001: 业主表决比例</div>
+                            <div class="rule-status status-enabled">启用中</div>
+                        </div>
+                        <div class="rule-source">来源: 《住宅专项维修资金管理办法》第二十二条</div>
+                        <div class="rule-content">使用维修资金需经专有部分占建筑物总面积三分之二以上的业主且占总人数三分之二以上的业主同意。</div>
+                    </div>
+                    
+                    <div class="rule-item">
+                        <div class="rule-header">
+                            <div class="rule-name">规则 PC-002: 公示期限要求</div>
+                            <div class="rule-status status-enabled">启用中</div>
+                        </div>
+                        <div class="rule-source">来源: 《住宅专项维修资金管理办法》第二十三条</div>
+                        <div class="rule-content">维修资金使用方案应在小区显著位置公示，公示期不少于7日。</div>
+                    </div>
+                    
+                    <div class="rule-item">
+                        <div class="rule-header">
+                            <div class="rule-name">规则 PC-003: 公示内容要求</div>
+                            <div class="rule-status status-enabled">启用中</div>
+                        </div>
+                        <div class="rule-source">来源: 《住宅专项维修资金管理办法》实施细则</div>
+                        <div class="rule-content">公示内容应包括维修项目、预算金额、施工单位、表决结果等基本信息。</div>
+                    </div>
+                </div>
+                
+                <!-- 其他规则列表... -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 当前步骤
+            let currentStep = 1;
+            const totalSteps = 5;
+            
+            // 获取DOM元素
+            const steps = document.querySelectorAll('.step');
+            const stepContents = document.querySelectorAll('.step-content');
+            const progressFill = document.getElementById('progress-fill');
+            const currentStepText = document.getElementById('current-step-text');
+            const sidebarStep1 = document.getElementById('sidebar-step1');
+            const sidebarProjectSummary = document.getElementById('sidebar-project-summary');
+            
+            // 初始化侧边栏显示
+            updateSidebarDisplay();
+            
+            // 数据源选择
+            const sourceOptions = document.querySelectorAll('.source-option');
+            sourceOptions.forEach(option => {
+                option.addEventListener('click', function() {
+                    sourceOptions.forEach(opt => opt.classList.remove('selected'));
+                    this.classList.add('selected');
+                });
+            });
+            
+            // 知识库选择
+            const kbOptions = document.querySelectorAll('.kb-option');
+            const kbViewDetailsBtns = document.querySelectorAll('.kb-view-details');
+            
+            kbOptions.forEach(option => {
+                option.addEventListener('click', function(e) {
+                    // 如果点击的是查看详情按钮，不触发选择
+                    if (e.target.closest('.kb-view-details')) {
+                        return;
+                    }
+                    
+                    kbOptions.forEach(opt => opt.classList.remove('selected'));
+                    this.classList.add('selected');
+                    
+                    // 更新侧边栏显示
+                    const kbName = this.querySelector('h4').textContent;
+                    document.getElementById('sidebar-knowledge-base').textContent = kbName;
+                });
+            });
+            
+            // 知识库详情查看
+            kbViewDetailsBtns.forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    const kbType = this.getAttribute('data-kb');
+                    openKnowledgeBaseModal(kbType);
+                });
+            });
+            
+            // 知识库模态框
+            const knowledgeBaseModal = document.getElementById('knowledgeBaseModal');
+            const modalClose = document.getElementById('modalClose');
+            const modalTitle = document.getElementById('modal-title');
+            const categoryCards = document.querySelectorAll('.category-card');
+            const rulesLists = document.querySelectorAll('.rules-list');
+            
+            // 打开知识库模态框
+            function openKnowledgeBaseModal(kbType) {
+                let title = '';
+                switch(kbType) {
+                    case 'standard':
+                        title = '标准审计知识库详情';
+                        break;
+                    case 'strict':
+                        title = '严格审计知识库详情';
+                        break;
+                    case 'local':
+                        title = '地方规定知识库详情';
+                        break;
+                    case 'custom':
+                        title = '自定义知识库详情';
+                        break;
+                }
+                
+                modalTitle.textContent = title;
+                knowledgeBaseModal.style.display = 'flex';
+                
+                // 默认显示第一个分类的规则
+                rulesLists.forEach(list => list.classList.remove('active'));
+                document.getElementById('scope-rules').classList.add('active');
+            }
+            
+            // 关闭知识库模态框
+            modalClose.addEventListener('click', function() {
+                knowledgeBaseModal.style.display = 'none';
+            });
+            
+            // 点击模态框外部关闭
+            knowledgeBaseModal.addEventListener('click', function(e) {
+                if (e.target === knowledgeBaseModal) {
+                    knowledgeBaseModal.style.display = 'none';
+                }
+            });
+            
+            // 知识库分类切换
+            categoryCards.forEach(card => {
+                card.addEventListener('click', function() {
+                    const category = this.getAttribute('data-category');
+                    
+                    // 更新分类卡片状态
+                    categoryCards.forEach(c => c.classList.remove('active'));
+                    this.classList.add('active');
+                    
+                    // 显示对应分类的规则
+                    rulesLists.forEach(list => list.classList.remove('active'));
+                    document.getElementById(`${category}-rules`).classList.add('active');
+                });
+            });
+            
+            // 文件选择按钮
+            const selectFileBtn = document.getElementById('selectFileBtn');
+            const selectedFilesDiv = document.getElementById('selectedFiles');
+            
+            selectFileBtn.addEventListener('click', function() {
+                // 模拟文件选择
+                const fileList = document.querySelector('.file-list');
+                fileList.innerHTML = `
+                    <div class="file-item" style="display: flex; align-items: center; padding: 15px; background: #f8f9fa; border-radius: 10px; margin-bottom: 10px;">
+                        <div style="width: 40px; height: 40px; background: var(--primary-color); color: white; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin-right: 15px;">
+                            <i class="fas fa-file-excel"></i>
+                        </div>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600; margin-bottom: 3px;">阳光小区维修资金申请表.xlsx</div>
+                            <div style="color: var(--text-light); font-size: 0.9rem;">2.4 MB • 上传时间: 2023-10-28</div>
+                        </div>
+                        <div style="padding: 5px 12px; border-radius: 20px; background: #d4edda; color: #155724; font-size: 0.85rem; font-weight: 600;">
+                            已选择
+                        </div>
+                    </div>
+                    <div class="file-item" style="display: flex; align-items: center; padding: 15px; background: #f8f9fa; border-radius: 10px;">
+                        <div style="width: 40px; height: 40px; background: var(--danger-color); color: white; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin-right: 15px;">
+                            <i class="fas fa-file-pdf"></i>
+                        </div>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600; margin-bottom: 3px;">业主表决结果公示.pdf</div>
+                            <div style="color: var(--text-light); font-size: 0.9rem;">1.8 MB • 上传时间: 2023-10-28</div>
+                        </div>
+                        <div style="padding: 5px 12px; border-radius: 20px; background: #d4edda; color: #155724; font-size: 0.85rem; font-weight: 600;">
+                            已选择
+                        </div>
+                    </div>
+                `;
+                
+                selectedFilesDiv.style.display = 'block';
+            });
+            
+            // 更新侧边栏显示
+            function updateSidebarDisplay() {
+                if (currentStep === 1) {
+                    // 第一步：显示占位符，隐藏项目概览
+                    sidebarStep1.style.display = 'block';
+                    sidebarProjectSummary.style.display = 'none';
+                } else {
+                    // 其他步骤：显示项目概览，隐藏占位符
+                    sidebarStep1.style.display = 'none';
+                    sidebarProjectSummary.style.display = 'block';
+                }
+            }
+            
+            // 导航到下一步
+            function goToNextStep() {
+                if (currentStep < totalSteps) {
+                    // 隐藏当前步骤内容
+                    document.getElementById(`step${currentStep}-content`).classList.remove('active');
+                    steps[currentStep - 1].classList.remove('active');
+                    
+                    // 更新当前步骤
+                    currentStep++;
+                    
+                    // 显示下一步内容
+                    document.getElementById(`step${currentStep}-content`).classList.add('active');
+                    steps[currentStep - 1].classList.add('active');
+                    
+                    // 更新进度条
+                    const progressPercent = (currentStep / totalSteps) * 100;
+                    progressFill.style.width = `${progressPercent}%`;
+                    
+                    // 更新侧边栏文本
+                    const stepLabels = ['选择数据源', 'AI提取信息', '选择知识库', '审计流程', '审计结果'];
+                    currentStepText.textContent = stepLabels[currentStep - 1];
+                    
+                    // 更新侧边栏显示
+                    updateSidebarDisplay();
+                    
+                    // 特殊处理：步骤2模拟AI提取信息
+                    if (currentStep === 2) {
+                        simulateAIExtraction();
+                    }
+                    
+                    // 特殊处理：步骤5初始化图表
+                    if (currentStep === 5) {
+                        initializeComplianceChart();
+                    }
+                }
+            }
+            
+            // 导航到上一步
+            function goToPrevStep() {
+                if (currentStep > 1) {
+                    // 隐藏当前步骤内容
+                    document.getElementById(`step${currentStep}-content`).classList.remove('active');
+                    steps[currentStep - 1].classList.remove('active');
+                    
+                    // 更新当前步骤
+                    currentStep--;
+                    
+                    // 显示上一步内容
+                    document.getElementById(`step${currentStep}-content`).classList.add('active');
+                    steps[currentStep - 1].classList.add('active');
+                    
+                    // 更新进度条
+                    const progressPercent = (currentStep / totalSteps) * 100;
+                    progressFill.style.width = `${progressPercent}%`;
+                    
+                    // 更新侧边栏文本
+                    const stepLabels = ['选择数据源', 'AI提取信息', '选择知识库', '审计流程', '审计结果'];
+                    currentStepText.textContent = stepLabels[currentStep - 1];
+                    
+                    // 更新侧边栏显示
+                    updateSidebarDisplay();
+                }
+            }
+            
+            // 模拟AI提取信息
+            function simulateAIExtraction() {
+                const extractedInfo = document.getElementById('extractedInfo');
+                const aiProcessing = document.querySelector('#step2-content .ai-processing');
+                
+                // 显示AI处理中
+                aiProcessing.innerHTML = `
+                    <i class="fas fa-robot"></i>
+                    <div>
+                        <strong>AI智能体正在分析文件中...</strong>
+                        <p>正在使用OCR技术和自然语言处理技术提取项目信息，预计需要10-15秒。</p>
+                    </div>
+                `;
+                
+                // 模拟处理时间
+                setTimeout(() => {
+                    aiProcessing.innerHTML = `
+                        <i class="fas fa-check-circle" style="color: var(--secondary-color);"></i>
+                        <div>
+                            <strong>AI信息提取完成！</strong>
+                            <p>已成功从文件中提取项目信息，准确率92.7%。</p>
+                        </div>
+                    `;
+                    
+                    // 显示提取的信息
+                    extractedInfo.style.display = 'block';
+                }, 3000);
+            }
+            
+            // 审计流程相关变量
+            let auditStep = 0;
+            const timelineSteps = document.querySelectorAll('.timeline-step');
+            const stepStatuses = document.querySelectorAll('.step-status');
+            const stepDetails = document.querySelectorAll('.step-details');
+            
+            // 审计步骤数据
+            const auditStepData = [
+                {
+                    title: "数据验证",
+                    status: "等待开始",
+                    description: "验证项目数据的完整性和准确性，检查是否存在缺失字段或异常值。",
+                    checks: [
+                        { text: "检查项目名称是否完整", result: "passed" },
+                        { text: "检查申请单位信息", result: "passed" },
+                        { text: "验证维修类型是否明确", result: "passed" },
+                        { text: "检查申请金额格式", result: "passed" }
+                    ]
+                },
+                {
+                    title: "范围审计",
+                    status: "等待开始",
+                    description: "检查维修内容是否属于《住宅专项维修资金管理办法》及相关地方规定允许的使用范围。",
+                    checks: [
+                        { text: "检查维修类型：屋面防水维修", result: "passed" },
+                        { text: "验证是否属于维修资金使用范围", result: "passed" },
+                        { text: "检查是否有超出范围的维修内容", result: "passed" }
+                    ]
+                },
+                {
+                    title: "流程审计",
+                    status: "等待开始",
+                    description: "检查项目是否完成法定表决流程，表决比例是否符合规定，公示流程是否合规。",
+                    checks: [
+                        { text: "检查是否完成业主表决", result: "passed" },
+                        { text: "验证表决比例是否符合规定（≥2/3）", result: "passed" },
+                        { text: "检查是否完成公示流程", result: "passed" },
+                        { text: "检查公示位置是否符合要求", result: "warning" }
+                    ]
+                },
+                {
+                    title: "资料审计",
+                    status: "等待开始",
+                    description: "检查所有必要资料是否齐全，包括申请表、表决结果、施工方案、预算审核报告等。",
+                    checks: [
+                        { text: "检查维修资金使用申请表", result: "passed" },
+                        { text: "检查业主表决结果文件", result: "passed" },
+                        { text: "检查施工方案及预算文件", result: "passed" },
+                        { text: "检查维修部位现状照片", result: "failed" },
+                        { text: "检查业主委员会决议文件", result: "failed" }
+                    ]
+                },
+                {
+                    title: "时序审计",
+                    status: "等待开始",
+                    description: "检查各环节时间顺序是否合规，包括表决、公示、申请提交等环节的时间逻辑关系。",
+                    checks: [
+                        { text: "检查表决开始与结束时间", result: "passed" },
+                        { text: "检查公示开始与结束时间", result: "passed" },
+                        { text: "验证表决完成在公示开始前", result: "failed" },
+                        { text: "检查公示期是否符合规定", result: "failed" }
+                    ]
+                },
+                {
+                    title: "AI综合研判",
+                    status: "等待开始",
+                    description: "综合分析所有审计要点的结果，考虑各问题之间的关联性和整体合规性。",
+                    checks: [
+                        { text: "整合各审计要点结果", result: "passed" },
+                        { text: "评估整体合规风险", result: "passed" },
+                        { text: "生成初步审计结论", result: "passed" }
+                    ]
+                }
+            ];
+            
+            // 重置审计流程
+            function resetAuditFlow() {
+                timelineSteps.forEach(step => {
+                    step.classList.remove('active', 'completed');
+                });
+                
+                stepStatuses.forEach((status, index) => {
+                    status.textContent = "等待开始";
+                    status.className = "step-status status-waiting";
+                });
+                
+                stepDetails.forEach(detail => {
+                    detail.style.display = 'none';
+                });
+                
+                auditStep = 0;
+            }
+            
+            // 执行审计流程
+            function runAuditFlow() {
+                const startAuditBtn = document.getElementById('startAuditBtn');
+                
+                // 禁用开始按钮
+                startAuditBtn.disabled = true;
+                startAuditBtn.innerHTML = '<i class="fas fa-cog fa-spin"></i> 审计进行中...';
+                
+                // 重置审计流程
+                resetAuditFlow();
+                
+                // 模拟审计流程
+                let step = 0;
+                const totalAuditSteps = timelineSteps.length;
+                
+                const interval = setInterval(() => {
+                    if (step < totalAuditSteps) {
+                        // 更新当前步骤
+                        if (step > 0) {
+                            timelineSteps[step - 1].classList.remove('active');
+                            timelineSteps[step - 1].classList.add('completed');
+                            
+                            // 更新状态
+                            const prevStatus = stepStatuses[step - 1];
+                            prevStatus.textContent = "已完成";
+                            prevStatus.className = "step-status status-passed";
+                            
+                            // 隐藏上一步的详情
+                            stepDetails[step - 1].style.display = 'none';
+                        }
+                        
+                        // 激活当前步骤
+                        timelineSteps[step].classList.add('active');
+                        
+                        // 更新状态
+                        const currentStatus = stepStatuses[step];
+                        currentStatus.textContent = "进行中";
+                        currentStatus.className = "step-status status-processing";
+                        
+                        // 显示当前步骤的详情
+                        stepDetails[step].style.display = 'block';
+                        
+                        step++;
+                    } else {
+                        // 审计完成
+                        clearInterval(interval);
+                        
+                        // 启用开始按钮
+                        startAuditBtn.disabled = false;
+                        startAuditBtn.innerHTML = '<i class="fas fa-redo"></i> 重新审计';
+                        
+                        // 导航到结果页面
+                        setTimeout(() => {
+                            goToNextStep();
+                        }, 1000);
+                    }
+                }, 2000); // 每个步骤2秒
+            }
+            
+            // 初始化合规性图表
+            function initializeComplianceChart() {
+                const ctx = document.getElementById('complianceChart').getContext('2d');
+                new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['合规', '不合规', '警告'],
+                        datasets: [{
+                            data: [2, 4, 0],
+                            backgroundColor: [
+                                '#34a853',
+                                '#ea4335',
+                                '#fbbc05'
+                            ],
+                            borderWidth: 2,
+                            borderColor: '#fff'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom',
+                                labels: {
+                                    padding: 20,
+                                    usePointStyle: true,
+                                    font: {
+                                        size: 14
+                                    }
+                                }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        const label = context.label || '';
+                                        const value = context.parsed || 0;
+                                        return `${label}: ${value}个审计要点`;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            
+            // 按钮事件绑定
+            // 步骤1：下一步
+            document.getElementById('nextStep1Btn').addEventListener('click', function() {
+                goToNextStep();
+            });
+            
+            // 步骤2：上一步和下一步
+            document.getElementById('prevStep2Btn').addEventListener('click', goToPrevStep);
+            document.getElementById('nextStep2Btn').addEventListener('click', goToNextStep);
+            
+            // 步骤3：上一步和下一步
+            document.getElementById('prevStep3Btn').addEventListener('click', goToPrevStep);
+            document.getElementById('nextStep3Btn').addEventListener('click', goToNextStep);
+            
+            // 步骤4：上一步和开始审计
+            document.getElementById('prevStep4Btn').addEventListener('click', goToPrevStep);
+            document.getElementById('startAuditBtn').addEventListener('click', runAuditFlow);
+            
+            // 步骤5：上一步和新项目
+            document.getElementById('prevStep5Btn').addEventListener('click', goToPrevStep);
+            document.getElementById('newProjectBtn').addEventListener('click', function() {
+                // 重置到第一步
+                while (currentStep > 1) {
+                    goToPrevStep();
+                }
+                
+                // 重置数据源选择
+                sourceOptions.forEach((opt, index) => {
+                    opt.classList.remove('selected');
+                    if (index === 0) opt.classList.add('selected');
+                });
+                
+                // 重置知识库选择
+                kbOptions.forEach((opt, index) => {
+                    opt.classList.remove('selected');
+                    if (index === 0) opt.classList.add('selected');
+                });
+                
+                // 重置文件选择
+                selectedFilesDiv.style.display = 'none';
+                
+                // 重置提取信息显示
+                document.getElementById('extractedInfo').style.display = 'none';
+                
+                // 重置审计流程
+                resetAuditFlow();
+                
+                // 更新侧边栏知识库
+                document.getElementById('sidebar-knowledge-base').textContent = '标准审计知识库';
+                
+                // 更新侧边栏显示
+                updateSidebarDisplay();
+            });
+            
+            // 初始化进度条
+            progressFill.style.width = '20%';
+        });
+    </script>
+</body>
+</html>

@@ -57,6 +57,12 @@ class AuditServiceTestCase(unittest.TestCase):
         self.assertNotIn("当前未命中明确结论规则，需补充进一步审计材料", data["reasons"])
         self.assertEqual(data["reason_codes"], [])
         self.assertEqual(data["missing_items"], [])
+        self.assertIn("sub_audits", data)
+        self.assertIn("process_audit", data["sub_audits"])
+        self.assertEqual(data["sub_audits"]["process_audit"]["result"], "need_supplement")
+        self.assertEqual(data["sub_audits"]["process_audit"]["display_result"], "需补充材料")
+        self.assertIn("document_extraction_targets", data)
+        self.assertIn("vote_documents", data["document_extraction_targets"])
 
     def test_process_reason_requires_explicit_false_input(self):
         data = self._audit({"project_name": "3号楼电梯曳引机维修", "has_vote": False})
@@ -64,6 +70,8 @@ class AuditServiceTestCase(unittest.TestCase):
         self.assertIn("MISSING_VOTE", data["reason_codes"])
         self.assertIn("has_vote", data["missing_items"])
         self.assertNotIn("建议补充表决、公示及审价等流程材料", data["reasons"])
+        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], ["MISSING_VOTE"])
+        self.assertEqual(data["sub_audits"]["document_completeness_audit"]["reason_codes"], [])
 
     def test_generic_input_returns_insufficient_info(self):
         data = self._audit({"project_name": "维修工程"})
@@ -99,6 +107,324 @@ class AuditServiceTestCase(unittest.TestCase):
         self.assertIn("建议补充表决、公示及审价等流程材料", data["reasons"])
         self.assertNotIn("当前未命中明确结论规则，需补充进一步审计材料", data["reasons"])
         self.assertEqual(data["missing_items"], [])
+
+    def test_scope_audit_only_returns_compliant_when_scope_fact_is_explicit(self):
+        data = self._audit(
+            {
+                "project_name": "外墙渗漏维修",
+                "is_common_part": True,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["sub_audits"]["scope_audit"]["result"], "compliant")
+        self.assertEqual(data["sub_audits"]["scope_audit"]["reason_codes"], ["IN_SCOPE_COMMON_PART"])
+        self.assertEqual(data["sub_audits"]["scope_audit"]["facts_used"], ["is_common_part"])
+
+    def test_scope_audit_can_mark_common_facility_in_scope(self):
+        data = self._audit(
+            {
+                "project_name": "3号楼电梯曳引机维修",
+                "scope_facts": {
+                    "is_common_facility": True,
+                },
+            }
+        )
+        self.assertEqual(data["sub_audits"]["scope_audit"]["result"], "compliant")
+        self.assertEqual(data["sub_audits"]["scope_audit"]["reason_codes"], ["IN_SCOPE_COMMON_FACILITY"])
+        self.assertEqual(data["overall_result"], "need_supplement")
+
+    def test_scope_audit_property_service_scope_changes_overall_result(self):
+        data = self._audit(
+            {
+                "project_name": "3号楼电梯曳引机维修",
+                "is_property_service_scope": True,
+            }
+        )
+        self.assertEqual(data["overall_result"], "non_compliant")
+        self.assertEqual(data["reason_codes"], ["PROPERTY_SERVICE_SCOPE"])
+        self.assertEqual(data["sub_audits"]["scope_audit"]["reason_codes"], ["PROPERTY_SERVICE_SCOPE"])
+
+    def test_process_audit_can_require_contract_without_hitting_document_audit(self):
+        data = self._audit(
+            {
+                "project_name": "消防喷淋系统维修",
+                "has_contract": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], ["MISSING_CONTRACT"])
+        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], ["MISSING_CONTRACT"])
+        self.assertEqual(data["sub_audits"]["document_completeness_audit"]["reason_codes"], [])
+
+    def test_document_completeness_can_require_invoice(self):
+        data = self._audit(
+            {
+                "project_name": "3号楼电梯曳引机维修",
+                "has_invoice": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], ["MISSING_INVOICE"])
+        self.assertEqual(data["sub_audits"]["document_completeness_audit"]["reason_codes"], ["MISSING_INVOICE"])
+        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], [])
+
+    def test_document_completeness_can_require_completion_materials(self):
+        data = self._audit(
+            {
+                "project_name": "屋面防水维修",
+                "has_completion_report": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], ["MISSING_COMPLETION_REPORT"])
+        self.assertEqual(data["sub_audits"]["document_completeness_audit"]["reason_codes"], ["MISSING_COMPLETION_REPORT"])
+
+    def test_document_completeness_can_require_settlement_report(self):
+        data = self._audit(
+            {
+                "project_name": "屋面防水维修",
+                "has_settlement_report": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], ["MISSING_SETTLEMENT_REPORT"])
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["reason_codes"],
+            ["MISSING_SETTLEMENT_REPORT"],
+        )
+        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], [])
+
+    def test_document_completeness_can_require_payment_proof(self):
+        data = self._audit(
+            {
+                "project_name": "3号楼电梯曳引机维修",
+                "has_payment_proof": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], ["MISSING_PAYMENT_PROOF"])
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["reason_codes"],
+            ["MISSING_PAYMENT_PROOF"],
+        )
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["facts_used"],
+            ["has_payment_proof"],
+        )
+        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], [])
+
+    def test_document_completeness_can_require_site_photos_for_non_emergency_case(self):
+        data = self._audit(
+            {
+                "project_name": "电梯曳引机维修",
+                "has_site_photos": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], ["MISSING_SITE_PHOTOS"])
+        self.assertEqual(data["missing_items"], ["has_site_photos"])
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["reason_codes"],
+            ["MISSING_SITE_PHOTOS"],
+        )
+        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], [])
+
+    def test_document_completeness_can_require_rectification_notice_for_non_emergency_case(self):
+        data = self._audit(
+            {
+                "project_name": "屋面防水维修",
+                "has_rectification_notice": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], ["MISSING_RECTIFICATION_NOTICE"])
+        self.assertEqual(data["missing_items"], ["has_rectification_notice"])
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["reason_codes"],
+            ["MISSING_RECTIFICATION_NOTICE"],
+        )
+        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], [])
+
+    def test_document_completeness_can_require_emergency_proof(self):
+        data = self._audit(
+            {
+                "project_name": "排水管爆裂维修",
+                "is_emergency": True,
+                "has_emergency_proof": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], ["MISSING_EMERGENCY_DOC"])
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["reason_codes"],
+            ["MISSING_EMERGENCY_DOC"],
+        )
+
+    def test_document_completeness_can_require_acceptance_record(self):
+        data = self._audit(
+            {
+                "project_name": "屋面防水维修",
+                "has_acceptance_record": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], ["MISSING_COMPLETION_REPORT"])
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["reason_codes"],
+            ["MISSING_COMPLETION_REPORT"],
+        )
+
+    def test_document_completeness_prioritizes_missing_completion_and_acceptance_together(self):
+        data = self._audit(
+            {
+                "project_name": "屋面防水维修",
+                "has_completion_report": False,
+                "has_acceptance_record": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], ["MISSING_COMPLETION_REPORT"])
+        self.assertEqual(data["missing_items"], ["has_completion_report", "has_acceptance_record"])
+        self.assertEqual(data["reasons"], ["缺少完工报告及验收记录"])
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["missing_items"],
+            ["has_completion_report", "has_acceptance_record"],
+        )
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["reasons"],
+            ["缺少完工报告及验收记录"],
+        )
+
+    def test_document_completeness_can_require_damage_assessment_for_gray_case(self):
+        data = self._audit(
+            {
+                "project_name": "楼道窗户玻璃维修",
+                "has_damage_assessment": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], ["MISSING_GRAY_CASE_EVIDENCE"])
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["reason_codes"],
+            ["MISSING_GRAY_CASE_EVIDENCE"],
+        )
+
+    def test_scope_unknown_object_boundary_only_applies_to_weak_gray_case_with_complete_evidence(self):
+        data = self._audit(
+            {
+                "project_name": "楼道窗户玻璃维修",
+                "gray_case_evidence_complete": True,
+            }
+        )
+        self.assertEqual(data["overall_result"], "manual_review")
+        self.assertEqual(data["reason_codes"], ["OUTSIDE_SCOPE_UNKNOWN_OBJECT"])
+        self.assertEqual(data["sub_audits"]["scope_audit"]["result"], "manual_review")
+        self.assertEqual(data["sub_audits"]["scope_audit"]["reason_codes"], ["OUTSIDE_SCOPE_UNKNOWN_OBJECT"])
+        self.assertEqual(
+            data["sub_audits"]["scope_audit"]["facts_used"],
+            [
+                "gray_case_evidence_complete",
+                "is_common_part",
+                "is_common_facility",
+                "is_private_part",
+                "is_property_service_scope",
+            ],
+        )
+
+    def test_scope_unknown_object_boundary_does_not_apply_to_normal_repairable_object(self):
+        data = self._audit(
+            {
+                "project_name": "外墙渗漏维修",
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["sub_audits"]["scope_audit"]["reason_codes"], [])
+
+    def test_document_completeness_can_require_all_ticket_chain_items_in_fixed_order(self):
+        data = self._audit(
+            {
+                "project_name": "电梯曳引机维修",
+                "has_invoice": False,
+                "has_settlement_report": False,
+                "has_payment_proof": False,
+            }
+        )
+        expected_reason_codes = [
+            "MISSING_INVOICE",
+            "MISSING_SETTLEMENT_REPORT",
+            "MISSING_PAYMENT_PROOF",
+        ]
+        expected_missing_items = [
+            "has_invoice",
+            "has_settlement_report",
+            "has_payment_proof",
+        ]
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], expected_reason_codes)
+        self.assertEqual(data["missing_items"], expected_missing_items)
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["reason_codes"],
+            expected_reason_codes,
+        )
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["missing_items"],
+            expected_missing_items,
+        )
+        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], [])
+
+    def test_document_completeness_can_require_invoice_and_settlement_in_fixed_order(self):
+        data = self._audit(
+            {
+                "project_name": "电梯曳引机维修",
+                "has_invoice": False,
+                "has_settlement_report": False,
+            }
+        )
+        self.assertEqual(
+            data["reason_codes"],
+            ["MISSING_INVOICE", "MISSING_SETTLEMENT_REPORT"],
+        )
+        self.assertEqual(
+            data["missing_items"],
+            ["has_invoice", "has_settlement_report"],
+        )
+
+    def test_document_completeness_keeps_emergency_rule_priority_over_missing_site_photos(self):
+        data = self._audit(
+            {
+                "project_name": "排水管爆裂维修",
+                "is_emergency": True,
+                "has_site_photos": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["reason_codes"], ["MISSING_EMERGENCY_DOC"])
+        self.assertNotIn("MISSING_SITE_PHOTOS", data["reason_codes"])
+        self.assertEqual(
+            data["sub_audits"]["document_completeness_audit"]["reason_codes"],
+            ["MISSING_EMERGENCY_DOC"],
+        )
+
+    def test_structured_input_groups_are_merged_into_rule_context(self):
+        data = self._audit(
+            {
+                "project_name": "3号楼电梯曳引机维修",
+                "process_facts": {
+                    "has_vote": False,
+                },
+                "document_facts": {
+                    "has_invoice": True,
+                },
+                "timeline_facts": {
+                    "application_date": "2026-04-01",
+                },
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertIn("MISSING_VOTE", data["reason_codes"])
+        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], ["MISSING_VOTE"])
+        self.assertIn("has_invoice", data["sub_audits"]["document_completeness_audit"]["facts_used"])
+        self.assertIn("application_date", data["sub_audits"]["timeline_audit"]["facts_used"])
 
     def test_multi_project_cross_domain_adds_reason_code(self):
         data = self._audit(

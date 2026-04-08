@@ -17,6 +17,28 @@ FLOW_BY_STAGE = {
     "PROCESS_CHECK": "normal_flow",
 }
 CONFIDENCE_ORDER = {"low": 1, "medium": 2, "high": 3}
+STRUCTURED_INPUT_GROUPS = (
+    "scope_facts",
+    "process_facts",
+    "document_facts",
+    "timeline_facts",
+    "amount_facts",
+    "emergency_facts",
+    "gray_case_facts",
+)
+NON_FACT_FIELDS = {
+    "project_name",
+    "project_desc",
+    "matched_object_ids",
+    "normalized_tags",
+    "mapping_confidence",
+    "gray_case_type",
+    "split_projects",
+    "catalog_domains",
+    "source_documents",
+    "extracted_document_fields",
+    "field_confidence_map",
+}
 
 
 def normalize_text(text: str) -> str:
@@ -189,25 +211,48 @@ def build_normalized_tags(project_name: str, mapping_result: Dict[str, Any]) -> 
         "matched_mapping_ids": matched_mapping_ids,
     }
 
+
+def _merge_structured_request(request_payload: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(request_payload)
+    for group_name in STRUCTURED_INPUT_GROUPS:
+        group_value = request_payload.get(group_name)
+        if not isinstance(group_value, dict):
+            continue
+        for field, value in group_value.items():
+            if merged.get(field) is None:
+                merged[field] = value
+
+    parse_context = request_payload.get("document_parse_context")
+    if isinstance(parse_context, dict):
+        for field in ("source_documents", "extracted_document_fields", "field_confidence_map"):
+            if merged.get(field) is None:
+                merged[field] = parse_context.get(field)
+    return merged
+
+
 def _build_rule_context(
     request_payload: Dict[str, Any],
     mapping_result: Dict[str, Any],
     tag_result: Dict[str, Any],
 ) -> Dict[str, Any]:
+    normalized_payload = _merge_structured_request(request_payload)
     context = {
-        "project_name": request_payload.get("project_name"),
-        "project_desc": request_payload.get("project_desc"),
+        "project_name": normalized_payload.get("project_name"),
+        "project_desc": normalized_payload.get("project_desc"),
         "matched_object_ids": mapping_result.get("matched_object_ids", []),
         "normalized_tags": tag_result.get("normalized_tags", []),
         "mapping_confidence": tag_result.get("mapping_confidence"),
         "gray_case_type": tag_result.get("gray_case_type"),
         "split_projects": mapping_result.get("split_projects", []),
         "catalog_domains": mapping_result.get("catalog_domains", []),
+        "source_documents": normalized_payload.get("source_documents", []),
+        "extracted_document_fields": normalized_payload.get("extracted_document_fields", {}),
+        "field_confidence_map": normalized_payload.get("field_confidence_map", {}),
     }
 
     for field in load_rule_engine()["input_schema"]["optional_fields"]:
         if field not in context:
-            context[field] = request_payload.get(field)
+            context[field] = normalized_payload.get(field)
 
     return context
 
@@ -224,11 +269,11 @@ def _evaluate_condition(condition: Dict[str, Any], context: Dict[str, Any]) -> b
     current = context.get(field)
 
     if op == "contains":
-        return isinstance(current, Sequence) and value in current
+        return isinstance(current, Sequence) and not isinstance(current, (str, bytes)) and value in current
     if op == "length_gt":
-        return isinstance(current, Sequence) and len(current) > value
+        return isinstance(current, Sequence) and not isinstance(current, (str, bytes)) and len(current) > value
     if op == "empty_array":
-        return isinstance(current, Sequence) and len(current) == 0
+        return isinstance(current, Sequence) and not isinstance(current, (str, bytes)) and len(current) == 0
     if op == "empty_or_null":
         return current is None or current == ""
     if op == "not_empty_or_null":
@@ -309,54 +354,184 @@ def _build_display_result(overall_result: str) -> str:
     return load_output_schema()["display_mapping"][overall_result]
 
 
-def audit_project(request_payload: Dict[str, Any], mapping_result: Dict[str, Any]) -> Dict[str, Any]:
-    project_name = request_payload.get("project_name", "")
-    tag_result = build_normalized_tags(project_name, mapping_result)
-
-    context = _build_rule_context(request_payload, mapping_result, tag_result)
-    engine = load_rule_engine()
+def _get_ordered_active_rules(engine: Dict[str, Any]) -> List[Dict[str, Any]]:
+    stage_order = {stage: index for index, stage in enumerate(engine["decision_flow"])}
     active_rules = [rule for rule in engine["rules"] if rule.get("is_active", True)]
-    rules_by_stage: Dict[str, List[Dict[str, Any]]] = {}
-    for rule in active_rules:
-        rules_by_stage.setdefault(rule["stage"], []).append(rule)
-    for stage_rules in rules_by_stage.values():
-        stage_rules.sort(key=lambda rule: rule["priority"])
+    return sorted(active_rules, key=lambda rule: (stage_order.get(rule["stage"], 999), rule["priority"]))
+
+
+def _get_rule_dimensions(rule: Dict[str, Any]) -> List[str]:
+    dimensions = rule.get("audit_dimensions", [])
+    if isinstance(dimensions, str):
+        return [dimensions]
+    return list(dimensions)
+
+
+def _is_business_fact_field(field_name: str) -> bool:
+    return field_name not in NON_FACT_FIELDS
+
+
+def _collect_present_facts(context: Dict[str, Any], field_names: Sequence[str]) -> List[str]:
+    present: List[str] = []
+    for field_name in field_names:
+        if not _is_business_fact_field(field_name):
+            continue
+        value = context.get(field_name)
+        if value is None or value == "":
+            continue
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) == 0:
+            continue
+        present.append(field_name)
+    return present
+
+
+def _collect_condition_fields(condition: Dict[str, Any]) -> List[str]:
+    fields: List[str] = []
+    if "all" in condition or "any" in condition:
+        key = "all" if "all" in condition else "any"
+        for item in condition[key]:
+            _append_unique(fields, _collect_condition_fields(item))
+        return fields
+
+    field_name = condition.get("field")
+    if field_name and _is_business_fact_field(field_name):
+        fields.append(field_name)
+    return fields
+
+
+def _collect_required_missing_fields(context: Dict[str, Any], field_names: Sequence[str]) -> List[str]:
+    missing: List[str] = []
+    for field_name in field_names:
+        value = context.get(field_name)
+        if value is None or value == "":
+            missing.append(field_name)
+    return missing
+
+
+def _build_sub_audit_result(
+    sub_audit_key: str,
+    definition: Dict[str, Any],
+    context: Dict[str, Any],
+    ordered_rules: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    applicable_when = definition.get("applicable_when")
+    applicable = True if not applicable_when else _evaluate_condition(applicable_when, context)
+    facts_used = _collect_present_facts(context, definition.get("facts_used_fields", []))
+
+    if not applicable:
+        return {
+            "applicable": False,
+            "result": None,
+            "display_result": None,
+            "reason_codes": [],
+            "reasons": [],
+            "missing_items": [],
+            "basis_documents": [],
+            "audit_path": [],
+            "facts_used": facts_used,
+        }
+
+    for rule in ordered_rules:
+        if sub_audit_key not in _get_rule_dimensions(rule):
+            continue
+        if not _evaluate_condition(rule["when"], context):
+            continue
+        then = rule["then"]
+        stage_path = FLOW_BY_STAGE.get(rule["stage"], rule["stage"].lower())
+        rule_facts_used = list(facts_used)
+        _append_unique(rule_facts_used, _collect_condition_fields(rule["when"]))
+        if then["result"] == "continue":
+            sub_audit_result = then.get("sub_audit_result")
+            if not sub_audit_result:
+                continue
+            return {
+                "applicable": True,
+                "result": sub_audit_result,
+                "display_result": _build_display_result(sub_audit_result),
+                "reason_codes": list(then.get("reason_codes", [])),
+                "reasons": [then["message"]] if then.get("message") else [],
+                "missing_items": [],
+                "basis_documents": _build_basis_documents([rule]),
+                "audit_path": [stage_path, sub_audit_key],
+                "facts_used": rule_facts_used,
+            }
+        return {
+            "applicable": True,
+            "result": then["result"],
+            "display_result": _build_display_result(then["result"]),
+            "reason_codes": list(then.get("reason_codes", [])),
+            "reasons": [then["message"]],
+            "missing_items": _collect_missing_items(rule["when"], context),
+            "basis_documents": _build_basis_documents([rule]),
+            "audit_path": [stage_path, sub_audit_key],
+            "facts_used": rule_facts_used,
+        }
+
+    default_result = definition.get("default_result")
+    return {
+        "applicable": True,
+        "result": default_result,
+        "display_result": _build_display_result(default_result) if default_result else None,
+        "reason_codes": list(definition.get("default_reason_codes", [])),
+        "reasons": [definition["default_message"]] if definition.get("default_message") else [],
+        "missing_items": _collect_required_missing_fields(context, definition.get("required_fields", [])),
+        "basis_documents": [],
+        "audit_path": list(definition.get("default_audit_path", [])),
+        "facts_used": facts_used,
+    }
+
+
+def _build_sub_audits(context: Dict[str, Any], ordered_rules: Sequence[Dict[str, Any]], engine: Dict[str, Any]) -> Dict[str, Any]:
+    sub_audits: Dict[str, Any] = {}
+    for sub_audit_key, definition in engine.get("sub_audit_definitions", {}).items():
+        sub_audits[sub_audit_key] = _build_sub_audit_result(sub_audit_key, definition, context, ordered_rules)
+    return sub_audits
+
+
+def audit_project(request_payload: Dict[str, Any], mapping_result: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_payload = _merge_structured_request(request_payload)
+    project_name = normalized_payload.get("project_name", "")
+    tag_result = build_normalized_tags(project_name, mapping_result)
+    context = _build_rule_context(normalized_payload, mapping_result, tag_result)
+
+    engine = load_rule_engine()
+    ordered_rules = _get_ordered_active_rules(engine)
+    sub_audits = _build_sub_audits(context, ordered_rules, engine)
 
     audit_path: List[str] = ["mapping", "tag_mapping"]
     triggered_rules: List[Dict[str, Any]] = []
 
-    for stage in engine["decision_flow"]:
-        stage_rules = rules_by_stage.get(stage, [])
-        for rule in stage_rules:
-            if not _evaluate_condition(rule["when"], context):
-                continue
-            triggered_rules.append(rule)
-            _append_unique(audit_path, [FLOW_BY_STAGE.get(stage, stage.lower())])
-            then = rule["then"]
-            if then["result"] == "continue":
-                route_to = then.get("route_to")
-                if route_to == "NORMAL_SCOPE_CHECK":
-                    _append_unique(audit_path, ["normal_flow"])
-                continue
+    for rule in ordered_rules:
+        if not _evaluate_condition(rule["when"], context):
+            continue
+        triggered_rules.append(rule)
+        _append_unique(audit_path, [FLOW_BY_STAGE.get(rule["stage"], rule["stage"].lower())])
+        then = rule["then"]
+        if then["result"] == "continue":
+            route_to = then.get("route_to")
+            if route_to == "NORMAL_SCOPE_CHECK":
+                _append_unique(audit_path, ["normal_flow"])
+            continue
 
-            result = then["result"]
-            reason_codes = list(then.get("reason_codes", []))
-            reasons = [then["message"]]
-
-            missing_items = [] if then["result"] == "continue" else _collect_missing_items(rule["when"], context)
-            return {
-                "project_name": project_name,
-                "mapped_objects": mapping_result.get("mapped_objects", []),
-                "matched_object_ids": mapping_result.get("matched_object_ids", []),
-                "normalized_tags": context["normalized_tags"],
-                "overall_result": result,
-                "display_result": _build_display_result(result),
-                "reason_codes": reason_codes,
-                "reasons": reasons,
-                "basis_documents": _build_basis_documents(triggered_rules),
-                "missing_items": missing_items,
-                "audit_path": audit_path,
-                "manual_review_required": result == "manual_review",
-            }
+        result = then["result"]
+        reason_codes = list(then.get("reason_codes", []))
+        reasons = [then["message"]]
+        missing_items = _collect_missing_items(rule["when"], context)
+        return {
+            "project_name": project_name,
+            "mapped_objects": mapping_result.get("mapped_objects", []),
+            "matched_object_ids": mapping_result.get("matched_object_ids", []),
+            "normalized_tags": context["normalized_tags"],
+            "overall_result": result,
+            "display_result": _build_display_result(result),
+            "reason_codes": reason_codes,
+            "reasons": reasons,
+            "basis_documents": _build_basis_documents(triggered_rules),
+            "missing_items": missing_items,
+            "audit_path": audit_path,
+            "manual_review_required": result == "manual_review",
+            "sub_audits": sub_audits,
+            "document_extraction_targets": engine.get("document_extraction_targets", {}),
+        }
 
     raise ValueError("rule_engine 未命中任何终态规则，请检查规则配置")
