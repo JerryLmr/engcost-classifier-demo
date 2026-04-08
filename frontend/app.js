@@ -45,6 +45,8 @@ const rCandidatesWrap = document.getElementById("rCandidatesWrap");
 const rCandidates = document.getElementById("rCandidates");
 const auditBtn = document.getElementById("auditBtn");
 const auditResetBtn = document.getElementById("auditResetBtn");
+const auditOptionalPanel = document.getElementById("auditOptionalPanel");
+const auditOptionalFields = document.getElementById("auditOptionalFields");
 const auditDisplayResult = document.getElementById("auditDisplayResult");
 const auditManualReview = document.getElementById("auditManualReview");
 const auditProjectName = document.getElementById("auditProjectName");
@@ -78,6 +80,35 @@ const RESULT_BADGE_LABELS = {
   need_supplement: "需补充材料",
   manual_review: "建议人工复核",
 };
+
+const AUDIT_SUPPLEMENT_GROUPS = [
+  { key: "scope_facts", title: "范围相关" },
+  { key: "process_facts", title: "流程相关" },
+  { key: "document_facts", title: "资料相关" },
+  { key: "gray_case_facts", title: "灰区 / 应急相关" },
+];
+
+const AUDIT_SUPPLEMENT_FIELDS = [
+  { key: "is_common_part", label: "是否共用部位", group: "scope_facts" },
+  { key: "is_common_facility", label: "是否共用设施", group: "scope_facts" },
+  { key: "is_private_part", label: "是否业主专有部分", group: "scope_facts" },
+  { key: "is_property_service_scope", label: "是否属于物业维保范围", group: "scope_facts" },
+  { key: "has_vote", label: "是否具备表决材料", group: "process_facts" },
+  { key: "has_announcement", label: "是否完成公示材料", group: "process_facts" },
+  { key: "has_budget_review", label: "是否具备审价材料", group: "process_facts" },
+  { key: "has_contract", label: "是否具备合同材料", group: "process_facts" },
+  { key: "has_site_photos", label: "是否具备现场照片", group: "document_facts" },
+  { key: "has_rectification_notice", label: "是否具备整改通知", group: "document_facts" },
+  { key: "has_completion_report", label: "是否具备完工报告", group: "document_facts" },
+  { key: "has_acceptance_record", label: "是否具备验收记录", group: "document_facts" },
+  { key: "has_invoice", label: "是否具备发票材料", group: "document_facts" },
+  { key: "has_settlement_report", label: "是否具备结算材料", group: "document_facts" },
+  { key: "has_payment_proof", label: "是否具备付款凭证", group: "document_facts" },
+  { key: "gray_case_evidence_complete", label: "灰区证据是否完整", group: "gray_case_facts" },
+  { key: "has_damage_assessment", label: "是否具备损坏评估", group: "gray_case_facts" },
+  { key: "is_emergency", label: "是否紧急维修", group: "gray_case_facts" },
+  { key: "has_emergency_proof", label: "是否具备应急证明材料", group: "gray_case_facts" },
+];
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -348,6 +379,64 @@ function formatFactField(name) {
   return String(name || "");
 }
 
+function renderAuditOptionalFields() {
+  const groupHtml = AUDIT_SUPPLEMENT_GROUPS.map((group) => {
+    const fields = AUDIT_SUPPLEMENT_FIELDS.filter((field) => field.group === group.key);
+    const fieldHtml = fields
+      .map(
+        (field) => `
+          <label class="audit-optional-field" for="auditOptional_${escapeHtml(field.key)}">
+            <span class="audit-optional-label">${escapeHtml(field.label)}</span>
+            <span class="audit-optional-key">${escapeHtml(field.key)}</span>
+            <select id="auditOptional_${escapeHtml(field.key)}" data-audit-field="${escapeHtml(field.key)}">
+              <option value="">未填写</option>
+              <option value="true">是</option>
+              <option value="false">否</option>
+            </select>
+          </label>
+        `,
+      )
+      .join("");
+    return `
+      <section class="audit-optional-group">
+        <h4>${escapeHtml(group.title)}</h4>
+        <div class="audit-optional-grid">${fieldHtml}</div>
+      </section>
+    `;
+  }).join("");
+  auditOptionalFields.innerHTML = groupHtml;
+}
+
+function collectAuditSupplementFacts() {
+  const flatFacts = {};
+  const groupedFacts = {};
+  AUDIT_SUPPLEMENT_FIELDS.forEach((field) => {
+    const element = document.querySelector(`[data-audit-field="${field.key}"]`);
+    if (!element || element.value === "") {
+      return;
+    }
+    const normalizedValue = element.value === "true";
+    flatFacts[field.key] = normalizedValue;
+    if (!groupedFacts[field.group]) {
+      groupedFacts[field.group] = {};
+    }
+    groupedFacts[field.group][field.key] = normalizedValue;
+  });
+  return { flatFacts, groupedFacts };
+}
+
+function resetAuditOptionalFields() {
+  AUDIT_SUPPLEMENT_FIELDS.forEach((field) => {
+    const element = document.querySelector(`[data-audit-field="${field.key}"]`);
+    if (element) {
+      element.value = "";
+    }
+  });
+  if (auditOptionalPanel) {
+    auditOptionalPanel.open = false;
+  }
+}
+
 function renderAuditPillList(container, values, emptyLabel) {
   if (!Array.isArray(values) || !values.length) {
     container.innerHTML = `<span class="audit-empty">${escapeHtml(emptyLabel)}</span>`;
@@ -539,6 +628,7 @@ function resetAuditResult() {
   auditResult = null;
   auditError = "";
   auditProjectText.value = "";
+  resetAuditOptionalFields();
   auditResultBox.hidden = true;
   auditDisplayResult.textContent = "";
   auditManualReview.hidden = true;
@@ -835,10 +925,15 @@ async function handleAuditSubmit() {
   setAuditStatus("正在审计...");
 
   try {
+    const { flatFacts } = collectAuditSupplementFacts();
+    const requestPayload = {
+      project_name: projectName,
+      ...flatFacts,
+    };
     const response = await fetch(`${API_BASE}/api/audit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project_name: projectName }),
+      body: JSON.stringify(requestPayload),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -1032,6 +1127,7 @@ document.querySelectorAll(".sort-trigger").forEach((button) => {
 updateFocusSortIndicators();
 focusSummary.textContent = "当前显示 0 / 0 条";
 resetExcelProgress();
+renderAuditOptionalFields();
 
 switchFeatureMode("single");
 resetSingleResult();

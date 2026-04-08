@@ -377,6 +377,83 @@ button.secondary {
   margin-top: 14px;
 }
 
+.audit-optional-panel {
+  margin-top: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: #f8fafc;
+  padding: 0 14px 14px;
+}
+
+.audit-optional-panel summary {
+  list-style: none;
+  cursor: pointer;
+  font-weight: 700;
+  color: #1e3a8a;
+  padding: 12px 2px;
+}
+
+.audit-optional-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.audit-optional-panel[open] summary {
+  border-bottom: 1px solid #dbe3f2;
+}
+
+.audit-optional-body {
+  padding-top: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.audit-optional-group {
+  display: grid;
+  gap: 8px;
+}
+
+.audit-optional-group h4 {
+  margin: 0;
+  font-size: 14px;
+  color: #334155;
+}
+
+.audit-optional-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.audit-optional-field {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+}
+
+.audit-optional-label {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.audit-optional-key {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.audit-optional-field select {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: #1e293b;
+  background: #fff;
+}
+
 .audit-result {
   margin-top: 18px;
   gap: 16px;
