@@ -143,6 +143,13 @@ h3 {
   margin: 0 auto;
 }
 
+.audit-card {
+  max-width: 920px;
+  margin: 0 auto 24px;
+  border-radius: 30px;
+  padding: 32px;
+}
+
 .card {
   background: white;
   border-radius: 24px;
@@ -355,6 +362,92 @@ button.secondary {
 .single-feature-actions {
   justify-content: center;
   margin-top: 14px;
+}
+
+.audit-card-head {
+  margin-bottom: 18px;
+}
+
+.audit-search-bar {
+  max-width: 100%;
+  margin: 0;
+}
+
+.audit-actions {
+  margin-top: 14px;
+}
+
+.audit-result {
+  margin-top: 18px;
+}
+
+.audit-summary-card {
+  padding: 18px 20px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fbff 100%);
+  border: 1px solid #dbeafe;
+}
+
+.audit-summary-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.audit-summary-label {
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.audit-summary-head strong {
+  font-size: 22px;
+  color: #0f172a;
+}
+
+.audit-manual-review {
+  margin-top: 14px;
+  display: inline-flex;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #fff1f2;
+  color: #be123c;
+  font-weight: 700;
+}
+
+.audit-list-block,
+.audit-pill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.audit-list-block {
+  flex-direction: column;
+}
+
+.audit-list-item {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: #fbfcff;
+  border: 1px solid #e5e7eb;
+  color: #334155;
+  line-height: 1.7;
+}
+
+.audit-list-item strong {
+  color: #0f172a;
+}
+
+.audit-empty {
+  color: #6b7280;
+}
+
+.audit-doc-meta {
+  color: #64748b;
+  font-size: 14px;
 }
 
 .upload-panel {

@@ -1,12 +1,15 @@
 const API_BASE = window.API_BASE || "http://127.0.0.1:8000";
 
 const projectText = document.getElementById("projectText");
+const auditProjectText = document.getElementById("auditProjectText");
 const singleModeBtn = document.getElementById("singleModeBtn");
 const excelModeBtn = document.getElementById("excelModeBtn");
 const singleFeaturePanel = document.getElementById("singleFeaturePanel");
 const excelFeaturePanel = document.getElementById("excelFeaturePanel");
 const resultBox = document.getElementById("resultBox");
+const auditResultBox = document.getElementById("auditResultBox");
 const singleStatus = document.getElementById("singleStatus");
+const auditStatus = document.getElementById("auditStatus");
 const excelStatus = document.getElementById("excelStatus");
 const excelFile = document.getElementById("excelFile");
 const excelFileName = document.getElementById("excelFileName");
@@ -40,6 +43,17 @@ const rCompositeReasonWrap = document.getElementById("rCompositeReasonWrap");
 const rCompositeReason = document.getElementById("rCompositeReason");
 const rCandidatesWrap = document.getElementById("rCandidatesWrap");
 const rCandidates = document.getElementById("rCandidates");
+const auditBtn = document.getElementById("auditBtn");
+const auditResetBtn = document.getElementById("auditResetBtn");
+const auditDisplayResult = document.getElementById("auditDisplayResult");
+const auditManualReview = document.getElementById("auditManualReview");
+const auditProjectName = document.getElementById("auditProjectName");
+const auditMappedObjects = document.getElementById("auditMappedObjects");
+const auditTags = document.getElementById("auditTags");
+const auditReasons = document.getElementById("auditReasons");
+const auditReasonCodes = document.getElementById("auditReasonCodes");
+const auditBasisDocuments = document.getElementById("auditBasisDocuments");
+const auditPath = document.getElementById("auditPath");
 
 let focusSamplesRaw = [];
 const focusSortState = {
@@ -47,6 +61,18 @@ const focusSortState = {
   direction: "asc",
 };
 let excelProcessingTimer = null;
+let isAuditLoading = false;
+let auditResult = null;
+let auditError = "";
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 function getMethodLabel(method) {
   if (method === "LLM 辅助分类" || method === "体系外默认分类") {
@@ -230,6 +256,10 @@ function setSingleStatus(message) {
   singleStatus.innerHTML = message;
 }
 
+function setAuditStatus(message) {
+  auditStatus.textContent = message;
+}
+
 function switchFeatureMode(mode) {
   const singleMode = mode === "single";
   singleFeaturePanel.hidden = !singleMode;
@@ -288,6 +318,100 @@ function resetSingleResult() {
   rCandidatesWrap.hidden = true;
   rCandidates.textContent = "";
   setSingleStatus(`后端地址：<code>${API_BASE}</code>`);
+}
+
+function setAuditLoadingState(loading) {
+  isAuditLoading = loading;
+  auditBtn.disabled = loading;
+  auditResetBtn.disabled = loading;
+}
+
+function formatMatchScore(score) {
+  return typeof score === "number" ? score.toFixed(2) : "-";
+}
+
+function renderAuditPillList(container, values, emptyLabel) {
+  if (!Array.isArray(values) || !values.length) {
+    container.innerHTML = `<span class="audit-empty">${escapeHtml(emptyLabel)}</span>`;
+    return;
+  }
+  container.innerHTML = values.map((value) => `<span class="pill">${escapeHtml(value)}</span>`).join("");
+}
+
+function renderAuditList(container, items, emptyLabel) {
+  if (!items.length) {
+    container.innerHTML = `<div class="audit-empty">${escapeHtml(emptyLabel)}</div>`;
+    return;
+  }
+  container.innerHTML = items.join("");
+}
+
+function renderMappedObjects(mappedObjects) {
+  const items = (Array.isArray(mappedObjects) ? mappedObjects : []).map(
+    (item) => `
+      <div class="audit-list-item">
+        <strong>${escapeHtml(item.full_path || "")}</strong>
+        <div class="audit-doc-meta">匹配分 ${escapeHtml(formatMatchScore(item.match_score))}</div>
+      </div>
+    `,
+  );
+  renderAuditList(auditMappedObjects, items, "未命中明确对象目录");
+}
+
+function renderReasons(reasons) {
+  const items = (Array.isArray(reasons) ? reasons : []).map(
+    (reason) => `<div class="audit-list-item">${escapeHtml(reason)}</div>`,
+  );
+  renderAuditList(auditReasons, items, "暂无明确原因说明");
+}
+
+function renderBasisDocuments(documents) {
+  const items = (Array.isArray(documents) ? documents : []).map((document) => {
+    const primary = document.display_name || document.title || "未命名依据";
+    const secondary = [document.title, document.article, document.section]
+      .filter((value) => value && value !== primary)
+      .join(" / ");
+    return `
+      <div class="audit-list-item">
+        <strong>${escapeHtml(primary)}</strong>
+        <div class="audit-doc-meta">${escapeHtml(secondary || "暂无条款定位信息")}</div>
+      </div>
+    `;
+  });
+  renderAuditList(auditBasisDocuments, items, "暂无明确法规依据展示");
+}
+
+function renderAuditResult(data) {
+  auditResult = data;
+  auditError = "";
+  auditResultBox.hidden = false;
+  auditDisplayResult.textContent = data.display_result || "-";
+  auditManualReview.hidden = data.manual_review_required !== true;
+  auditProjectName.textContent = data.project_name || "";
+  renderMappedObjects(data.mapped_objects);
+  renderAuditPillList(auditTags, data.normalized_tags, "暂无标签");
+  renderReasons(data.reasons);
+  renderAuditPillList(auditReasonCodes, data.reason_codes, "暂无原因码");
+  renderBasisDocuments(data.basis_documents);
+  renderAuditPillList(auditPath, data.audit_path, "暂无审计路径");
+}
+
+function resetAuditResult() {
+  auditResult = null;
+  auditError = "";
+  auditProjectText.value = "";
+  auditResultBox.hidden = true;
+  auditDisplayResult.textContent = "";
+  auditManualReview.hidden = true;
+  auditProjectName.textContent = "";
+  auditMappedObjects.innerHTML = "";
+  auditTags.innerHTML = "";
+  auditReasons.innerHTML = "";
+  auditReasonCodes.innerHTML = "";
+  auditBasisDocuments.innerHTML = "";
+  auditPath.innerHTML = "";
+  setAuditLoadingState(false);
+  setAuditStatus("输入工程描述后开始审计");
 }
 
 function renderMetrics(container, items) {
@@ -554,6 +678,45 @@ async function handleSingleClassify() {
   }
 }
 
+async function handleAuditSubmit() {
+  const projectName = auditProjectText.value.trim();
+  if (!projectName) {
+    auditError = "请先输入工程描述";
+    setAuditStatus(auditError);
+    return;
+  }
+  if (isAuditLoading) {
+    return;
+  }
+
+  setAuditLoadingState(true);
+  auditError = "";
+  auditResultBox.hidden = true;
+  setAuditStatus("正在审计...");
+
+  try {
+    const response = await fetch(`${API_BASE}/api/audit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project_name: projectName }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.detail || "审计失败");
+    }
+
+    renderAuditResult(data);
+    setAuditStatus("审计完成");
+  } catch (error) {
+    auditResult = null;
+    auditError = error.message || "审计失败";
+    auditResultBox.hidden = true;
+    setAuditStatus(`错误：${auditError}`);
+  } finally {
+    setAuditLoadingState(false);
+  }
+}
+
 async function handleExcelClassify() {
   if (!excelFile.files.length) {
     excelStatus.textContent = "请先选择 Excel 文件";
@@ -679,6 +842,8 @@ document.querySelectorAll(".example").forEach((element) => {
 
 document.getElementById("classifyBtn").addEventListener("click", handleSingleClassify);
 document.getElementById("clearBtn").addEventListener("click", resetSingleResult);
+auditBtn.addEventListener("click", handleAuditSubmit);
+auditResetBtn.addEventListener("click", resetAuditResult);
 document.getElementById("excelBtn").addEventListener("click", handleExcelClassify);
 document.getElementById("analyzeBtn").addEventListener("click", handleExcelAnalyze);
 singleModeBtn.addEventListener("click", () => switchFeatureMode("single"));
@@ -687,6 +852,12 @@ projectText.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
     handleSingleClassify();
+  }
+});
+auditProjectText.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    handleAuditSubmit();
   }
 });
 excelFile.addEventListener("change", () => {
@@ -724,3 +895,4 @@ resetExcelProgress();
 
 switchFeatureMode("single");
 resetSingleResult();
+resetAuditResult();

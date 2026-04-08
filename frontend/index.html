@@ -97,6 +97,61 @@
       </div>
     </div>
 
+    <div class="card audit-card">
+      <div class="feature-card-head audit-card-head">
+        <h2>维修资金审计</h2>
+        <p>输入一句工程描述，系统调用审计链路返回对象匹配、标签、审计结论与依据路径。</p>
+      </div>
+      <div class="search-bar audit-search-bar">
+        <span class="search-icon" aria-hidden="true">⌕</span>
+        <input
+          id="auditProjectText"
+          class="feature-input"
+          type="text"
+          placeholder="输入一句工程描述，例如：3号楼电梯曳引机维修"
+        />
+        <button id="auditBtn" class="search-submit" type="button">开始审计</button>
+      </div>
+      <div class="btns audit-actions">
+        <button class="secondary" id="auditResetBtn" type="button">重新开始</button>
+      </div>
+      <div class="result audit-result" id="auditResultBox" hidden>
+        <div class="audit-summary-card">
+          <div class="audit-summary-head">
+            <span class="audit-summary-label">审计结论</span>
+            <strong id="auditDisplayResult"></strong>
+          </div>
+          <div class="audit-manual-review" id="auditManualReview" hidden>建议人工复核</div>
+        </div>
+        <div class="kv"><strong>项目名称：</strong><span id="auditProjectName"></span></div>
+        <div class="kv">
+          <strong>匹配对象：</strong>
+          <div class="audit-list-block" id="auditMappedObjects"></div>
+        </div>
+        <div class="kv">
+          <strong>标签：</strong>
+          <div class="audit-pill-list" id="auditTags"></div>
+        </div>
+        <div class="kv">
+          <strong>原因说明：</strong>
+          <div class="audit-list-block" id="auditReasons"></div>
+        </div>
+        <div class="kv">
+          <strong>原因码：</strong>
+          <div class="audit-pill-list" id="auditReasonCodes"></div>
+        </div>
+        <div class="kv">
+          <strong>依据：</strong>
+          <div class="audit-list-block" id="auditBasisDocuments"></div>
+        </div>
+        <div class="kv">
+          <strong>审计路径：</strong>
+          <div class="audit-pill-list" id="auditPath"></div>
+        </div>
+      </div>
+      <div class="status" id="auditStatus">输入工程描述后开始审计</div>
+    </div>
+
     <div class="card analysis-card">
       <div class="analysis-head">
         <div class="analysis-title">
