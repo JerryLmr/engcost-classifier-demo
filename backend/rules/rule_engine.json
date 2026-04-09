@@ -1021,7 +1021,7 @@
       "then": {
         "result": "need_supplement",
         "reason_codes": ["MISSING_EMERGENCY_DOC"],
-        "message": "紧急维修缺少必要证明材料"
+        "message": "紧急维修证据材料不足，暂无法充分核验"
       },
       "source": {
         "source_type": "public_notice",
@@ -1036,6 +1036,7 @@
         "display_name": "黄浦区住宅小区紧急情况下使用维修流程图"
       },
       "audit_dimensions": ["document_completeness_audit"],
+      "top_level_effect": "advisory",
       "is_active": true
     },
 
@@ -1053,7 +1054,7 @@
       "then": {
         "result": "need_supplement",
         "reason_codes": ["MISSING_EMERGENCY_DOC"],
-        "message": "紧急维修缺少应急证明材料"
+        "message": "紧急维修缺少应急证明材料，暂无法充分核验"
       },
       "source": {
         "source_type": "public_notice",
@@ -1068,6 +1069,40 @@
         "display_name": "黄浦区住宅小区紧急情况下使用维修流程图"
       },
       "audit_dimensions": ["document_completeness_audit"],
+      "top_level_effect": "advisory",
+      "is_active": true
+    },
+
+    {
+      "rule_id": "EMG_003",
+      "name": "紧急维修后补流程未完成",
+      "stage": "EMERGENCY_CHECK",
+      "priority": 62,
+      "when": {
+        "all": [
+          { "field": "is_emergency", "op": "eq", "value": true },
+          { "field": "post_emergency_vote_required", "op": "eq", "value": true },
+          { "field": "post_emergency_vote_completed", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["MISSING_VOTE"],
+        "message": "应急维修后补流程未完成，建议人工复核"
+      },
+      "source": {
+        "source_type": "public_notice",
+        "title": "黄浦区住宅小区紧急情况下使用维修流程图",
+        "issuer": "黄浦区相关房管机构流程指引",
+        "document_no": null,
+        "article": null,
+        "section": "紧急维修备案与支取阶段",
+        "chapter": null,
+        "clause_label": null,
+        "public_access": true,
+        "display_name": "黄浦区住宅小区紧急情况下使用维修流程图"
+      },
+      "audit_dimensions": ["emergency_audit"],
       "is_active": true
     },
 
@@ -1085,7 +1120,7 @@
       "then": {
         "result": "need_supplement",
         "reason_codes": ["MISSING_BUDGET_REVIEW"],
-        "message": "金额达到审价门槛，需补充审价材料"
+        "message": "金额达到审价门槛，需补充审价材料后进一步核验"
       },
       "source": {
         "source_type": "public_policy",
@@ -1100,6 +1135,189 @@
         "display_name": "维修资金和公共收益管理基本制度—审价制度"
       },
       "audit_dimensions": ["process_audit", "amount_audit"],
+      "top_level_effect": "advisory",
+      "is_active": true
+    },
+
+    {
+      "rule_id": "TIMELINE_001",
+      "name": "表决时间早于申请时间",
+      "stage": "PROCESS_CHECK",
+      "priority": 74,
+      "when": {
+        "all": [
+          { "field": "vote_date", "op": "not_empty_or_null" },
+          { "field": "application_date", "op": "not_empty_or_null" },
+          { "field": "vote_date", "op": "lt", "value": "application_date" }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["INSUFFICIENT_INFO"],
+        "message": "时序存在明显逆序（表决早于申请），建议人工复核"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "时序合规规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "时序合规规则"
+      },
+      "audit_dimensions": ["timeline_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "TIMELINE_002",
+      "name": "公示时间早于表决时间",
+      "stage": "PROCESS_CHECK",
+      "priority": 75,
+      "when": {
+        "all": [
+          { "field": "announcement_date", "op": "not_empty_or_null" },
+          { "field": "vote_date", "op": "not_empty_or_null" },
+          { "field": "announcement_date", "op": "lt", "value": "vote_date" }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["INSUFFICIENT_INFO"],
+        "message": "时序存在明显逆序（公示早于表决），建议人工复核"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "时序合规规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "时序合规规则"
+      },
+      "audit_dimensions": ["timeline_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "TIMELINE_003",
+      "name": "关键时序信息不足",
+      "stage": "PROCESS_CHECK",
+      "priority": 76,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
+              { "field": "is_emergency", "op": "eq", "value": true }
+            ]
+          },
+          {
+            "any": [
+              { "field": "application_date", "op": "empty_or_null" },
+              { "field": "vote_date", "op": "empty_or_null" },
+              { "field": "announcement_date", "op": "empty_or_null" },
+              { "field": "contract_sign_date", "op": "empty_or_null" }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": [],
+        "message": "时序暂无法充分核验，需补充关键时间节点"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "时序合规规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "时序合规规则"
+      },
+      "audit_dimensions": ["timeline_audit"],
+      "top_level_effect": "advisory",
+      "is_active": true
+    },
+
+    {
+      "rule_id": "AMOUNT_001",
+      "name": "金额偏差超阈值",
+      "stage": "PROCESS_CHECK",
+      "priority": 77,
+      "when": {
+        "all": [
+          { "field": "amount_deviation_ratio", "op": "gte", "value": 0.3 }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["INSUFFICIENT_INFO"],
+        "message": "金额偏差超过阈值，建议人工复核"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "金额合理性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "金额合理性规则"
+      },
+      "audit_dimensions": ["amount_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "AMOUNT_002",
+      "name": "金额依据不足",
+      "stage": "PROCESS_CHECK",
+      "priority": 78,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+          {
+            "any": [
+              { "field": "amount", "op": "empty_or_null" },
+              { "field": "budget_amount", "op": "empty_or_null" },
+              { "field": "approved_amount", "op": "empty_or_null" }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": [],
+        "message": "金额依据不足，建议补充预算、审批及金额依据材料"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "金额合理性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "金额合理性规则"
+      },
+      "audit_dimensions": ["amount_audit"],
+      "top_level_effect": "advisory",
       "is_active": true
     },
 

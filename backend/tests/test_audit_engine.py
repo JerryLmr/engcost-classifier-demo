@@ -420,6 +420,77 @@ class AuditServiceTestCase(unittest.TestCase):
             ["MISSING_EMERGENCY_DOC"],
         )
 
+    def test_timeline_reverse_order_is_strong_signal_manual_review(self):
+        data = self._audit(
+            {
+                "project_name": "屋面防水维修",
+                "application_date": "2026-01-10",
+                "vote_date": "2026-01-08",
+            }
+        )
+        self.assertEqual(data["overall_result"], "manual_review")
+        self.assertIn("时序存在明显逆序", data["reasons"][0])
+        self.assertEqual(data["sub_audits"]["timeline_audit"]["result"], "manual_review")
+
+    def test_timeline_missing_dates_is_advisory_gap_not_strong_block(self):
+        data = self._audit(
+            {
+                "project_name": "屋面防水维修",
+            }
+        )
+        self.assertEqual(data["sub_audits"]["timeline_audit"]["result"], "need_supplement")
+        self.assertIn("时序暂无法充分核验", data["sub_audits"]["timeline_audit"]["reasons"][0])
+        self.assertIn("application_date", data["sub_audits"]["timeline_audit"]["missing_items"])
+
+    def test_amount_large_deviation_is_strong_signal_manual_review(self):
+        data = self._audit(
+            {
+                "project_name": "3号楼电梯曳引机维修",
+                "amount_deviation_ratio": 0.45,
+            }
+        )
+        self.assertEqual(data["overall_result"], "manual_review")
+        self.assertIn("金额偏差超过阈值", data["reasons"][0])
+        self.assertEqual(data["sub_audits"]["amount_audit"]["result"], "manual_review")
+
+    def test_amount_basis_gap_is_advisory_with_missing_items(self):
+        data = self._audit(
+            {
+                "project_name": "3号楼电梯曳引机维修",
+                "budget_amount": 100000,
+            }
+        )
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertEqual(data["sub_audits"]["amount_audit"]["result"], "need_supplement")
+        self.assertIn("金额依据不足", data["sub_audits"]["amount_audit"]["reasons"][0])
+        self.assertIn("amount", data["sub_audits"]["amount_audit"]["missing_items"])
+        self.assertIn("approved_amount", data["sub_audits"]["amount_audit"]["missing_items"])
+
+    def test_emergency_post_process_incomplete_is_strong_signal_manual_review(self):
+        data = self._audit(
+            {
+                "project_name": "排水管爆裂维修",
+                "is_emergency": True,
+                "post_emergency_vote_required": True,
+                "post_emergency_vote_completed": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "manual_review")
+        self.assertIn("应急维修后补流程未完成", data["reasons"][0])
+        self.assertEqual(data["sub_audits"]["emergency_audit"]["result"], "manual_review")
+
+    def test_strong_signal_overrides_weak_first_hit_order(self):
+        data = self._audit(
+            {
+                "project_name": "屋面防水维修",
+                "application_date": "2026-01-10",
+                "vote_date": "2026-01-08",
+                "has_vote": False,
+            }
+        )
+        self.assertEqual(data["overall_result"], "manual_review")
+        self.assertNotIn("MISSING_VOTE", data["reason_codes"])
+
     def test_structured_input_groups_are_merged_into_rule_context(self):
         data = self._audit(
             {
@@ -488,6 +559,7 @@ class AuditServiceTestCase(unittest.TestCase):
         self.assertIn("mapping", data["audit_path"])
         self.assertNotIn("direct_reject", data["audit_path"])
         self.assertNotEqual(data["overall_result"], "compliant")
+        self.assertTrue(any("正向维修对象" in reason for reason in data["reasons"]))
 
     def test_high_freq_window_glass_goes_to_need_supplement_route(self):
         data = self._audit_pipeline({"project_name": "2号楼楼道窗户玻璃维修"})
@@ -531,6 +603,10 @@ class AuditServiceTestCase(unittest.TestCase):
     def test_mapping_keeps_cross_domain_for_real_multi_project_input(self):
         data = self._audit_pipeline({"project_name": "电梯主机维修，空调主机维修"})
         self.assertIn("MULTI_PROJECT", data["reason_codes"])
+
+    def test_high_freq_no_match_path_is_explicit(self):
+        data = self._audit_pipeline({"project_name": "小区设施优化工程"})
+        self.assertIn("high_freq_no_match", data["audit_path"])
 
 
 if __name__ == "__main__":

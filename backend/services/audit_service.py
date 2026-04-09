@@ -1,5 +1,6 @@
 import json
 from functools import lru_cache
+from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from core.config import resolve_rule_file
@@ -16,6 +17,12 @@ FLOW_BY_STAGE = {
     "PROCESS_CHECK": "normal_flow",
 }
 CONFIDENCE_ORDER = {"low": 1, "medium": 2, "high": 3}
+RESULT_PRECEDENCE = {
+    "non_compliant": 4,
+    "manual_review": 3,
+    "need_supplement": 2,
+    "compliant": 1,
+}
 STRUCTURED_INPUT_GROUPS = (
     "scope_facts",
     "process_facts",
@@ -290,6 +297,20 @@ def _evaluate_condition(condition: Dict[str, Any], context: Dict[str, Any]) -> b
         return current == value
     if op == "gte":
         return current is not None and current >= value
+    if op == "lt":
+        if current is None:
+            return False
+        candidate_value = value
+        if isinstance(value, str) and value in context:
+            candidate_value = context.get(value)
+        left = _normalize_comparable_value(current)
+        right = _normalize_comparable_value(candidate_value)
+        if left is None or right is None:
+            return False
+        try:
+            return left < right
+        except TypeError:
+            return False
     if op == "empty_after_strip_terms":
         if current is None:
             return True
@@ -299,6 +320,22 @@ def _evaluate_condition(condition: Dict[str, Any], context: Dict[str, Any]) -> b
         reduced = reduced.strip(condition.get("strip_chars", "-_/"))
         return len(reduced) == 0
     raise ValueError(f"不支持的规则操作: {op}")
+
+
+def _normalize_comparable_value(value: Any) -> Optional[Any]:
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text).date()
+        except ValueError:
+            return text
+    return None
 
 
 def _collect_missing_items(condition: Dict[str, Any], context: Dict[str, Any]) -> List[str]:
@@ -492,6 +529,40 @@ def _build_sub_audits(context: Dict[str, Any], ordered_rules: Sequence[Dict[str,
     return sub_audits
 
 
+def _get_top_level_effect(rule: Dict[str, Any]) -> str:
+    return rule.get("top_level_effect", "direct")
+
+
+def _collect_terminal_signal(
+    rule: Dict[str, Any],
+    context: Dict[str, Any],
+    then: Dict[str, Any],
+) -> Dict[str, Any]:
+    reason_codes = list(then.get("reason_codes", []))
+    message = then.get("message")
+    return {
+        "rule": rule,
+        "result": then["result"],
+        "reason_codes": reason_codes,
+        "reasons": [message] if message else [],
+        "missing_items": _collect_missing_items(rule["when"], context),
+        "effect": _get_top_level_effect(rule),
+    }
+
+
+def _pick_best_signal(signals: Sequence[Dict[str, Any]], stage_order: Dict[str, int]) -> Optional[Dict[str, Any]]:
+    if not signals:
+        return None
+    return min(
+        signals,
+        key=lambda item: (
+            stage_order.get(item["rule"]["stage"], 999),
+            -RESULT_PRECEDENCE.get(item["result"], 0),
+            item["rule"].get("priority", 9999),
+        ),
+    )
+
+
 def audit_project(request_payload: Dict[str, Any], mapping_result: Dict[str, Any]) -> Dict[str, Any]:
     normalized_payload = _merge_structured_request(request_payload)
     project_name = normalized_payload.get("project_name", "")
@@ -500,10 +571,12 @@ def audit_project(request_payload: Dict[str, Any], mapping_result: Dict[str, Any
 
     engine = load_rule_engine()
     ordered_rules = _get_ordered_active_rules(engine)
+    stage_order = {stage: index for index, stage in enumerate(engine["decision_flow"])}
     sub_audits = _build_sub_audits(context, ordered_rules, engine)
 
     audit_path: List[str] = ["mapping", "tag_mapping"]
     triggered_rules: List[Dict[str, Any]] = []
+    terminal_signals: List[Dict[str, Any]] = []
 
     for rule in ordered_rules:
         if not _evaluate_condition(rule["when"], context):
@@ -516,26 +589,61 @@ def audit_project(request_payload: Dict[str, Any], mapping_result: Dict[str, Any
             if route_to == "NORMAL_SCOPE_CHECK":
                 _append_unique(audit_path, ["normal_flow"])
             continue
+        terminal_signals.append(_collect_terminal_signal(rule, context, then))
 
-        result = then["result"]
-        reason_codes = list(then.get("reason_codes", []))
-        reasons = [then["message"]]
-        missing_items = _collect_missing_items(rule["when"], context)
-        return {
-            "project_name": project_name,
-            "mapped_objects": mapping_result.get("mapped_objects", []),
-            "matched_object_ids": mapping_result.get("matched_object_ids", []),
-            "normalized_tags": context["normalized_tags"],
-            "overall_result": result,
-            "display_result": _build_display_result(result),
-            "reason_codes": reason_codes,
-            "reasons": reasons,
-            "basis_documents": _build_basis_documents(triggered_rules),
-            "missing_items": missing_items,
-            "audit_path": audit_path,
-            "manual_review_required": result == "manual_review",
-            "sub_audits": sub_audits,
-            "document_extraction_targets": engine.get("document_extraction_targets", {}),
-        }
+    direct_non_fallback = [
+        item
+        for item in terminal_signals
+        if item["effect"] == "direct" and item["rule"]["stage"] != "OUTPUT_BUILD"
+    ]
+    advisory_signals = [item for item in terminal_signals if item["effect"] == "advisory"]
+    fallback_direct = [
+        item
+        for item in terminal_signals
+        if item["effect"] == "direct" and item["rule"]["stage"] == "OUTPUT_BUILD"
+    ]
 
-    raise ValueError("rule_engine 未命中任何终态规则，请检查规则配置")
+    selected = _pick_best_signal(direct_non_fallback, stage_order)
+    if selected is None:
+        selected = _pick_best_signal(advisory_signals, stage_order)
+    if selected is None:
+        selected = _pick_best_signal(fallback_direct, stage_order)
+    if selected is None:
+        raise ValueError("rule_engine 未命中任何终态规则，请检查规则配置")
+
+    result = selected["result"]
+    reason_codes = list(selected["reason_codes"])
+    reasons = list(selected["reasons"])
+    missing_items = list(selected["missing_items"])
+
+    if selected["rule"]["stage"] == "OUTPUT_BUILD" and advisory_signals:
+        reason_codes = []
+        reasons = []
+        missing_items = []
+        for item in advisory_signals:
+            _append_unique(reason_codes, item["reason_codes"])
+            _append_unique(reasons, item["reasons"])
+            _append_unique(missing_items, item["missing_items"])
+        if not reasons:
+            reasons = list(selected["reasons"])
+
+    manual_review_required = result == "manual_review"
+    if not manual_review_required and advisory_signals:
+        manual_review_required = True
+
+    return {
+        "project_name": project_name,
+        "mapped_objects": mapping_result.get("mapped_objects", []),
+        "matched_object_ids": mapping_result.get("matched_object_ids", []),
+        "normalized_tags": context["normalized_tags"],
+        "overall_result": result,
+        "display_result": _build_display_result(result),
+        "reason_codes": reason_codes,
+        "reasons": reasons,
+        "basis_documents": _build_basis_documents(triggered_rules),
+        "missing_items": missing_items,
+        "audit_path": audit_path,
+        "manual_review_required": manual_review_required,
+        "sub_audits": sub_audits,
+        "document_extraction_targets": engine.get("document_extraction_targets", {}),
+    }
