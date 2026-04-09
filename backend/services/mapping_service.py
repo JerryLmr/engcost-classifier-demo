@@ -1,10 +1,9 @@
 import json
 import re
 from functools import lru_cache
-from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Set, Tuple
 
-from core.config import RULE_CONFIG_DIR
+from core.config import resolve_rule_file
 
 
 GENERIC_TOKENS = {
@@ -26,6 +25,24 @@ GENERIC_TOKENS = {
 }
 DERIVED_SUFFIXES = ("系统", "设施", "设备", "事项", "对象", "工程", "点")
 SPLIT_PATTERN = re.compile(r"[，,、；;|\n]+")
+DEFAULT_GENERIC_LEVEL3_TERMS = {"主机", "系统", "设备", "装置", "设施", "工程", "项目"}
+DEFAULT_DOMAIN_INTENT_RULES = [
+    {
+        "intent_keyword": "电梯",
+        "preferred_level1": "电梯",
+        "preferred_bonus": 4,
+        "non_preferred_penalty": 1,
+    }
+]
+DEFAULT_SEMANTIC_BRIDGES = [
+    {
+        "all_keywords": ("电梯", "主机"),
+        "target_level1": "电梯",
+        "target_level3": "曳引机",
+        "bonus": 6,
+    }
+]
+DEFAULT_SINGLE_DOMAIN_FOCUS = {"enabled": True, "min_score_gap": 3}
 
 
 def normalize_text(text: str) -> str:
@@ -105,9 +122,25 @@ def _build_item_keywords(item: Dict[str, object]) -> Set[str]:
 
 @lru_cache(maxsize=1)
 def load_object_catalog() -> Dict[str, object]:
-    path = Path(RULE_CONFIG_DIR) / "object_catalog.json"
+    path = resolve_rule_file("repairable_object_catalog.json", fallback_filenames=("object_catalog.json",))
     with path.open("r", encoding="utf-8") as fp:
         return json.load(fp)
+
+
+@lru_cache(maxsize=1)
+def load_mapping_scoring_config() -> Dict[str, Any]:
+    try:
+        path = resolve_rule_file("mapping_scoring.json")
+        with path.open("r", encoding="utf-8") as fp:
+            config = json.load(fp)
+    except FileNotFoundError:
+        config = {}
+    return {
+        "generic_level3_terms": set(config.get("generic_level3_terms", list(DEFAULT_GENERIC_LEVEL3_TERMS))),
+        "domain_intent_rules": list(config.get("domain_intent_rules", DEFAULT_DOMAIN_INTENT_RULES)),
+        "semantic_bridges": list(config.get("semantic_bridges", DEFAULT_SEMANTIC_BRIDGES)),
+        "single_domain_focus": dict(config.get("single_domain_focus", DEFAULT_SINGLE_DOMAIN_FOCUS)),
+    }
 
 
 @lru_cache(maxsize=1)
@@ -132,24 +165,48 @@ def _score_item(text: str, item: Dict[str, object]) -> Tuple[int, Set[str]]:
     score = 0
     hits: Set[str] = set()
     simplified_text = simplify_text(text)
+    scoring_config = load_mapping_scoring_config()
+    level1 = str(item["level_1"])
+    level2 = str(item["level_2"])
+    level3 = str(item["level_3"])
 
     if str(item["full_path"]) in text:
         score += 8
         hits.add(str(item["full_path"]))
-    if str(item["level_3"]) in text:
-        score += 6
-        hits.add(str(item["level_3"]))
-    if str(item["level_2"]) in text:
+    if level3 in text:
+        # Generic terminal nodes (e.g. "主机") are too broad for direct high weighting.
+        score += 2 if level3 in scoring_config["generic_level3_terms"] else 6
+        hits.add(level3)
+    if level2 in text:
         score += 5
-        hits.add(str(item["level_2"]))
-    if str(item["level_1"]) in text:
+        hits.add(level2)
+    if level1 in text:
         score += 3
-        hits.add(str(item["level_1"]))
+        hits.add(level1)
 
     for keyword in item["_keywords"]:
         if keyword in text or simplify_text(keyword) in simplified_text:
             score += 2 if len(keyword) >= 4 else 1
             hits.add(keyword)
+
+    for rule in scoring_config["domain_intent_rules"]:
+        intent_keyword = str(rule.get("intent_keyword", ""))
+        preferred_level1 = str(rule.get("preferred_level1", ""))
+        preferred_bonus = int(rule.get("preferred_bonus", 0))
+        non_preferred_penalty = int(rule.get("non_preferred_penalty", 0))
+        if intent_keyword and intent_keyword in text:
+            if level1 == preferred_level1:
+                score += preferred_bonus
+            else:
+                score -= non_preferred_penalty
+
+    for bridge in scoring_config["semantic_bridges"]:
+        all_keywords = tuple(bridge.get("all_keywords", []))
+        target_level1 = str(bridge.get("target_level1", ""))
+        target_level3 = str(bridge.get("target_level3", ""))
+        bonus = int(bridge.get("bonus", 0))
+        if all(keyword in text for keyword in all_keywords) and level1 == target_level1 and level3 == target_level3:
+            score += bonus
 
     return score, hits
 
@@ -163,6 +220,25 @@ def _to_mapped_object(item: Dict[str, object], score: int) -> Dict[str, object]:
         "match_method": "keyword_path",
         "_level_1": str(item["level_1"]),
     }
+
+
+def _focus_single_domain_if_needed(
+    normalized_part: str,
+    candidates: List[Tuple[int, int, Dict[str, object]]],
+) -> List[Tuple[int, int, Dict[str, object]]]:
+    config = load_mapping_scoring_config()["single_domain_focus"]
+    if not config.get("enabled", True):
+        return candidates
+    if len(candidates) < 2:
+        return candidates
+    top_score, _top_hits, top_item = candidates[0]
+    second_score = candidates[1][0]
+    top_domain = str(top_item["level_1"])
+    min_score_gap = int(config.get("min_score_gap", 3))
+    # Only suppress pseudo cross-domain in single-segment input when one domain is clearly dominant.
+    if top_score - second_score >= min_score_gap and top_domain in normalized_part:
+        return [candidate for candidate in candidates if str(candidate[2]["level_1"]) == top_domain]
+    return candidates
 
 
 def map_project_name(project_name: str, limit: int = 5) -> Dict[str, object]:
@@ -181,6 +257,8 @@ def map_project_name(project_name: str, limit: int = 5) -> Dict[str, object]:
             candidates.append((score, len(hits), item))
 
         candidates.sort(key=lambda entry: (entry[0], entry[1], -int(entry[2]["id"])), reverse=True)
+        if not split_projects:
+            candidates = _focus_single_domain_if_needed(normalized_part, candidates)
         for score, _hit_count, item in candidates[:2]:
             mapped = _to_mapped_object(item, score)
             existing = aggregated.get(mapped["id"])

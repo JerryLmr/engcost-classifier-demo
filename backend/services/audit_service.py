@@ -1,9 +1,8 @@
 import json
 from functools import lru_cache
-from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from core.config import RULE_CONFIG_DIR
+from core.config import resolve_rule_file
 
 
 FLOW_BY_STAGE = {
@@ -54,21 +53,21 @@ def simplify_text(text: str) -> str:
 
 @lru_cache(maxsize=1)
 def load_rule_mapping() -> Dict[str, Any]:
-    path = Path(RULE_CONFIG_DIR) / "rule_mapping.json"
+    path = resolve_rule_file("rule_mapping.json")
     with path.open("r", encoding="utf-8") as fp:
         return json.load(fp)
 
 
 @lru_cache(maxsize=1)
 def load_rule_engine() -> Dict[str, Any]:
-    path = Path(RULE_CONFIG_DIR) / "rule_engine.json"
+    path = resolve_rule_file("rule_engine.json")
     with path.open("r", encoding="utf-8") as fp:
         return json.load(fp)
 
 
 @lru_cache(maxsize=1)
 def load_output_schema() -> Dict[str, Any]:
-    path = Path(RULE_CONFIG_DIR) / "output_schema.json"
+    path = resolve_rule_file("output_schema.json")
     with path.open("r", encoding="utf-8") as fp:
         return json.load(fp)
 
@@ -214,6 +213,11 @@ def build_normalized_tags(project_name: str, mapping_result: Dict[str, Any]) -> 
 
 def _merge_structured_request(request_payload: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(request_payload)
+    facts_value = request_payload.get("facts")
+    if isinstance(facts_value, dict):
+        for field, value in facts_value.items():
+            if merged.get(field) is None:
+                merged[field] = value
     for group_name in STRUCTURED_INPUT_GROUPS:
         group_value = request_payload.get(group_name)
         if not isinstance(group_value, dict):

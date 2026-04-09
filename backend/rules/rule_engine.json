@@ -1,0 +1,1766 @@
+{
+  "version": "v1.1",
+  "engine_name": "maintenance_fund_audit_engine",
+  "updated_at": "2026-04-07",
+  "description": "维修资金审计规则引擎。标签层不直接出结果，规则引擎根据路径输出柔性结论：初步符合、疑似违规、需补充材料、建议人工复核。",
+
+  "result_policy": {
+    "internal_result_enum": [
+      "compliant",
+      "non_compliant",
+      "need_supplement",
+      "manual_review"
+    ],
+    "display_mapping": {
+      "compliant": "初步符合",
+      "non_compliant": "疑似违规",
+      "need_supplement": "需补充材料",
+      "manual_review": "建议人工复核"
+    }
+  },
+
+  "input_schema": {
+    "required_fields": [
+      "project_name"
+    ],
+    "optional_fields": [
+      "project_desc",
+      "matched_object_ids",
+      "normalized_tags",
+      "mapping_confidence",
+      "is_common_part",
+      "is_common_facility",
+      "is_emergency",
+      "is_out_of_warranty",
+      "amount",
+      "has_vote",
+      "has_announcement",
+      "has_budget_review",
+      "has_site_photos",
+      "has_rectification_notice",
+      "has_construction_plan",
+      "has_completion_report",
+      "has_invoice",
+      "is_public_window",
+      "location_detail",
+      "damage_description",
+      "repair_scope_description",
+      "repair_extent",
+      "is_property_service_scope",
+      "gray_case_evidence_complete",
+      "gray_case_type",
+      "is_function_restoration",
+      "is_upgrade",
+      "is_relocation",
+      "is_private_part",
+      "is_original_standard_restoration",
+      "is_function_improvement",
+      "is_capacity_expansion",
+      "vote_passed",
+      "announcement_completed",
+      "budget_review_required",
+      "has_contract",
+      "procurement_method",
+      "selected_vendor_count",
+      "has_damage_assessment",
+      "has_acceptance_record",
+      "has_settlement_report",
+      "has_payment_proof",
+      "has_owner_signature_sheet",
+      "has_emergency_proof",
+      "application_date",
+      "vote_date",
+      "announcement_date",
+      "budget_review_date",
+      "contract_sign_date",
+      "construction_start_date",
+      "construction_end_date",
+      "acceptance_date",
+      "invoice_date",
+      "payment_date",
+      "emergency_report_date",
+      "budget_amount",
+      "approved_amount",
+      "settlement_amount",
+      "invoice_amount",
+      "quoted_vendor_count",
+      "unit_price_reference_available",
+      "amount_deviation_ratio",
+      "emergency_reason",
+      "emergency_hazard_type",
+      "temporary_measure_taken",
+      "post_emergency_vote_required",
+      "post_emergency_vote_completed",
+      "damage_count",
+      "source_documents",
+      "extracted_document_fields",
+      "field_confidence_map",
+      "split_projects",
+      "catalog_domains"
+    ]
+  },
+
+  "decision_flow": [
+    "INPUT_CHECK",
+    "CATALOG_CHECK",
+    "TAG_ROUTING",
+    "EXCLUSION_CHECK",
+    "GRAY_CASE_ROUTING",
+    "GRAY_CASE_REVIEW_CHECK",
+    "EMERGENCY_CHECK",
+    "NORMAL_SCOPE_CHECK",
+    "PROCESS_CHECK",
+    "OUTPUT_BUILD"
+  ],
+
+  "reason_code_definitions": {
+    "IN_SCOPE_COMMON_PART": "属于共用部位维修",
+    "IN_SCOPE_COMMON_FACILITY": "属于共用设施设备维修",
+    "OUTSIDE_CATALOG": "未命中对象目录",
+    "INSUFFICIENT_INFO": "输入信息不足",
+    "MULTI_PROJECT": "输入中包含多个不同工程",
+    "CROSS_DOMAIN_PROJECT": "跨域复合工程",
+    "GREENING_MAINTENANCE": "属于绿化养护",
+    "CLEANING_SANITATION": "属于清洁卫生服务",
+    "INSPECTION_TESTING": "属于检测检查",
+    "NEW_CONSTRUCTION": "属于新增/加装/扩建",
+    "DAILY_SERVICE": "属于物业日常服务",
+    "GRAY_CASE_GENERAL": "一般灰区",
+    "GRAY_CASE_MINOR_REPAIR": "零星维修灰区",
+    "GRAY_CASE_UPGRADE_VS_REPAIR": "修复与升级边界不清",
+    "GRAY_CASE_CONTRACT_BOUNDARY": "物业维保边界不清",
+    "MISSING_GRAY_CASE_EVIDENCE": "灰区缺少关键补充材料",
+    "MISSING_VOTE": "缺少表决信息",
+    "MISSING_ANNOUNCEMENT": "缺少公示信息",
+    "MISSING_BUDGET_REVIEW": "缺少审价材料",
+    "MISSING_CONTRACT": "缺少施工合同",
+    "MISSING_INVOICE": "缺少发票",
+    "MISSING_SETTLEMENT_REPORT": "缺少结算材料",
+    "MISSING_PAYMENT_PROOF": "缺少付款凭证",
+    "MISSING_SITE_PHOTOS": "缺少现场照片",
+    "MISSING_RECTIFICATION_NOTICE": "缺少整改通知/鉴定材料",
+    "MISSING_COMPLETION_REPORT": "缺少完工/验收材料",
+    "MISSING_EMERGENCY_DOC": "缺少紧急维修证明材料",
+    "WITHIN_WARRANTY": "属于保修期内",
+    "OUTSIDE_SCOPE_PRIVATE_PART": "属于专有部分",
+    "OUTSIDE_SCOPE_UNKNOWN_OBJECT": "无法确认维修对象",
+    "PROPERTY_SERVICE_SCOPE": "属于物业服务合同维保范围"
+  },
+
+  "sub_audit_definitions": {
+    "scope_audit": {
+      "label": "使用范围审计",
+      "applicable_when": {
+        "all": [
+          { "field": "project_name", "op": "not_empty_or_null" }
+        ]
+      },
+      "required_fields": [
+        "is_common_part",
+        "is_common_facility",
+        "is_private_part",
+        "is_property_service_scope"
+      ],
+      "facts_used_fields": [
+        "normalized_tags",
+        "matched_object_ids",
+        "is_common_part",
+        "is_common_facility",
+        "is_private_part",
+        "is_property_service_scope",
+        "gray_case_type"
+      ],
+      "default_result": "need_supplement",
+      "default_message": "需补充使用范围相关事实",
+      "default_reason_codes": [],
+      "default_audit_path": ["scope_audit"]
+    },
+    "process_audit": {
+      "label": "流程合规审计",
+      "applicable_when": {
+        "any": [
+          { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+          { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
+          { "field": "is_emergency", "op": "eq", "value": true }
+        ]
+      },
+      "required_fields": [
+        "has_vote",
+        "has_announcement",
+        "has_budget_review",
+        "has_contract"
+      ],
+      "facts_used_fields": [
+        "normalized_tags",
+        "amount",
+        "is_emergency",
+        "has_vote",
+        "has_announcement",
+        "has_budget_review",
+        "has_contract"
+      ],
+      "default_result": "need_supplement",
+      "default_message": "建议补充表决、公示及审价等流程材料",
+      "default_reason_codes": [],
+      "default_audit_path": ["normal_flow", "process_audit"]
+    },
+    "document_completeness_audit": {
+      "label": "资料完整性审计",
+      "applicable_when": {
+        "any": [
+          { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+          { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
+          { "field": "is_emergency", "op": "eq", "value": true }
+        ]
+      },
+      "required_fields": [
+        "has_site_photos",
+        "has_rectification_notice",
+        "has_construction_plan",
+        "has_completion_report",
+        "has_invoice"
+      ],
+      "facts_used_fields": [
+        "gray_case_type",
+        "gray_case_evidence_complete",
+        "has_site_photos",
+        "has_rectification_notice",
+        "has_construction_plan",
+        "has_completion_report",
+        "has_invoice",
+        "has_damage_assessment"
+      ],
+      "default_result": "need_supplement",
+      "default_message": "需补充现场、施工、验收及票据等资料",
+      "default_reason_codes": [],
+      "default_audit_path": ["document_completeness_audit"]
+    },
+    "timeline_audit": {
+      "label": "时序合规审计",
+      "applicable_when": {
+        "any": [
+          { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+          { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
+          { "field": "is_emergency", "op": "eq", "value": true }
+        ]
+      },
+      "required_fields": [
+        "application_date",
+        "vote_date",
+        "announcement_date",
+        "contract_sign_date"
+      ],
+      "facts_used_fields": [
+        "is_emergency",
+        "application_date",
+        "vote_date",
+        "announcement_date",
+        "budget_review_date",
+        "contract_sign_date",
+        "construction_start_date",
+        "construction_end_date",
+        "acceptance_date",
+        "invoice_date",
+        "payment_date",
+        "emergency_report_date"
+      ],
+      "default_result": "need_supplement",
+      "default_message": "需补充关键流程时间节点信息",
+      "default_reason_codes": [],
+      "default_audit_path": ["timeline_audit"]
+    },
+    "amount_audit": {
+      "label": "金额合理性审计",
+      "applicable_when": {
+        "any": [
+          { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+          { "field": "amount", "op": "not_empty_or_null" }
+        ]
+      },
+      "required_fields": [
+        "amount",
+        "budget_amount",
+        "approved_amount"
+      ],
+      "facts_used_fields": [
+        "amount",
+        "budget_amount",
+        "approved_amount",
+        "settlement_amount",
+        "invoice_amount",
+        "quoted_vendor_count",
+        "unit_price_reference_available",
+        "amount_deviation_ratio",
+        "has_budget_review"
+      ],
+      "default_result": "need_supplement",
+      "default_message": "需补充金额、预算及审价相关信息",
+      "default_reason_codes": [],
+      "default_audit_path": ["amount_audit"]
+    },
+    "emergency_audit": {
+      "label": "应急维修审计",
+      "applicable_when": {
+        "all": [
+          { "field": "is_emergency", "op": "eq", "value": true }
+        ]
+      },
+      "required_fields": [
+        "emergency_reason",
+        "has_rectification_notice",
+        "has_site_photos",
+        "has_construction_plan"
+      ],
+      "facts_used_fields": [
+        "is_emergency",
+        "emergency_reason",
+        "emergency_hazard_type",
+        "temporary_measure_taken",
+        "has_rectification_notice",
+        "has_site_photos",
+        "has_construction_plan",
+        "post_emergency_vote_required",
+        "post_emergency_vote_completed"
+      ],
+      "default_result": "need_supplement",
+      "default_message": "需补充紧急维修证明及处置材料",
+      "default_reason_codes": [],
+      "default_audit_path": ["emergency_flow", "emergency_audit"]
+    }
+  },
+
+  "document_extraction_targets": {
+    "vote_documents": [
+      "has_vote",
+      "vote_date",
+      "vote_passed",
+      "owner_count_approved",
+      "owner_area_approved"
+    ],
+    "announcement_documents": [
+      "has_announcement",
+      "announcement_date",
+      "announcement_duration_days",
+      "announcement_completed"
+    ],
+    "budget_review_documents": [
+      "has_budget_review",
+      "budget_review_date",
+      "budget_amount",
+      "approved_amount",
+      "review_agency_name"
+    ],
+    "contract_documents": [
+      "has_contract",
+      "contract_sign_date",
+      "contract_amount",
+      "contract_vendor_name"
+    ],
+    "completion_documents": [
+      "has_completion_report",
+      "has_acceptance_record",
+      "construction_start_date",
+      "construction_end_date",
+      "acceptance_date"
+    ],
+    "invoice_and_settlement_documents": [
+      "has_invoice",
+      "invoice_date",
+      "invoice_amount",
+      "has_settlement_report",
+      "settlement_amount",
+      "has_payment_proof",
+      "payment_date"
+    ],
+    "emergency_documents": [
+      "is_emergency",
+      "emergency_reason",
+      "emergency_hazard_type",
+      "emergency_report_date",
+      "temporary_measure_taken",
+      "has_emergency_proof"
+    ],
+    "gray_case_evidence_documents": [
+      "has_site_photos",
+      "has_damage_assessment",
+      "damage_description",
+      "repair_extent",
+      "location_detail",
+      "damage_count",
+      "is_property_service_scope"
+    ]
+  },
+
+  "rules": [
+    {
+      "rule_id": "INPUT_001",
+      "name": "跨域复合工程输入识别",
+      "stage": "INPUT_CHECK",
+      "priority": 10,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "multi_project" },
+          { "field": "catalog_domains", "op": "length_gt", "value": 1 }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["MULTI_PROJECT", "CROSS_DOMAIN_PROJECT"],
+        "message": "输入包含多个不同对象域，建议拆分后分别审计"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "输入规范规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "系统输入规范规则"
+      },
+      "is_active": true
+    },
+
+    {
+      "rule_id": "INPUT_002",
+      "name": "多工程输入识别",
+      "stage": "INPUT_CHECK",
+      "priority": 11,
+      "when": {
+        "any": [
+          { "field": "normalized_tags", "op": "contains", "value": "multi_project" },
+          { "field": "split_projects", "op": "length_gt", "value": 1 }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["MULTI_PROJECT"],
+        "message": "输入包含多个不同类型工程，建议拆分后分别审计"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "输入规范规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "系统输入规范规则"
+      },
+      "is_active": true
+    },
+
+    {
+      "rule_id": "INPUT_003",
+      "name": "项目名称为空",
+      "stage": "INPUT_CHECK",
+      "priority": 20,
+      "when": {
+        "all": [
+          { "field": "project_name", "op": "empty_or_null" }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["INSUFFICIENT_INFO"],
+        "message": "缺少最基本的项目名称信息"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "输入规范规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "系统输入规范规则"
+      },
+      "is_active": true
+    },
+
+    {
+      "rule_id": "INPUT_004",
+      "name": "输入过于泛化",
+      "stage": "INPUT_CHECK",
+      "priority": 21,
+      "when": {
+        "all": [
+          {
+            "field": "project_name",
+            "op": "empty_after_strip_terms",
+            "terms": [
+              "工程",
+              "项目",
+              "维修",
+              "修缮",
+              "整修",
+              "改造",
+              "更新",
+              "维护",
+              "设施",
+              "系统",
+              "设备",
+              "小区",
+              "公共",
+              "区域",
+              "楼栋",
+              "楼道",
+              "单元"
+            ],
+            "strip_chars": "-_/"
+          }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["INSUFFICIENT_INFO"],
+        "message": "输入信息过于泛化，无法识别具体维修对象"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "输入规范规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "系统输入规范规则"
+      },
+      "is_active": true
+    },
+
+    {
+      "rule_id": "CATALOG_001",
+      "name": "目录外对象",
+      "stage": "CATALOG_CHECK",
+      "priority": 30,
+      "when": {
+        "all": [
+          { "field": "matched_object_ids", "op": "empty_array" },
+          { "field": "normalized_tags", "op": "contains", "value": "unknown" }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["OUTSIDE_CATALOG"],
+        "message": "未命中维修对象目录，进入一事一议"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "目录命中规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "目录命中规则"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "SCOPE_001",
+      "name": "明确属于专有部分",
+      "stage": "NORMAL_SCOPE_CHECK",
+      "priority": 54,
+      "when": {
+        "all": [
+          { "field": "is_private_part", "op": "eq", "value": true }
+        ]
+      },
+      "then": {
+        "result": "non_compliant",
+        "reason_codes": ["OUTSIDE_SCOPE_PRIVATE_PART"],
+        "message": "项目明确属于专有部分，不应使用维修资金"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "使用范围规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "使用范围规则"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "SCOPE_002",
+      "name": "明确属于物业维保范围",
+      "stage": "NORMAL_SCOPE_CHECK",
+      "priority": 55,
+      "when": {
+        "all": [
+          { "field": "is_property_service_scope", "op": "eq", "value": true }
+        ]
+      },
+      "then": {
+        "result": "non_compliant",
+        "reason_codes": ["PROPERTY_SERVICE_SCOPE"],
+        "message": "项目明确属于物业服务合同维保范围"
+      },
+      "source": {
+        "source_type": "public_standard",
+        "title": "住宅物业管理服务规范",
+        "issuer": "上海市市场监督管理局",
+        "document_no": "DB31/T 360—2020",
+        "article": null,
+        "section": "第9章",
+        "chapter": null,
+        "clause_label": null,
+        "public_access": true,
+        "display_name": "《住宅物业管理服务规范》（DB31/T 360—2020）第9章"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "SCOPE_003",
+      "name": "明确属于共用部位",
+      "stage": "NORMAL_SCOPE_CHECK",
+      "priority": 56,
+      "when": {
+        "all": [
+          { "field": "is_common_part", "op": "eq", "value": true }
+        ]
+      },
+      "then": {
+        "result": "continue",
+        "route_to": "PROCESS_CHECK",
+        "sub_audit_result": "compliant",
+        "reason_codes": ["IN_SCOPE_COMMON_PART"],
+        "message": "项目明确属于共用部位维修范围"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "使用范围规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "使用范围规则"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "SCOPE_004",
+      "name": "明确属于共用设施设备",
+      "stage": "NORMAL_SCOPE_CHECK",
+      "priority": 57,
+      "when": {
+        "all": [
+          { "field": "is_common_facility", "op": "eq", "value": true }
+        ]
+      },
+      "then": {
+        "result": "continue",
+        "route_to": "PROCESS_CHECK",
+        "sub_audit_result": "compliant",
+        "reason_codes": ["IN_SCOPE_COMMON_FACILITY"],
+        "message": "项目明确属于共用设施设备维修范围"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "使用范围规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "使用范围规则"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "SCOPE_005",
+      "name": "弱灰区补证后范围仍无法确认",
+      "stage": "NORMAL_SCOPE_CHECK",
+      "priority": 58,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
+          { "field": "gray_case_type", "op": "eq", "value": "weak" },
+          { "field": "gray_case_evidence_complete", "op": "eq", "value": true },
+          { "field": "is_common_part", "op": "empty_or_null" },
+          { "field": "is_common_facility", "op": "empty_or_null" },
+          { "field": "is_private_part", "op": "empty_or_null" },
+          { "field": "is_property_service_scope", "op": "empty_or_null" }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["OUTSIDE_SCOPE_UNKNOWN_OBJECT"],
+        "message": "弱灰区补证后仍无法确认使用范围边界"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "使用范围规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "使用范围规则"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "EXCLUSION_001",
+      "name": "绿化养护排除",
+      "stage": "EXCLUSION_CHECK",
+      "priority": 40,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "daily_greening" }
+        ]
+      },
+      "then": {
+        "result": "non_compliant",
+        "reason_codes": ["GREENING_MAINTENANCE", "DAILY_SERVICE"],
+        "message": "项目疑似属于绿化日常养护范围"
+      },
+      "source": {
+        "source_type": "public_standard",
+        "title": "住宅物业管理服务规范",
+        "issuer": "上海市市场监督管理局",
+        "document_no": "DB31/T 360—2020",
+        "article": null,
+        "section": "第8章",
+        "chapter": null,
+        "clause_label": null,
+        "public_access": true,
+        "display_name": "《住宅物业管理服务规范》（DB31/T 360—2020）第8章"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "EXCLUSION_002",
+      "name": "清洁卫生排除",
+      "stage": "EXCLUSION_CHECK",
+      "priority": 41,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "cleaning_sanitation" }
+        ]
+      },
+      "then": {
+        "result": "non_compliant",
+        "reason_codes": ["CLEANING_SANITATION", "DAILY_SERVICE"],
+        "message": "项目疑似属于清洁卫生服务范围"
+      },
+      "source": {
+        "source_type": "public_standard",
+        "title": "住宅物业管理服务规范",
+        "issuer": "上海市市场监督管理局",
+        "document_no": "DB31/T 360—2020",
+        "article": null,
+        "section": "第7章",
+        "chapter": null,
+        "clause_label": null,
+        "public_access": true,
+        "display_name": "《住宅物业管理服务规范》（DB31/T 360—2020）第7章"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "EXCLUSION_003",
+      "name": "检测检查排除",
+      "stage": "EXCLUSION_CHECK",
+      "priority": 42,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "inspection_testing" }
+        ]
+      },
+      "then": {
+        "result": "non_compliant",
+        "reason_codes": ["INSPECTION_TESTING"],
+        "message": "项目疑似属于检测、年检或试验类事项"
+      },
+      "source": {
+        "source_type": "public_standard",
+        "title": "住宅物业管理服务规范",
+        "issuer": "上海市市场监督管理局",
+        "document_no": "DB31/T 360—2020",
+        "article": null,
+        "section": "附录E 升降系统",
+        "chapter": null,
+        "clause_label": null,
+        "public_access": true,
+        "display_name": "《住宅物业管理服务规范》（DB31/T 360—2020）附录E 升降系统"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "EXCLUSION_004",
+      "name": "新增建设排除",
+      "stage": "EXCLUSION_CHECK",
+      "priority": 43,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "new_construction" }
+        ]
+      },
+      "then": {
+        "result": "non_compliant",
+        "reason_codes": ["NEW_CONSTRUCTION"],
+        "message": "项目疑似属于新增、加装或扩建事项"
+      },
+      "source": {
+        "source_type": "public_regulation",
+        "title": "住宅专项维修资金管理办法",
+        "issuer": "中华人民共和国建设部、中华人民共和国财政部",
+        "document_no": "第165号",
+        "article": "第二十五条",
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": true,
+        "display_name": "《住宅专项维修资金管理办法》（第165号）第二十五条"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "GRAY_001",
+      "name": "强灰区直接人工复核",
+      "stage": "GRAY_CASE_ROUTING",
+      "priority": 50,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
+          { "field": "gray_case_type", "op": "eq", "value": "strong" }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["GRAY_CASE_GENERAL"],
+        "message": "项目属于强灰区，建议人工复核"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "灰区分层规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "灰区分层规则"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "GRAY_002",
+      "name": "弱灰区缺少消解材料",
+      "stage": "GRAY_CASE_REVIEW_CHECK",
+      "priority": 51,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
+          { "field": "gray_case_type", "op": "eq", "value": "weak" },
+          {
+            "any": [
+              { "field": "gray_case_evidence_complete", "op": "empty_or_null" },
+              {
+                "field": "gray_case_evidence_complete",
+                "op": "eq",
+                "value": false
+              }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_GRAY_CASE_EVIDENCE"],
+        "message": "灰区对象缺少关键补充材料，需先补证"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "灰区补证规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "灰区补证规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "GRAY_003",
+      "name": "弱灰区仍属物业维保范围",
+      "stage": "GRAY_CASE_REVIEW_CHECK",
+      "priority": 52,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
+          { "field": "gray_case_type", "op": "eq", "value": "weak" },
+          { "field": "gray_case_evidence_complete", "op": "eq", "value": true },
+          { "field": "is_property_service_scope", "op": "eq", "value": true }
+        ]
+      },
+      "then": {
+        "result": "non_compliant",
+        "reason_codes": ["PROPERTY_SERVICE_SCOPE"],
+        "message": "补充材料显示项目疑似属于物业服务维保范围"
+      },
+      "source": {
+        "source_type": "public_standard",
+        "title": "住宅物业管理服务规范",
+        "issuer": "上海市市场监督管理局",
+        "document_no": "DB31/T 360—2020",
+        "article": null,
+        "section": "第9章",
+        "chapter": null,
+        "clause_label": null,
+        "public_access": true,
+        "display_name": "《住宅物业管理服务规范》（DB31/T 360—2020）第9章"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "GRAY_004",
+      "name": "弱灰区转入正常流程",
+      "stage": "GRAY_CASE_REVIEW_CHECK",
+      "priority": 53,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
+          { "field": "gray_case_type", "op": "eq", "value": "weak" },
+          { "field": "gray_case_evidence_complete", "op": "eq", "value": true },
+          { "field": "is_property_service_scope", "op": "eq", "value": false },
+          { "field": "is_common_part", "op": "eq", "value": true }
+        ]
+      },
+      "then": {
+        "result": "continue",
+        "route_to": "NORMAL_SCOPE_CHECK",
+        "reason_codes": [],
+        "message": "弱灰区补证充分，转入正常审计流程"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "灰区转正常流程规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "灰区转正常流程规则"
+      },
+      "is_active": true
+    },
+
+    {
+      "rule_id": "EMG_001",
+      "name": "紧急维修缺证明材料",
+      "stage": "EMERGENCY_CHECK",
+      "priority": 60,
+      "when": {
+        "all": [
+          { "field": "is_emergency", "op": "eq", "value": true },
+          {
+            "any": [
+              { "field": "has_rectification_notice", "op": "eq", "value": false },
+              { "field": "has_site_photos", "op": "eq", "value": false },
+              { "field": "has_construction_plan", "op": "eq", "value": false }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_EMERGENCY_DOC"],
+        "message": "紧急维修缺少必要证明材料"
+      },
+      "source": {
+        "source_type": "public_notice",
+        "title": "黄浦区住宅小区紧急情况下使用维修流程图",
+        "issuer": "黄浦区相关房管机构流程指引",
+        "document_no": null,
+        "article": null,
+        "section": "紧急维修备案与支取阶段",
+        "chapter": null,
+        "clause_label": null,
+        "public_access": true,
+        "display_name": "黄浦区住宅小区紧急情况下使用维修流程图"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "EMG_002",
+      "name": "紧急维修缺应急证明材料",
+      "stage": "EMERGENCY_CHECK",
+      "priority": 61,
+      "when": {
+        "all": [
+          { "field": "is_emergency", "op": "eq", "value": true },
+          { "field": "has_emergency_proof", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_EMERGENCY_DOC"],
+        "message": "紧急维修缺少应急证明材料"
+      },
+      "source": {
+        "source_type": "public_notice",
+        "title": "黄浦区住宅小区紧急情况下使用维修流程图",
+        "issuer": "黄浦区相关房管机构流程指引",
+        "document_no": null,
+        "article": null,
+        "section": "紧急维修备案与支取阶段",
+        "chapter": null,
+        "clause_label": null,
+        "public_access": true,
+        "display_name": "黄浦区住宅小区紧急情况下使用维修流程图"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "NORMAL_001",
+      "name": "金额达到审价门槛但缺审价材料",
+      "stage": "PROCESS_CHECK",
+      "priority": 70,
+      "when": {
+        "all": [
+          { "field": "amount", "op": "gte", "value": 50000 },
+          { "field": "has_budget_review", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_BUDGET_REVIEW"],
+        "message": "金额达到审价门槛，需补充审价材料"
+      },
+      "source": {
+        "source_type": "public_policy",
+        "title": "维修资金和公共收益管理基本制度",
+        "issuer": "上海市物业相关公开政策解读",
+        "document_no": null,
+        "article": null,
+        "section": "审价制度",
+        "chapter": null,
+        "clause_label": null,
+        "public_access": true,
+        "display_name": "维修资金和公共收益管理基本制度—审价制度"
+      },
+      "audit_dimensions": ["process_audit", "amount_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "NORMAL_002",
+      "name": "缺表决",
+      "stage": "PROCESS_CHECK",
+      "priority": 71,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+          { "field": "has_vote", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_VOTE"],
+        "message": "缺少业主表决信息"
+      },
+      "source": {
+        "source_type": "public_regulation",
+        "title": "住宅专项维修资金管理办法",
+        "issuer": "中华人民共和国建设部、中华人民共和国财政部",
+        "document_no": "第165号",
+        "article": "第二十二条",
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": true,
+        "display_name": "《住宅专项维修资金管理办法》（第165号）第二十二条"
+      },
+      "audit_dimensions": ["process_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "NORMAL_003",
+      "name": "缺公示",
+      "stage": "PROCESS_CHECK",
+      "priority": 72,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+          { "field": "has_announcement", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_ANNOUNCEMENT"],
+        "message": "缺少公示信息"
+      },
+      "source": {
+        "source_type": "public_policy",
+        "title": "维修资金和公共收益管理基本制度",
+        "issuer": "上海市物业相关公开政策解读",
+        "document_no": null,
+        "article": null,
+        "section": "公示制度",
+        "chapter": null,
+        "clause_label": null,
+        "public_access": true,
+        "display_name": "维修资金和公共收益管理基本制度—公示制度"
+      },
+      "audit_dimensions": ["process_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "NORMAL_004",
+      "name": "缺施工合同",
+      "stage": "PROCESS_CHECK",
+      "priority": 73,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "gray_case_type", "op": "eq", "value": "weak" }
+            ]
+          },
+          { "field": "has_contract", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_CONTRACT"],
+        "message": "缺少施工合同材料"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "流程补件规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "流程补件规则"
+      },
+      "audit_dimensions": ["process_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "NORMAL_999",
+      "name": "正常维修默认补件提示",
+      "stage": "PROCESS_CHECK",
+      "priority": 999,
+      "when": {
+        "any": [
+          {
+            "all": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "is_emergency", "op": "not_eq", "value": true }
+            ]
+          },
+          {
+            "all": [
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
+              { "field": "gray_case_type", "op": "eq", "value": "weak" },
+              { "field": "gray_case_evidence_complete", "op": "eq", "value": true },
+              { "field": "is_property_service_scope", "op": "is_false" },
+              { "field": "is_common_part", "op": "eq", "value": true }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": [],
+        "message": "建议补充表决、公示及审价等流程材料"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "正常维修流程补件规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "正常维修流程补件规则"
+      },
+      "audit_dimensions": ["process_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_001",
+      "name": "缺完工报告及验收记录",
+      "stage": "PROCESS_CHECK",
+      "priority": 81,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" }
+            ]
+          },
+          { "field": "has_completion_report", "op": "eq", "value": false },
+          { "field": "has_acceptance_record", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_COMPLETION_REPORT"],
+        "message": "缺少完工报告及验收记录"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "资料完整性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "资料完整性规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_002",
+      "name": "票据链三项均缺失",
+      "stage": "PROCESS_CHECK",
+      "priority": 82,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" }
+            ]
+          },
+          { "field": "has_invoice", "op": "eq", "value": false },
+          { "field": "has_settlement_report", "op": "eq", "value": false },
+          { "field": "has_payment_proof", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_INVOICE", "MISSING_SETTLEMENT_REPORT", "MISSING_PAYMENT_PROOF"],
+        "message": "票据链关键材料不完整"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "资料完整性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "资料完整性规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_003",
+      "name": "缺发票和结算材料",
+      "stage": "PROCESS_CHECK",
+      "priority": 83,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" }
+            ]
+          },
+          { "field": "has_invoice", "op": "eq", "value": false },
+          { "field": "has_settlement_report", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_INVOICE", "MISSING_SETTLEMENT_REPORT"],
+        "message": "票据链关键材料不完整"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "资料完整性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "资料完整性规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_004",
+      "name": "缺结算材料和付款凭证",
+      "stage": "PROCESS_CHECK",
+      "priority": 84,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" }
+            ]
+          },
+          { "field": "has_settlement_report", "op": "eq", "value": false },
+          { "field": "has_payment_proof", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_SETTLEMENT_REPORT", "MISSING_PAYMENT_PROOF"],
+        "message": "票据链关键材料不完整"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "资料完整性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "资料完整性规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_005",
+      "name": "缺发票和付款凭证",
+      "stage": "PROCESS_CHECK",
+      "priority": 85,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" }
+            ]
+          },
+          { "field": "has_invoice", "op": "eq", "value": false },
+          { "field": "has_payment_proof", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_INVOICE", "MISSING_PAYMENT_PROOF"],
+        "message": "票据链关键材料不完整"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "资料完整性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "资料完整性规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_006",
+      "name": "灰区缺损坏评估材料",
+      "stage": "PROCESS_CHECK",
+      "priority": 86,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "gray_case" },
+          { "field": "has_damage_assessment", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_GRAY_CASE_EVIDENCE"],
+        "message": "灰区对象缺少损坏评估等关键证据"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "灰区补证规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "灰区补证规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_007",
+      "name": "缺验收记录",
+      "stage": "PROCESS_CHECK",
+      "priority": 87,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" }
+            ]
+          },
+          { "field": "has_acceptance_record", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_COMPLETION_REPORT"],
+        "message": "缺少验收记录"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "资料完整性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "资料完整性规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_008",
+      "name": "缺完工报告",
+      "stage": "PROCESS_CHECK",
+      "priority": 88,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" }
+            ]
+          },
+          { "field": "has_completion_report", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_COMPLETION_REPORT"],
+        "message": "缺少完工报告"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "资料完整性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "资料完整性规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_009",
+      "name": "缺发票材料",
+      "stage": "PROCESS_CHECK",
+      "priority": 89,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" }
+            ]
+          },
+          { "field": "has_invoice", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_INVOICE"],
+        "message": "缺少发票材料"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "资料完整性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "资料完整性规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_010",
+      "name": "缺结算材料",
+      "stage": "PROCESS_CHECK",
+      "priority": 90,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" }
+            ]
+          },
+          { "field": "has_settlement_report", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_SETTLEMENT_REPORT"],
+        "message": "缺少结算材料"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "资料完整性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "资料完整性规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_011",
+      "name": "缺付款凭证",
+      "stage": "PROCESS_CHECK",
+      "priority": 91,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" }
+            ]
+          },
+          { "field": "has_payment_proof", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_PAYMENT_PROOF"],
+        "message": "缺少付款凭证"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "资料完整性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "资料完整性规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_012",
+      "name": "缺现场照片",
+      "stage": "PROCESS_CHECK",
+      "priority": 92,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" }
+            ]
+          },
+          { "field": "is_emergency", "op": "not_eq", "value": true },
+          { "field": "has_site_photos", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_SITE_PHOTOS"],
+        "message": "缺少现场照片"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "资料完整性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "资料完整性规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "DOC_013",
+      "name": "缺整改通知或鉴定材料",
+      "stage": "PROCESS_CHECK",
+      "priority": 93,
+      "when": {
+        "all": [
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+              { "field": "normalized_tags", "op": "contains", "value": "gray_case" }
+            ]
+          },
+          { "field": "is_emergency", "op": "not_eq", "value": true },
+          { "field": "has_rectification_notice", "op": "eq", "value": false }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": ["MISSING_RECTIFICATION_NOTICE"],
+        "message": "缺少整改通知或鉴定材料"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "资料完整性规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "资料完整性规则"
+      },
+      "audit_dimensions": ["document_completeness_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "OUTPUT_001",
+      "name": "未命中明确结论规则时默认补充材料",
+      "stage": "OUTPUT_BUILD",
+      "priority": 999,
+      "when": {
+        "all": [
+          { "field": "project_name", "op": "not_empty_or_null" }
+        ]
+      },
+      "then": {
+        "result": "need_supplement",
+        "reason_codes": [],
+        "message": "当前未命中明确结论规则，需补充进一步审计材料"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "输出兜底规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "输出兜底规则"
+      },
+      "is_active": true
+    }
+  ]
+}

@@ -1,0 +1,2801 @@
+{
+  "version": "2025_temp_v1",
+  "catalog_name": "维修对象类型目录",
+  "catalog_stage": "暂行版",
+  "updated_at": "2026-04-02",
+  "total_records": 349,
+  "items": [
+    {
+      "id": 1,
+      "level_1": "小区道路",
+      "level_2": "道路路面",
+      "level_3": "混凝土路面",
+      "full_path": "小区道路/道路路面/混凝土路面",
+      "status": "active"
+    },
+    {
+      "id": 2,
+      "level_1": "小区道路",
+      "level_2": "道路路面",
+      "level_3": "沥青路面",
+      "full_path": "小区道路/道路路面/沥青路面",
+      "status": "active"
+    },
+    {
+      "id": 3,
+      "level_1": "小区道路",
+      "level_2": "道路路面",
+      "level_3": "车行旁步行道",
+      "full_path": "小区道路/道路路面/车行旁步行道",
+      "status": "active"
+    },
+    {
+      "id": 4,
+      "level_1": "小区道路",
+      "level_2": "路沿石",
+      "level_3": "路沿石",
+      "full_path": "小区道路/路沿石/路沿石",
+      "status": "active"
+    },
+    {
+      "id": 5,
+      "level_1": "小区道路",
+      "level_2": "台阶楼梯",
+      "level_3": "踏步",
+      "full_path": "小区道路/台阶楼梯/踏步",
+      "status": "active"
+    },
+    {
+      "id": 6,
+      "level_1": "小区道路",
+      "level_2": "台阶楼梯",
+      "level_3": "台阶、楼梯",
+      "full_path": "小区道路/台阶楼梯/台阶、楼梯",
+      "status": "active"
+    },
+    {
+      "id": 7,
+      "level_1": "小区道路",
+      "level_2": "无障碍设施",
+      "level_3": "盲道、盲文标志、轮椅坡道、栏杆",
+      "full_path": "小区道路/无障碍设施/盲道、盲文标志、轮椅坡道、栏杆",
+      "status": "active"
+    },
+    {
+      "id": 8,
+      "level_1": "小区道路",
+      "level_2": "景观步道",
+      "level_3": "木制步道",
+      "full_path": "小区道路/景观步道/木制步道",
+      "status": "active"
+    },
+    {
+      "id": 9,
+      "level_1": "小区道路",
+      "level_2": "景观步道",
+      "level_3": "鹅卵石步道",
+      "full_path": "小区道路/景观步道/鹅卵石步道",
+      "status": "active"
+    },
+    {
+      "id": 10,
+      "level_1": "小区道路",
+      "level_2": "景观步道",
+      "level_3": "硬质铺地",
+      "full_path": "小区道路/景观步道/硬质铺地",
+      "status": "active"
+    },
+    {
+      "id": 11,
+      "level_1": "小区道路",
+      "level_2": "景观步道",
+      "level_3": "道路垫层",
+      "full_path": "小区道路/景观步道/道路垫层",
+      "status": "active"
+    },
+    {
+      "id": 12,
+      "level_1": "机动车停车库（位）",
+      "level_2": "地上机动车停车位",
+      "level_3": "地坪",
+      "full_path": "机动车停车库（位）/地上机动车停车位/地坪",
+      "status": "active"
+    },
+    {
+      "id": 13,
+      "level_1": "机动车停车库（位）",
+      "level_2": "地下机动车停车库",
+      "level_3": "车库地坪",
+      "full_path": "机动车停车库（位）/地下机动车停车库/车库地坪",
+      "status": "active"
+    },
+    {
+      "id": 14,
+      "level_1": "机动车停车库（位）",
+      "level_2": "立体停车",
+      "level_3": "电气系统",
+      "full_path": "机动车停车库（位）/立体停车/电气系统",
+      "status": "active"
+    },
+    {
+      "id": 15,
+      "level_1": "机动车停车库（位）",
+      "level_2": "立体停车",
+      "level_3": "机械设备",
+      "full_path": "机动车停车库（位）/立体停车/机械设备",
+      "status": "active"
+    },
+    {
+      "id": 16,
+      "level_1": "机动车停车库（位）",
+      "level_2": "立体停车",
+      "level_3": "液压系统",
+      "full_path": "机动车停车库（位）/立体停车/液压系统",
+      "status": "active"
+    },
+    {
+      "id": 17,
+      "level_1": "机动车停车库（位）",
+      "level_2": "立体停车",
+      "level_3": "金属架构",
+      "full_path": "机动车停车库（位）/立体停车/金属架构",
+      "status": "active"
+    },
+    {
+      "id": 18,
+      "level_1": "机动车停车库（位）",
+      "level_2": "新能源车位充电桩",
+      "level_3": "新能源车位充电桩",
+      "full_path": "机动车停车库（位）/新能源车位充电桩/新能源车位充电桩",
+      "status": "active"
+    },
+    {
+      "id": 19,
+      "level_1": "非机动车车库（棚）",
+      "level_2": "非机动车车库（棚）",
+      "level_3": "雨棚",
+      "full_path": "非机动车车库（棚）/非机动车车库（棚）/雨棚",
+      "status": "active"
+    },
+    {
+      "id": 20,
+      "level_1": "非机动车车库（棚）",
+      "level_2": "非机动车车库（棚）",
+      "level_3": "平顶",
+      "full_path": "非机动车车库（棚）/非机动车车库（棚）/平顶",
+      "status": "active"
+    },
+    {
+      "id": 21,
+      "level_1": "非机动车车库（棚）",
+      "level_2": "非机动车车库（棚）",
+      "level_3": "非机动车库（棚）地面",
+      "full_path": "非机动车车库（棚）/非机动车车库（棚）/非机动车库（棚）地面",
+      "status": "active"
+    },
+    {
+      "id": 22,
+      "level_1": "非机动车车库（棚）",
+      "level_2": "非机动车车库（棚）",
+      "level_3": "非机动车库（棚）内墙",
+      "full_path": "非机动车车库（棚）/非机动车车库（棚）/非机动车库（棚）内墙",
+      "status": "active"
+    },
+    {
+      "id": 23,
+      "level_1": "非机动车车库（棚）",
+      "level_2": "非机动车车库（棚）",
+      "level_3": "非机动车库（棚）外墙",
+      "full_path": "非机动车车库（棚）/非机动车车库（棚）/非机动车库（棚）外墙",
+      "status": "active"
+    },
+    {
+      "id": 24,
+      "level_1": "非机动车车库（棚）",
+      "level_2": "非机动车车库（棚）",
+      "level_3": "非机动车库（棚）屋面",
+      "full_path": "非机动车车库（棚）/非机动车车库（棚）/非机动车库（棚）屋面",
+      "status": "active"
+    },
+    {
+      "id": 25,
+      "level_1": "非机动车车库（棚）",
+      "level_2": "非机动车车库（棚）",
+      "level_3": "非机动车库（棚）门窗",
+      "full_path": "非机动车车库（棚）/非机动车车库（棚）/非机动车库（棚）门窗",
+      "status": "active"
+    },
+    {
+      "id": 26,
+      "level_1": "非机动车车库（棚）",
+      "level_2": "非机动车车库设施",
+      "level_3": "非机动车充电桩",
+      "full_path": "非机动车车库（棚）/非机动车车库设施/非机动车充电桩",
+      "status": "active"
+    },
+    {
+      "id": 27,
+      "level_1": "非机动车车库（棚）",
+      "level_2": "非机动车车库设施",
+      "level_3": "非机动车停车架",
+      "full_path": "非机动车车库（棚）/非机动车车库设施/非机动车停车架",
+      "status": "active"
+    },
+    {
+      "id": 28,
+      "level_1": "非机动车车库（棚）",
+      "level_2": "非机动车车库设施",
+      "level_3": "非机动车库（棚）照明",
+      "full_path": "非机动车车库（棚）/非机动车车库设施/非机动车库（棚）照明",
+      "status": "active"
+    },
+    {
+      "id": 29,
+      "level_1": "交通附属设施",
+      "level_2": "减速带",
+      "level_3": "减速带",
+      "full_path": "交通附属设施/减速带/减速带",
+      "status": "active"
+    },
+    {
+      "id": 30,
+      "level_1": "交通附属设施",
+      "level_2": "路障设施",
+      "level_3": "小区路障",
+      "full_path": "交通附属设施/路障设施/小区路障",
+      "status": "active"
+    },
+    {
+      "id": 31,
+      "level_1": "交通附属设施",
+      "level_2": "停车位车档",
+      "level_3": "车位车档",
+      "full_path": "交通附属设施/停车位车档/车位车档",
+      "status": "active"
+    },
+    {
+      "id": 32,
+      "level_1": "交通附属设施",
+      "level_2": "交通指示标识",
+      "level_3": "交通指示牌",
+      "full_path": "交通附属设施/交通指示标识/交通指示牌",
+      "status": "active"
+    },
+    {
+      "id": 33,
+      "level_1": "交通附属设施",
+      "level_2": "反光镜",
+      "level_3": "反光镜",
+      "full_path": "交通附属设施/反光镜/反光镜",
+      "status": "active"
+    },
+    {
+      "id": 34,
+      "level_1": "小区公共照明",
+      "level_2": "道路照明",
+      "level_3": "时间控制器",
+      "full_path": "小区公共照明/道路照明/时间控制器",
+      "status": "active"
+    },
+    {
+      "id": 35,
+      "level_1": "小区公共照明",
+      "level_2": "道路照明",
+      "level_3": "路灯结构",
+      "full_path": "小区公共照明/道路照明/路灯结构",
+      "status": "active"
+    },
+    {
+      "id": 36,
+      "level_1": "小区公共照明",
+      "level_2": "道路照明",
+      "level_3": "路灯、补光灯",
+      "full_path": "小区公共照明/道路照明/路灯、补光灯",
+      "status": "active"
+    },
+    {
+      "id": 37,
+      "level_1": "小区公共照明",
+      "level_2": "景观照明",
+      "level_3": "开关",
+      "full_path": "小区公共照明/景观照明/开关",
+      "status": "active"
+    },
+    {
+      "id": 38,
+      "level_1": "小区公共照明",
+      "level_2": "景观照明",
+      "level_3": "景观灯",
+      "full_path": "小区公共照明/景观照明/景观灯",
+      "status": "active"
+    },
+    {
+      "id": 39,
+      "level_1": "小区公共照明",
+      "level_2": "景观照明",
+      "level_3": "景观灯线路",
+      "full_path": "小区公共照明/景观照明/景观灯线路",
+      "status": "active"
+    },
+    {
+      "id": 40,
+      "level_1": "公共景观绿化",
+      "level_2": "绿化",
+      "level_3": "草坪",
+      "full_path": "公共景观绿化/绿化/草坪",
+      "status": "active"
+    },
+    {
+      "id": 41,
+      "level_1": "公共景观绿化",
+      "level_2": "绿化",
+      "level_3": "小区花坛",
+      "full_path": "公共景观绿化/绿化/小区花坛",
+      "status": "active"
+    },
+    {
+      "id": 42,
+      "level_1": "公共景观绿化",
+      "level_2": "绿化",
+      "level_3": "小区灌木",
+      "full_path": "公共景观绿化/绿化/小区灌木",
+      "status": "active"
+    },
+    {
+      "id": 43,
+      "level_1": "公共景观绿化",
+      "level_2": "绿化",
+      "level_3": "大型乔木",
+      "full_path": "公共景观绿化/绿化/大型乔木",
+      "status": "active"
+    },
+    {
+      "id": 44,
+      "level_1": "公共景观绿化",
+      "level_2": "水域",
+      "level_3": "水域水泵",
+      "full_path": "公共景观绿化/水域/水域水泵",
+      "status": "active"
+    },
+    {
+      "id": 45,
+      "level_1": "公共景观绿化",
+      "level_2": "水域",
+      "level_3": "水域覆盖区域设施",
+      "full_path": "公共景观绿化/水域/水域覆盖区域设施",
+      "status": "active"
+    },
+    {
+      "id": 46,
+      "level_1": "公共景观绿化",
+      "level_2": "景观小品",
+      "level_3": "景观桥",
+      "full_path": "公共景观绿化/景观小品/景观桥",
+      "status": "active"
+    },
+    {
+      "id": 47,
+      "level_1": "公共景观绿化",
+      "level_2": "景观小品",
+      "level_3": "景观小品",
+      "full_path": "公共景观绿化/景观小品/景观小品",
+      "status": "active"
+    },
+    {
+      "id": 48,
+      "level_1": "公共景观绿化",
+      "level_2": "互动设施",
+      "level_3": "音乐喷泉",
+      "full_path": "公共景观绿化/互动设施/音乐喷泉",
+      "status": "active"
+    },
+    {
+      "id": 49,
+      "level_1": "公共景观绿化",
+      "level_2": "互动设施",
+      "level_3": "户外音响",
+      "full_path": "公共景观绿化/互动设施/户外音响",
+      "status": "active"
+    },
+    {
+      "id": 50,
+      "level_1": "公共景观绿化",
+      "level_2": "灭害装置",
+      "level_3": "灭害装置",
+      "full_path": "公共景观绿化/灭害装置/灭害装置",
+      "status": "active"
+    },
+    {
+      "id": 51,
+      "level_1": "健身、游乐设施",
+      "level_2": "儿童乐园",
+      "level_3": "儿童乐园场地",
+      "full_path": "健身、游乐设施/儿童乐园/儿童乐园场地",
+      "status": "active"
+    },
+    {
+      "id": 52,
+      "level_1": "健身、游乐设施",
+      "level_2": "儿童乐园",
+      "level_3": "儿童乐园设施",
+      "full_path": "健身、游乐设施/儿童乐园/儿童乐园设施",
+      "status": "active"
+    },
+    {
+      "id": 53,
+      "level_1": "健身、游乐设施",
+      "level_2": "健身设施",
+      "level_3": "健身步道",
+      "full_path": "健身、游乐设施/健身设施/健身步道",
+      "status": "active"
+    },
+    {
+      "id": 54,
+      "level_1": "健身、游乐设施",
+      "level_2": "健身设施",
+      "level_3": "健身场地",
+      "full_path": "健身、游乐设施/健身设施/健身场地",
+      "status": "active"
+    },
+    {
+      "id": 55,
+      "level_1": "健身、游乐设施",
+      "level_2": "健身设施",
+      "level_3": "健身器材",
+      "full_path": "健身、游乐设施/健身设施/健身器材",
+      "status": "active"
+    },
+    {
+      "id": 56,
+      "level_1": "健身、游乐设施",
+      "level_2": "游泳池",
+      "level_3": "游泳池场地",
+      "full_path": "健身、游乐设施/游泳池/游泳池场地",
+      "status": "active"
+    },
+    {
+      "id": 57,
+      "level_1": "健身、游乐设施",
+      "level_2": "游泳池",
+      "level_3": "游泳池设备",
+      "full_path": "健身、游乐设施/游泳池/游泳池设备",
+      "status": "active"
+    },
+    {
+      "id": 58,
+      "level_1": "小区宣传、标识",
+      "level_2": "安全指示牌",
+      "level_3": "安全指示牌设施",
+      "full_path": "小区宣传、标识/安全指示牌/安全指示牌设施",
+      "status": "active"
+    },
+    {
+      "id": 59,
+      "level_1": "小区宣传、标识",
+      "level_2": "标识",
+      "level_3": "小区标志",
+      "full_path": "小区宣传、标识/标识/小区标志",
+      "status": "active"
+    },
+    {
+      "id": 60,
+      "level_1": "小区宣传、标识",
+      "level_2": "宣传栏、电子屏",
+      "level_3": "宣传栏、电子屏",
+      "full_path": "小区宣传、标识/宣传栏、电子屏/宣传栏、电子屏",
+      "status": "active"
+    },
+    {
+      "id": 61,
+      "level_1": "小区宣传、标识",
+      "level_2": "广告栏",
+      "level_3": "广告栏",
+      "full_path": "小区宣传、标识/广告栏/广告栏",
+      "status": "active"
+    },
+    {
+      "id": 62,
+      "level_1": "小区宣传、标识",
+      "level_2": "小区铭牌",
+      "level_3": "小区铭牌",
+      "full_path": "小区宣传、标识/小区铭牌/小区铭牌",
+      "status": "active"
+    },
+    {
+      "id": 63,
+      "level_1": "公共用房",
+      "level_2": "室内活动室",
+      "level_3": "室内活动室",
+      "full_path": "公共用房/室内活动室/室内活动室",
+      "status": "active"
+    },
+    {
+      "id": 64,
+      "level_1": "公共用房",
+      "level_2": "门卫室、保安亭",
+      "level_3": "门卫室、保安亭",
+      "full_path": "公共用房/门卫室、保安亭/门卫室、保安亭",
+      "status": "active"
+    },
+    {
+      "id": 65,
+      "level_1": "公共用房",
+      "level_2": "库房、储藏间",
+      "level_3": "库房、储藏间",
+      "full_path": "公共用房/库房、储藏间/库房、储藏间",
+      "status": "active"
+    },
+    {
+      "id": 66,
+      "level_1": "公共用房",
+      "level_2": "业主委员会办公室、物业用房",
+      "level_3": "业委会办公室/物业用房",
+      "full_path": "公共用房/业主委员会办公室、物业用房/业委会办公室/物业用房",
+      "status": "active"
+    },
+    {
+      "id": 67,
+      "level_1": "公共用房",
+      "level_2": "设备用房、附属用房",
+      "level_3": "水泵房",
+      "full_path": "公共用房/设备用房、附属用房/水泵房",
+      "status": "active"
+    },
+    {
+      "id": 68,
+      "level_1": "公共用房",
+      "level_2": "设备用房、附属用房",
+      "level_3": "设备间",
+      "full_path": "公共用房/设备用房、附属用房/设备间",
+      "status": "active"
+    },
+    {
+      "id": 69,
+      "level_1": "公共用房",
+      "level_2": "设备用房、附属用房",
+      "level_3": "电梯机房",
+      "full_path": "公共用房/设备用房、附属用房/电梯机房",
+      "status": "active"
+    },
+    {
+      "id": 70,
+      "level_1": "公共用房",
+      "level_2": "公共晾衣架",
+      "level_3": "公共衣架",
+      "full_path": "公共用房/公共晾衣架/公共衣架",
+      "status": "active"
+    },
+    {
+      "id": 71,
+      "level_1": "公共用房",
+      "level_2": "廊道",
+      "level_3": "廊道",
+      "full_path": "公共用房/廊道/廊道",
+      "status": "active"
+    },
+    {
+      "id": 72,
+      "level_1": "公共用房",
+      "level_2": "垃圾房",
+      "level_3": "垃圾箱房",
+      "full_path": "公共用房/垃圾房/垃圾箱房",
+      "status": "active"
+    },
+    {
+      "id": 73,
+      "level_1": "公共用房",
+      "level_2": "垃圾房",
+      "level_3": "垃圾房设施",
+      "full_path": "公共用房/垃圾房/垃圾房设施",
+      "status": "active"
+    },
+    {
+      "id": 74,
+      "level_1": "公共用房",
+      "level_2": "公共洗手间",
+      "level_3": "卫生间",
+      "full_path": "公共用房/公共洗手间/卫生间",
+      "status": "active"
+    },
+    {
+      "id": 75,
+      "level_1": "公共用房",
+      "level_2": "公共洗手间",
+      "level_3": "卫生间设施",
+      "full_path": "公共用房/公共洗手间/卫生间设施",
+      "status": "active"
+    },
+    {
+      "id": 76,
+      "level_1": "供电设施",
+      "level_2": "电表",
+      "level_3": "电表",
+      "full_path": "供电设施/电表/电表",
+      "status": "active"
+    },
+    {
+      "id": 77,
+      "level_1": "供电设施",
+      "level_2": "控制开关",
+      "level_3": "控制开关",
+      "full_path": "供电设施/控制开关/控制开关",
+      "status": "active"
+    },
+    {
+      "id": 78,
+      "level_1": "供电设施",
+      "level_2": "楼层配电箱",
+      "level_3": "配电箱",
+      "full_path": "供电设施/楼层配电箱/配电箱",
+      "status": "active"
+    },
+    {
+      "id": 79,
+      "level_1": "供电设施",
+      "level_2": "配电干线",
+      "level_3": "配电干线",
+      "full_path": "供电设施/配电干线/配电干线",
+      "status": "active"
+    },
+    {
+      "id": 80,
+      "level_1": "供电设施",
+      "level_2": "备用电源",
+      "level_3": "备用电源",
+      "full_path": "供电设施/备用电源/备用电源",
+      "status": "active"
+    },
+    {
+      "id": 81,
+      "level_1": "强电",
+      "level_2": "变压器",
+      "level_3": "变压器零部件",
+      "full_path": "强电/变压器/变压器零部件",
+      "status": "active"
+    },
+    {
+      "id": 82,
+      "level_1": "强电",
+      "level_2": "变压器",
+      "level_3": "变压器柜体",
+      "full_path": "强电/变压器/变压器柜体",
+      "status": "active"
+    },
+    {
+      "id": 83,
+      "level_1": "强电",
+      "level_2": "低压柜",
+      "level_3": "元器件",
+      "full_path": "强电/低压柜/元器件",
+      "status": "active"
+    },
+    {
+      "id": 84,
+      "level_1": "强电",
+      "level_2": "低压柜",
+      "level_3": "断路器、开关",
+      "full_path": "强电/低压柜/断路器、开关",
+      "status": "active"
+    },
+    {
+      "id": 85,
+      "level_1": "强电",
+      "level_2": "低压柜",
+      "level_3": "配各类箱体",
+      "full_path": "强电/低压柜/配各类箱体",
+      "status": "active"
+    },
+    {
+      "id": 86,
+      "level_1": "强电",
+      "level_2": "低压柜",
+      "level_3": "电源",
+      "full_path": "强电/低压柜/电源",
+      "status": "active"
+    },
+    {
+      "id": 87,
+      "level_1": "强电",
+      "level_2": "低压柜",
+      "level_3": "各类柜体",
+      "full_path": "强电/低压柜/各类柜体",
+      "status": "active"
+    },
+    {
+      "id": 88,
+      "level_1": "强电",
+      "level_2": "高压柜",
+      "level_3": "元器件",
+      "full_path": "强电/高压柜/元器件",
+      "status": "active"
+    },
+    {
+      "id": 89,
+      "level_1": "强电",
+      "level_2": "高压柜",
+      "level_3": "操纵机构",
+      "full_path": "强电/高压柜/操纵机构",
+      "status": "active"
+    },
+    {
+      "id": 90,
+      "level_1": "强电",
+      "level_2": "高压柜",
+      "level_3": "开关",
+      "full_path": "强电/高压柜/开关",
+      "status": "active"
+    },
+    {
+      "id": 91,
+      "level_1": "强电",
+      "level_2": "高压柜",
+      "level_3": "仪表",
+      "full_path": "强电/高压柜/仪表",
+      "status": "active"
+    },
+    {
+      "id": 92,
+      "level_1": "强电",
+      "level_2": "高压柜",
+      "level_3": "柜体",
+      "full_path": "强电/高压柜/柜体",
+      "status": "active"
+    },
+    {
+      "id": 93,
+      "level_1": "强电",
+      "level_2": "高压柜",
+      "level_3": "手车",
+      "full_path": "强电/高压柜/手车",
+      "status": "active"
+    },
+    {
+      "id": 94,
+      "level_1": "强电",
+      "level_2": "高压柜",
+      "level_3": "配电",
+      "full_path": "强电/高压柜/配电",
+      "status": "active"
+    },
+    {
+      "id": 95,
+      "level_1": "供水系统",
+      "level_2": "水池、水箱",
+      "level_3": "浮球阀",
+      "full_path": "供水系统/水池、水箱/浮球阀",
+      "status": "active"
+    },
+    {
+      "id": 96,
+      "level_1": "供水系统",
+      "level_2": "水池、水箱",
+      "level_3": "理阀",
+      "full_path": "供水系统/水池、水箱/理阀",
+      "status": "active"
+    },
+    {
+      "id": 97,
+      "level_1": "供水系统",
+      "level_2": "水池、水箱",
+      "level_3": "水池",
+      "full_path": "供水系统/水池、水箱/水池",
+      "status": "active"
+    },
+    {
+      "id": 98,
+      "level_1": "供水系统",
+      "level_2": "水池、水箱",
+      "level_3": "水箱",
+      "full_path": "供水系统/水池、水箱/水箱",
+      "status": "active"
+    },
+    {
+      "id": 99,
+      "level_1": "供水系统",
+      "level_2": "水池、水箱",
+      "level_3": "溢水口",
+      "full_path": "供水系统/水池、水箱/溢水口",
+      "status": "active"
+    },
+    {
+      "id": 100,
+      "level_1": "供水系统",
+      "level_2": "水池、水箱",
+      "level_3": "水箱梯",
+      "full_path": "供水系统/水池、水箱/水箱梯",
+      "status": "active"
+    },
+    {
+      "id": 101,
+      "level_1": "供水系统",
+      "level_2": "水池、水箱",
+      "level_3": "液位控制器",
+      "full_path": "供水系统/水池、水箱/液位控制器",
+      "status": "active"
+    },
+    {
+      "id": 102,
+      "level_1": "供水系统",
+      "level_2": "供水管道、阀门及附件",
+      "level_3": "供水管道",
+      "full_path": "供水系统/供水管道、阀门及附件/供水管道",
+      "status": "active"
+    },
+    {
+      "id": 103,
+      "level_1": "供水系统",
+      "level_2": "供水管道、阀门及附件",
+      "level_3": "供水阀门",
+      "full_path": "供水系统/供水管道、阀门及附件/供水阀门",
+      "status": "active"
+    },
+    {
+      "id": 104,
+      "level_1": "供水系统",
+      "level_2": "供水管道、阀门及附件",
+      "level_3": "供水附件",
+      "full_path": "供水系统/供水管道、阀门及附件/供水附件",
+      "status": "active"
+    },
+    {
+      "id": 105,
+      "level_1": "供水系统",
+      "level_2": "液位控制器",
+      "level_3": "液位控制器",
+      "full_path": "供水系统/液位控制器/液位控制器",
+      "status": "active"
+    },
+    {
+      "id": 106,
+      "level_1": "消防系统",
+      "level_2": "消火栓系统",
+      "level_3": "消火栓箱",
+      "full_path": "消防系统/消火栓系统/消火栓箱",
+      "status": "active"
+    },
+    {
+      "id": 107,
+      "level_1": "消防系统",
+      "level_2": "消火栓系统",
+      "level_3": "消火栓阀门",
+      "full_path": "消防系统/消火栓系统/消火栓阀门",
+      "status": "active"
+    },
+    {
+      "id": 108,
+      "level_1": "消防系统",
+      "level_2": "消火栓系统",
+      "level_3": "消火栓接口水枪、水带",
+      "full_path": "消防系统/消火栓系统/消火栓接口水枪、水带",
+      "status": "active"
+    },
+    {
+      "id": 109,
+      "level_1": "消防系统",
+      "level_2": "消火栓系统",
+      "level_3": "消火栓系统控制柜",
+      "full_path": "消防系统/消火栓系统/消火栓系统控制柜",
+      "status": "active"
+    },
+    {
+      "id": 110,
+      "level_1": "消防系统",
+      "level_2": "火灾自动报警系统",
+      "level_3": "探测器",
+      "full_path": "消防系统/火灾自动报警系统/探测器",
+      "status": "active"
+    },
+    {
+      "id": 111,
+      "level_1": "消防系统",
+      "level_2": "火灾自动报警系统",
+      "level_3": "手动报警装置",
+      "full_path": "消防系统/火灾自动报警系统/手动报警装置",
+      "status": "active"
+    },
+    {
+      "id": 112,
+      "level_1": "消防系统",
+      "level_2": "火灾自动报警系统",
+      "level_3": "报警控制器",
+      "full_path": "消防系统/火灾自动报警系统/报警控制器",
+      "status": "active"
+    },
+    {
+      "id": 113,
+      "level_1": "消防系统",
+      "level_2": "自动喷淋灭火系统",
+      "level_3": "消防喷淋泵",
+      "full_path": "消防系统/自动喷淋灭火系统/消防喷淋泵",
+      "status": "active"
+    },
+    {
+      "id": 114,
+      "level_1": "消防系统",
+      "level_2": "自动喷淋灭火系统",
+      "level_3": "消防喷淋控制柜",
+      "full_path": "消防系统/自动喷淋灭火系统/消防喷淋控制柜",
+      "status": "active"
+    },
+    {
+      "id": 115,
+      "level_1": "消防系统",
+      "level_2": "自动喷淋灭火系统",
+      "level_3": "湿式报警阀",
+      "full_path": "消防系统/自动喷淋灭火系统/湿式报警阀",
+      "status": "active"
+    },
+    {
+      "id": 116,
+      "level_1": "消防系统",
+      "level_2": "自动喷淋灭火系统",
+      "level_3": "闭式喷头",
+      "full_path": "消防系统/自动喷淋灭火系统/闭式喷头",
+      "status": "active"
+    },
+    {
+      "id": 117,
+      "level_1": "消防系统",
+      "level_2": "防排烟系统",
+      "level_3": "排烟阀",
+      "full_path": "消防系统/防排烟系统/排烟阀",
+      "status": "active"
+    },
+    {
+      "id": 118,
+      "level_1": "消防系统",
+      "level_2": "防排烟系统",
+      "level_3": "排烟机",
+      "full_path": "消防系统/防排烟系统/排烟机",
+      "status": "active"
+    },
+    {
+      "id": 119,
+      "level_1": "消防系统",
+      "level_2": "防排烟系统",
+      "level_3": "防排烟控制柜",
+      "full_path": "消防系统/防排烟系统/防排烟控制柜",
+      "status": "active"
+    },
+    {
+      "id": 120,
+      "level_1": "消防系统",
+      "level_2": "防火卷帘门系统",
+      "level_3": "探测器",
+      "full_path": "消防系统/防火卷帘门系统/探测器",
+      "status": "active"
+    },
+    {
+      "id": 121,
+      "level_1": "消防系统",
+      "level_2": "防火卷帘门系统",
+      "level_3": "卷帘门控制柜",
+      "full_path": "消防系统/防火卷帘门系统/卷帘门控制柜",
+      "status": "active"
+    },
+    {
+      "id": 122,
+      "level_1": "消防系统",
+      "level_2": "防火卷帘门系统",
+      "level_3": "控制按钮、限位开关、电机",
+      "full_path": "消防系统/防火卷帘门系统/控制按钮、限位开关、电机",
+      "status": "active"
+    },
+    {
+      "id": 123,
+      "level_1": "消防系统",
+      "level_2": "消防事故广播及对讲系统",
+      "level_3": "扩音器、扬声器",
+      "full_path": "消防系统/消防事故广播及对讲系统/扩音器、扬声器",
+      "status": "active"
+    },
+    {
+      "id": 124,
+      "level_1": "消防系统",
+      "level_2": "消防事故广播及对讲系统",
+      "level_3": "消防广播控制柜",
+      "full_path": "消防系统/消防事故广播及对讲系统/消防广播控制柜",
+      "status": "active"
+    },
+    {
+      "id": 125,
+      "level_1": "消防系统",
+      "level_2": "消防事故广播及对讲系统",
+      "level_3": "切换模块",
+      "full_path": "消防系统/消防事故广播及对讲系统/切换模块",
+      "status": "active"
+    },
+    {
+      "id": 126,
+      "level_1": "消防系统",
+      "level_2": "防火门",
+      "level_3": "防火门",
+      "full_path": "消防系统/防火门/防火门",
+      "status": "active"
+    },
+    {
+      "id": 127,
+      "level_1": "消防系统",
+      "level_2": "消防灭火器",
+      "level_3": "灭火器",
+      "full_path": "消防系统/消防灭火器/灭火器",
+      "status": "active"
+    },
+    {
+      "id": 128,
+      "level_1": "消防系统",
+      "level_2": "应急疏散标志",
+      "level_3": "应急疏散标志",
+      "full_path": "消防系统/应急疏散标志/应急疏散标志",
+      "status": "active"
+    },
+    {
+      "id": 129,
+      "level_1": "消防系统",
+      "level_2": "消防管",
+      "level_3": "消防管",
+      "full_path": "消防系统/消防管/消防管",
+      "status": "active"
+    },
+    {
+      "id": 130,
+      "level_1": "排水、排污设施",
+      "level_2": "污水总管",
+      "level_3": "污水总管",
+      "full_path": "排水、排污设施/污水总管/污水总管",
+      "status": "active"
+    },
+    {
+      "id": 131,
+      "level_1": "排水、排污设施",
+      "level_2": "窨井、雨水井、污水井、检查井、集水井",
+      "level_3": "窨井盖",
+      "full_path": "排水、排污设施/窨井、雨水井、污水井、检查井、集水井/窨井盖",
+      "status": "active"
+    },
+    {
+      "id": 132,
+      "level_1": "排水、排污设施",
+      "level_2": "窨井、雨水井、污水井、检查井、集水井",
+      "level_3": "窨井盖圈",
+      "full_path": "排水、排污设施/窨井、雨水井、污水井、检查井、集水井/窨井盖圈",
+      "status": "active"
+    },
+    {
+      "id": 133,
+      "level_1": "排水、排污设施",
+      "level_2": "窨井、雨水井、污水井、检查井、集水井",
+      "level_3": "窨井",
+      "full_path": "排水、排污设施/窨井、雨水井、污水井、检查井、集水井/窨井",
+      "status": "active"
+    },
+    {
+      "id": 134,
+      "level_1": "排水、排污设施",
+      "level_2": "窨井、雨水井、污水井、检查井、集水井",
+      "level_3": "检查井",
+      "full_path": "排水、排污设施/窨井、雨水井、污水井、检查井、集水井/检查井",
+      "status": "active"
+    },
+    {
+      "id": 135,
+      "level_1": "排水、排污设施",
+      "level_2": "窨井、雨水井、污水井、检查井、集水井",
+      "level_3": "污水井",
+      "full_path": "排水、排污设施/窨井、雨水井、污水井、检查井、集水井/污水井",
+      "status": "active"
+    },
+    {
+      "id": 136,
+      "level_1": "排水、排污设施",
+      "level_2": "窨井、雨水井、污水井、检查井、集水井",
+      "level_3": "雨水井",
+      "full_path": "排水、排污设施/窨井、雨水井、污水井、检查井、集水井/雨水井",
+      "status": "active"
+    },
+    {
+      "id": 137,
+      "level_1": "排水、排污设施",
+      "level_2": "窨井、雨水井、污水井、检查井、集水井",
+      "level_3": "集水井",
+      "full_path": "排水、排污设施/窨井、雨水井、污水井、检查井、集水井/集水井",
+      "status": "active"
+    },
+    {
+      "id": 138,
+      "level_1": "排水、排污设施",
+      "level_2": "雨水管",
+      "level_3": "雨水管",
+      "full_path": "排水、排污设施/雨水管/雨水管",
+      "status": "active"
+    },
+    {
+      "id": 139,
+      "level_1": "排水、排污设施",
+      "level_2": "空调滴水管",
+      "level_3": "空调滴水管",
+      "full_path": "排水、排污设施/空调滴水管/空调滴水管",
+      "status": "active"
+    },
+    {
+      "id": 140,
+      "level_1": "排水、排污设施",
+      "level_2": "污水泵、排水泵",
+      "level_3": "污水泵、排水泵",
+      "full_path": "排水、排污设施/污水泵、排水泵/污水泵、排水泵",
+      "status": "active"
+    },
+    {
+      "id": 141,
+      "level_1": "排水、排污设施",
+      "level_2": "污水泵、排水泵",
+      "level_3": "污水泵、排水泵配件",
+      "full_path": "排水、排污设施/污水泵、排水泵/污水泵、排水泵配件",
+      "status": "active"
+    },
+    {
+      "id": 142,
+      "level_1": "排水、排污设施",
+      "level_2": "化粪池",
+      "level_3": "化粪池",
+      "full_path": "排水、排污设施/化粪池/化粪池",
+      "status": "active"
+    },
+    {
+      "id": 143,
+      "level_1": "排水、排污设施",
+      "level_2": "雨水斗",
+      "level_3": "雨水斗",
+      "full_path": "排水、排污设施/雨水斗/雨水斗",
+      "status": "active"
+    },
+    {
+      "id": 144,
+      "level_1": "排水、排污设施",
+      "level_2": "排水沟",
+      "level_3": "排水沟",
+      "full_path": "排水、排污设施/排水沟/排水沟",
+      "status": "active"
+    },
+    {
+      "id": 145,
+      "level_1": "暖通系统",
+      "level_2": "分体式空调",
+      "level_3": "主机",
+      "full_path": "暖通系统/分体式空调/主机",
+      "status": "active"
+    },
+    {
+      "id": 146,
+      "level_1": "暖通系统",
+      "level_2": "分体式空调",
+      "level_3": "室外机",
+      "full_path": "暖通系统/分体式空调/室外机",
+      "status": "active"
+    },
+    {
+      "id": 147,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "螺杆式压缩机",
+      "full_path": "暖通系统/中央空调/螺杆式压缩机",
+      "status": "active"
+    },
+    {
+      "id": 148,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "中央空调给水",
+      "full_path": "暖通系统/中央空调/中央空调给水",
+      "status": "active"
+    },
+    {
+      "id": 149,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "冷凝器",
+      "full_path": "暖通系统/中央空调/冷凝器",
+      "status": "active"
+    },
+    {
+      "id": 150,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "蒸发器",
+      "full_path": "暖通系统/中央空调/蒸发器",
+      "status": "active"
+    },
+    {
+      "id": 151,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "工致系统",
+      "full_path": "暖通系统/中央空调/工致系统",
+      "status": "active"
+    },
+    {
+      "id": 152,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "辅助设备",
+      "full_path": "暖通系统/中央空调/辅助设备",
+      "status": "active"
+    },
+    {
+      "id": 153,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "新风及变风量机组",
+      "full_path": "暖通系统/中央空调/新风及变风量机组",
+      "status": "active"
+    },
+    {
+      "id": 154,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "双效溴化锂吸收式机组",
+      "full_path": "暖通系统/中央空调/双效溴化锂吸收式机组",
+      "status": "active"
+    },
+    {
+      "id": 155,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "通风设备和管道",
+      "full_path": "暖通系统/中央空调/通风设备和管道",
+      "status": "active"
+    },
+    {
+      "id": 156,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "离心式压缩机",
+      "full_path": "暖通系统/中央空调/离心式压缩机",
+      "status": "active"
+    },
+    {
+      "id": 157,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "活塞式压缩机",
+      "full_path": "暖通系统/中央空调/活塞式压缩机",
+      "status": "active"
+    },
+    {
+      "id": 158,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "膨胀阀",
+      "full_path": "暖通系统/中央空调/膨胀阀",
+      "status": "active"
+    },
+    {
+      "id": 159,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "冷却塔",
+      "full_path": "暖通系统/中央空调/冷却塔",
+      "status": "active"
+    },
+    {
+      "id": 160,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "新风机",
+      "full_path": "暖通系统/中央空调/新风机",
+      "status": "active"
+    },
+    {
+      "id": 161,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "控制柜",
+      "full_path": "暖通系统/中央空调/控制柜",
+      "status": "active"
+    },
+    {
+      "id": 162,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "循环泵",
+      "full_path": "暖通系统/中央空调/循环泵",
+      "status": "active"
+    },
+    {
+      "id": 163,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "空调水管道",
+      "full_path": "暖通系统/中央空调/空调水管道",
+      "status": "active"
+    },
+    {
+      "id": 164,
+      "level_1": "暖通系统",
+      "level_2": "中央空调",
+      "level_3": "空调水处理设备",
+      "full_path": "暖通系统/中央空调/空调水处理设备",
+      "status": "active"
+    },
+    {
+      "id": 165,
+      "level_1": "暖通系统",
+      "level_2": "通风设备",
+      "level_3": "通风机",
+      "full_path": "暖通系统/通风设备/通风机",
+      "status": "active"
+    },
+    {
+      "id": 166,
+      "level_1": "暖通系统",
+      "level_2": "通风设备",
+      "level_3": "排气口",
+      "full_path": "暖通系统/通风设备/排气口",
+      "status": "active"
+    },
+    {
+      "id": 167,
+      "level_1": "暖通系统",
+      "level_2": "通风设备",
+      "level_3": "烟道",
+      "full_path": "暖通系统/通风设备/烟道",
+      "status": "active"
+    },
+    {
+      "id": 168,
+      "level_1": "暖通系统",
+      "level_2": "通风设备",
+      "level_3": "风帽",
+      "full_path": "暖通系统/通风设备/风帽",
+      "status": "active"
+    },
+    {
+      "id": 169,
+      "level_1": "暖通系统",
+      "level_2": "通风设备",
+      "level_3": "净化除尘设备",
+      "full_path": "暖通系统/通风设备/净化除尘设备",
+      "status": "active"
+    },
+    {
+      "id": 170,
+      "level_1": "锅炉",
+      "level_2": "燃气炉",
+      "level_3": "炉体",
+      "full_path": "锅炉/燃气炉/炉体",
+      "status": "active"
+    },
+    {
+      "id": 171,
+      "level_1": "锅炉",
+      "level_2": "燃气炉",
+      "level_3": "燃气炉燃烧器",
+      "full_path": "锅炉/燃气炉/燃气炉燃烧器",
+      "status": "active"
+    },
+    {
+      "id": 172,
+      "level_1": "锅炉",
+      "level_2": "燃气炉",
+      "level_3": "燃油",
+      "full_path": "锅炉/燃气炉/燃油",
+      "status": "active"
+    },
+    {
+      "id": 173,
+      "level_1": "锅炉",
+      "level_2": "燃气炉",
+      "level_3": "水处理设备",
+      "full_path": "锅炉/燃气炉/水处理设备",
+      "status": "active"
+    },
+    {
+      "id": 174,
+      "level_1": "锅炉",
+      "level_2": "燃油炉",
+      "level_3": "燃油",
+      "full_path": "锅炉/燃油炉/燃油",
+      "status": "active"
+    },
+    {
+      "id": 175,
+      "level_1": "锅炉",
+      "level_2": "燃油炉",
+      "level_3": "水处理设备",
+      "full_path": "锅炉/燃油炉/水处理设备",
+      "status": "active"
+    },
+    {
+      "id": 176,
+      "level_1": "锅炉",
+      "level_2": "燃油炉",
+      "level_3": "燃油炉燃烧器",
+      "full_path": "锅炉/燃油炉/燃油炉燃烧器",
+      "status": "active"
+    },
+    {
+      "id": 177,
+      "level_1": "锅炉",
+      "level_2": "燃油炉",
+      "level_3": "供热设备和管道",
+      "full_path": "锅炉/燃油炉/供热设备和管道",
+      "status": "active"
+    },
+    {
+      "id": 178,
+      "level_1": "锅炉",
+      "level_2": "燃油炉",
+      "level_3": "炉体",
+      "full_path": "锅炉/燃油炉/炉体",
+      "status": "active"
+    },
+    {
+      "id": 179,
+      "level_1": "通信设施",
+      "level_2": "通信机房",
+      "level_3": "通信设备",
+      "full_path": "通信设施/通信机房/通信设备",
+      "status": "active"
+    },
+    {
+      "id": 180,
+      "level_1": "通信设施",
+      "level_2": "卫星机房",
+      "level_3": "卫星设施",
+      "full_path": "通信设施/卫星机房/卫星设施",
+      "status": "active"
+    },
+    {
+      "id": 181,
+      "level_1": "通信设施",
+      "level_2": "电话通讯",
+      "level_3": "程控交换机",
+      "full_path": "通信设施/电话通讯/程控交换机",
+      "status": "active"
+    },
+    {
+      "id": 182,
+      "level_1": "通信设施",
+      "level_2": "电话通讯",
+      "level_3": "中继箱、交接箱",
+      "full_path": "通信设施/电话通讯/中继箱、交接箱",
+      "status": "active"
+    },
+    {
+      "id": 183,
+      "level_1": "通信设施",
+      "level_2": "分纤箱",
+      "level_3": "分纤箱",
+      "full_path": "通信设施/分纤箱/分纤箱",
+      "status": "active"
+    },
+    {
+      "id": 184,
+      "level_1": "通信设施",
+      "level_2": "网线",
+      "level_3": "电话线",
+      "full_path": "通信设施/网线/电话线",
+      "status": "active"
+    },
+    {
+      "id": 185,
+      "level_1": "通信设施",
+      "level_2": "网线",
+      "level_3": "网线",
+      "full_path": "通信设施/网线/网线",
+      "status": "active"
+    },
+    {
+      "id": 186,
+      "level_1": "弱电",
+      "level_2": "广播音响",
+      "level_3": "音响布线",
+      "full_path": "弱电/广播音响/音响布线",
+      "status": "active"
+    },
+    {
+      "id": 187,
+      "level_1": "弱电",
+      "level_2": "广播音响",
+      "level_3": "扬声器",
+      "full_path": "弱电/广播音响/扬声器",
+      "status": "active"
+    },
+    {
+      "id": 188,
+      "level_1": "弱电",
+      "level_2": "广播音响",
+      "level_3": "音箱",
+      "full_path": "弱电/广播音响/音箱",
+      "status": "active"
+    },
+    {
+      "id": 189,
+      "level_1": "弱电",
+      "level_2": "综合布线系统",
+      "level_3": "配线箱",
+      "full_path": "弱电/综合布线系统/配线箱",
+      "status": "active"
+    },
+    {
+      "id": 190,
+      "level_1": "弱电",
+      "level_2": "综合布线系统",
+      "level_3": "交接箱",
+      "full_path": "弱电/综合布线系统/交接箱",
+      "status": "active"
+    },
+    {
+      "id": 191,
+      "level_1": "弱电",
+      "level_2": "综合布线系统",
+      "level_3": "电缆",
+      "full_path": "弱电/综合布线系统/电缆",
+      "status": "active"
+    },
+    {
+      "id": 192,
+      "level_1": "弱电",
+      "level_2": "综合布线系统",
+      "level_3": "光缆",
+      "full_path": "弱电/综合布线系统/光缆",
+      "status": "active"
+    },
+    {
+      "id": 193,
+      "level_1": "弱电",
+      "level_2": "综合布线系统",
+      "level_3": "适配器",
+      "full_path": "弱电/综合布线系统/适配器",
+      "status": "active"
+    },
+    {
+      "id": 194,
+      "level_1": "通用设施（配件）",
+      "level_2": "标准门",
+      "level_3": "标准门",
+      "full_path": "通用设施（配件）/标准门/标准门",
+      "status": "active"
+    },
+    {
+      "id": 195,
+      "level_1": "通用设施（配件）",
+      "level_2": "防汛、防台设施",
+      "level_3": "防洪挡板",
+      "full_path": "通用设施（配件）/防汛、防台设施/防洪挡板",
+      "status": "active"
+    },
+    {
+      "id": 196,
+      "level_1": "通用设施（配件）",
+      "level_2": "防汛、防台设施",
+      "level_3": "防洪沙袋",
+      "full_path": "通用设施（配件）/防汛、防台设施/防洪沙袋",
+      "status": "active"
+    },
+    {
+      "id": 197,
+      "level_1": "结构",
+      "level_2": "承重墙",
+      "level_3": "承重墙",
+      "full_path": "结构/承重墙/承重墙",
+      "status": "active"
+    },
+    {
+      "id": 198,
+      "level_1": "结构",
+      "level_2": "基础",
+      "level_3": "基础",
+      "full_path": "结构/基础/基础",
+      "status": "active"
+    },
+    {
+      "id": 199,
+      "level_1": "结构",
+      "level_2": "梁",
+      "level_3": "梁",
+      "full_path": "结构/梁/梁",
+      "status": "active"
+    },
+    {
+      "id": 200,
+      "level_1": "结构",
+      "level_2": "楼板",
+      "level_3": "楼板",
+      "full_path": "结构/楼板/楼板",
+      "status": "active"
+    },
+    {
+      "id": 201,
+      "level_1": "结构",
+      "level_2": "楼梯",
+      "level_3": "楼梯结构",
+      "full_path": "结构/楼梯/楼梯结构",
+      "status": "active"
+    },
+    {
+      "id": 202,
+      "level_1": "结构",
+      "level_2": "柱",
+      "level_3": "柱",
+      "full_path": "结构/柱/柱",
+      "status": "active"
+    },
+    {
+      "id": 203,
+      "level_1": "平屋面",
+      "level_2": "防雷接地",
+      "level_3": "避雷系统",
+      "full_path": "平屋面/防雷接地/避雷系统",
+      "status": "active"
+    },
+    {
+      "id": 204,
+      "level_1": "平屋面",
+      "level_2": "防雷接地",
+      "level_3": "避雷针、避雷带",
+      "full_path": "平屋面/防雷接地/避雷针、避雷带",
+      "status": "active"
+    },
+    {
+      "id": 205,
+      "level_1": "平屋面",
+      "level_2": "屋面保护层",
+      "level_3": "屋面保护层",
+      "full_path": "平屋面/屋面保护层/屋面保护层",
+      "status": "active"
+    },
+    {
+      "id": 206,
+      "level_1": "平屋面",
+      "level_2": "屋面设备基础",
+      "level_3": "屋面设备基础",
+      "full_path": "平屋面/屋面设备基础/屋面设备基础",
+      "status": "active"
+    },
+    {
+      "id": 207,
+      "level_1": "平屋面",
+      "level_2": "航标灯",
+      "level_3": "航标灯",
+      "full_path": "平屋面/航标灯/航标灯",
+      "status": "active"
+    },
+    {
+      "id": 208,
+      "level_1": "平屋面",
+      "level_2": "女儿墙",
+      "level_3": "女儿墙结构",
+      "full_path": "平屋面/女儿墙/女儿墙结构",
+      "status": "active"
+    },
+    {
+      "id": 209,
+      "level_1": "平屋面",
+      "level_2": "女儿墙",
+      "level_3": "女儿墙墙壁",
+      "full_path": "平屋面/女儿墙/女儿墙墙壁",
+      "status": "active"
+    },
+    {
+      "id": 210,
+      "level_1": "平屋面",
+      "level_2": "屋顶",
+      "level_3": "上人屋面面层",
+      "full_path": "平屋面/屋顶/上人屋面面层",
+      "status": "active"
+    },
+    {
+      "id": 211,
+      "level_1": "平屋面",
+      "level_2": "屋顶",
+      "level_3": "屋顶露出保护层",
+      "full_path": "平屋面/屋顶/屋顶露出保护层",
+      "status": "active"
+    },
+    {
+      "id": 212,
+      "level_1": "平屋面",
+      "level_2": "平屋面",
+      "level_3": "平顶屋",
+      "full_path": "平屋面/平屋面/平顶屋",
+      "status": "active"
+    },
+    {
+      "id": 213,
+      "level_1": "平屋面",
+      "level_2": "平屋面",
+      "level_3": "屋面",
+      "full_path": "平屋面/平屋面/屋面",
+      "status": "active"
+    },
+    {
+      "id": 214,
+      "level_1": "平屋面",
+      "level_2": "平屋面",
+      "level_3": "油毡屋面",
+      "full_path": "平屋面/平屋面/油毡屋面",
+      "status": "active"
+    },
+    {
+      "id": 215,
+      "level_1": "平屋面",
+      "level_2": "平屋面",
+      "level_3": "平顶",
+      "full_path": "平屋面/平屋面/平顶",
+      "status": "active"
+    },
+    {
+      "id": 216,
+      "level_1": "平屋面",
+      "level_2": "雨水斗",
+      "level_3": "雨水斗",
+      "full_path": "平屋面/雨水斗/雨水斗",
+      "status": "active"
+    },
+    {
+      "id": 217,
+      "level_1": "平屋面",
+      "level_2": "烟道",
+      "level_3": "烟道",
+      "full_path": "平屋面/烟道/烟道",
+      "status": "active"
+    },
+    {
+      "id": 218,
+      "level_1": "坡屋面",
+      "level_2": "防雷接地",
+      "level_3": "避雷系统",
+      "full_path": "坡屋面/防雷接地/避雷系统",
+      "status": "active"
+    },
+    {
+      "id": 219,
+      "level_1": "坡屋面",
+      "level_2": "坡屋面结构",
+      "level_3": "坡屋面结构",
+      "full_path": "坡屋面/坡屋面结构/坡屋面结构",
+      "status": "active"
+    },
+    {
+      "id": 220,
+      "level_1": "坡屋面",
+      "level_2": "坡屋顶",
+      "level_3": "瓦片",
+      "full_path": "坡屋面/坡屋顶/瓦片",
+      "status": "active"
+    },
+    {
+      "id": 221,
+      "level_1": "坡屋面",
+      "level_2": "坡屋顶",
+      "level_3": "屋顶露出部位",
+      "full_path": "坡屋面/坡屋顶/屋顶露出部位",
+      "status": "active"
+    },
+    {
+      "id": 222,
+      "level_1": "坡屋面",
+      "level_2": "烟道",
+      "level_3": "烟道",
+      "full_path": "坡屋面/烟道/烟道",
+      "status": "active"
+    },
+    {
+      "id": 223,
+      "level_1": "坡屋面",
+      "level_2": "坡屋面",
+      "level_3": "平改坡",
+      "full_path": "坡屋面/坡屋面/平改坡",
+      "status": "active"
+    },
+    {
+      "id": 224,
+      "level_1": "坡屋面",
+      "level_2": "沿沟",
+      "level_3": "沿沟",
+      "full_path": "坡屋面/沿沟/沿沟",
+      "status": "active"
+    },
+    {
+      "id": 225,
+      "level_1": "太阳能设施",
+      "level_2": "太阳能发电设施",
+      "level_3": "太阳能集热平板",
+      "full_path": "太阳能设施/太阳能发电设施/太阳能集热平板",
+      "status": "active"
+    },
+    {
+      "id": 226,
+      "level_1": "太阳能设施",
+      "level_2": "太阳能发电设施",
+      "level_3": "逆变器",
+      "full_path": "太阳能设施/太阳能发电设施/逆变器",
+      "status": "active"
+    },
+    {
+      "id": 227,
+      "level_1": "太阳能设施",
+      "level_2": "太阳能发电设施",
+      "level_3": "电池储能系统",
+      "full_path": "太阳能设施/太阳能发电设施/电池储能系统",
+      "status": "active"
+    },
+    {
+      "id": 228,
+      "level_1": "太阳能设施",
+      "level_2": "太阳能发电设施",
+      "level_3": "电池组件",
+      "full_path": "太阳能设施/太阳能发电设施/电池组件",
+      "status": "active"
+    },
+    {
+      "id": 229,
+      "level_1": "太阳能设施",
+      "level_2": "太阳能发电设施",
+      "level_3": "支架",
+      "full_path": "太阳能设施/太阳能发电设施/支架",
+      "status": "active"
+    },
+    {
+      "id": 230,
+      "level_1": "太阳能设施",
+      "level_2": "太阳能热水系统",
+      "level_3": "集热器系统",
+      "full_path": "太阳能设施/太阳能热水系统/集热器系统",
+      "status": "active"
+    },
+    {
+      "id": 231,
+      "level_1": "太阳能设施",
+      "level_2": "太阳能热水系统",
+      "level_3": "储热系统",
+      "full_path": "太阳能设施/太阳能热水系统/储热系统",
+      "status": "active"
+    },
+    {
+      "id": 232,
+      "level_1": "太阳能设施",
+      "level_2": "太阳能热水系统",
+      "level_3": "管路系统",
+      "full_path": "太阳能设施/太阳能热水系统/管路系统",
+      "status": "active"
+    },
+    {
+      "id": 233,
+      "level_1": "楼栋外立面",
+      "level_2": "楼幢号指示",
+      "level_3": "楼幢号指示",
+      "full_path": "楼栋外立面/楼幢号指示/楼幢号指示",
+      "status": "active"
+    },
+    {
+      "id": 234,
+      "level_1": "楼栋外立面",
+      "level_2": "楼道连廊",
+      "level_3": "连廊栏杆",
+      "full_path": "楼栋外立面/楼道连廊/连廊栏杆",
+      "status": "active"
+    },
+    {
+      "id": 235,
+      "level_1": "楼栋外立面",
+      "level_2": "外墙饰面（涂料）",
+      "level_3": "修补外墙",
+      "full_path": "楼栋外立面/外墙饰面（涂料）/修补外墙",
+      "status": "active"
+    },
+    {
+      "id": 236,
+      "level_1": "楼栋外立面",
+      "level_2": "外墙饰面（涂料）",
+      "level_3": "外墙喷涂TF防水剂",
+      "full_path": "楼栋外立面/外墙饰面（涂料）/外墙喷涂TF防水剂",
+      "status": "active"
+    },
+    {
+      "id": 237,
+      "level_1": "楼栋外立面",
+      "level_2": "外墙饰面（涂料）",
+      "level_3": "外墙补裂缝",
+      "full_path": "楼栋外立面/外墙饰面（涂料）/外墙补裂缝",
+      "status": "active"
+    },
+    {
+      "id": 238,
+      "level_1": "楼栋外立面",
+      "level_2": "外墙饰面（涂料）",
+      "level_3": "栅墙",
+      "full_path": "楼栋外立面/外墙饰面（涂料）/栅墙",
+      "status": "active"
+    },
+    {
+      "id": 239,
+      "level_1": "楼栋外立面",
+      "level_2": "外墙饰面（涂料）",
+      "level_3": "外墙涂料",
+      "full_path": "楼栋外立面/外墙饰面（涂料）/外墙涂料",
+      "status": "active"
+    },
+    {
+      "id": 240,
+      "level_1": "楼栋外立面",
+      "level_2": "外墙饰面（面砖）",
+      "level_3": "外墙面砖",
+      "full_path": "楼栋外立面/外墙饰面（面砖）/外墙面砖",
+      "status": "active"
+    },
+    {
+      "id": 241,
+      "level_1": "楼栋外立面",
+      "level_2": "外墙饰面（面砖）",
+      "level_3": "面砖",
+      "full_path": "楼栋外立面/外墙饰面（面砖）/面砖",
+      "status": "active"
+    },
+    {
+      "id": 242,
+      "level_1": "楼栋外立面",
+      "level_2": "外墙饰面（干挂）",
+      "level_3": "石材干挂",
+      "full_path": "楼栋外立面/外墙饰面（干挂）/石材干挂",
+      "status": "active"
+    },
+    {
+      "id": 243,
+      "level_1": "楼栋外立面",
+      "level_2": "外墙饰面（干挂）",
+      "level_3": "金属干挂",
+      "full_path": "楼栋外立面/外墙饰面（干挂）/金属干挂",
+      "status": "active"
+    },
+    {
+      "id": 244,
+      "level_1": "楼栋外立面",
+      "level_2": "外墙渗漏点",
+      "level_3": "渗漏点",
+      "full_path": "楼栋外立面/外墙渗漏点/渗漏点",
+      "status": "active"
+    },
+    {
+      "id": 245,
+      "level_1": "楼栋外立面",
+      "level_2": "外墙饰面附着物",
+      "level_3": "装饰悬挂物",
+      "full_path": "楼栋外立面/外墙饰面附着物/装饰悬挂物",
+      "status": "active"
+    },
+    {
+      "id": 246,
+      "level_1": "楼栋外立面",
+      "level_2": "幕墙",
+      "level_3": "玻璃",
+      "full_path": "楼栋外立面/幕墙/玻璃",
+      "status": "active"
+    },
+    {
+      "id": 247,
+      "level_1": "楼栋外立面",
+      "level_2": "幕墙",
+      "level_3": "框架",
+      "full_path": "楼栋外立面/幕墙/框架",
+      "status": "active"
+    },
+    {
+      "id": 248,
+      "level_1": "楼栋外立面",
+      "level_2": "幕墙",
+      "level_3": "可开窗户",
+      "full_path": "楼栋外立面/幕墙/可开窗户",
+      "status": "active"
+    },
+    {
+      "id": 249,
+      "level_1": "楼栋外立面",
+      "level_2": "幕墙",
+      "level_3": "保护层",
+      "full_path": "楼栋外立面/幕墙/保护层",
+      "status": "active"
+    },
+    {
+      "id": 250,
+      "level_1": "楼栋外立面",
+      "level_2": "公共窗户",
+      "level_3": "天窗",
+      "full_path": "楼栋外立面/公共窗户/天窗",
+      "status": "active"
+    },
+    {
+      "id": 251,
+      "level_1": "楼栋外立面",
+      "level_2": "公共窗户",
+      "level_3": "玻璃",
+      "full_path": "楼栋外立面/公共窗户/玻璃",
+      "status": "active"
+    },
+    {
+      "id": 252,
+      "level_1": "楼栋外立面",
+      "level_2": "公共窗户",
+      "level_3": "金属门窗",
+      "full_path": "楼栋外立面/公共窗户/金属门窗",
+      "status": "active"
+    },
+    {
+      "id": 253,
+      "level_1": "楼栋外立面",
+      "level_2": "公共窗户",
+      "level_3": "木制门窗",
+      "full_path": "楼栋外立面/公共窗户/木制门窗",
+      "status": "active"
+    },
+    {
+      "id": 254,
+      "level_1": "楼栋外立面",
+      "level_2": "公共窗户",
+      "level_3": "纱窗",
+      "full_path": "楼栋外立面/公共窗户/纱窗",
+      "status": "active"
+    },
+    {
+      "id": 255,
+      "level_1": "楼栋外立面",
+      "level_2": "公共窗户",
+      "level_3": "防盗窗",
+      "full_path": "楼栋外立面/公共窗户/防盗窗",
+      "status": "active"
+    },
+    {
+      "id": 256,
+      "level_1": "楼幢入口",
+      "level_2": "无障碍设施",
+      "level_3": "轮椅坡道地面",
+      "full_path": "楼幢入口/无障碍设施/轮椅坡道地面",
+      "status": "active"
+    },
+    {
+      "id": 257,
+      "level_1": "楼幢入口",
+      "level_2": "无障碍设施",
+      "level_3": "轮椅坡道栏杆、扶手",
+      "full_path": "楼幢入口/无障碍设施/轮椅坡道栏杆、扶手",
+      "status": "active"
+    },
+    {
+      "id": 258,
+      "level_1": "楼幢入口",
+      "level_2": "雨棚（进门，入库）",
+      "level_3": "雨棚",
+      "full_path": "楼幢入口/雨棚（进门，入库）/雨棚",
+      "status": "active"
+    },
+    {
+      "id": 259,
+      "level_1": "楼幢入口",
+      "level_2": "门牌标识",
+      "level_3": "门牌号",
+      "full_path": "楼幢入口/门牌标识/门牌号",
+      "status": "active"
+    },
+    {
+      "id": 260,
+      "level_1": "楼幢入口",
+      "level_2": "楼幢单元门",
+      "level_3": "防盗门禁",
+      "full_path": "楼幢入口/楼幢单元门/防盗门禁",
+      "status": "active"
+    },
+    {
+      "id": 261,
+      "level_1": "楼幢入口",
+      "level_2": "楼幢单元门",
+      "level_3": "防盗门静音器",
+      "full_path": "楼幢入口/楼幢单元门/防盗门静音器",
+      "status": "active"
+    },
+    {
+      "id": 262,
+      "level_1": "楼幢入口",
+      "level_2": "楼幢单元门",
+      "level_3": "大门整体",
+      "full_path": "楼幢入口/楼幢单元门/大门整体",
+      "status": "active"
+    },
+    {
+      "id": 263,
+      "level_1": "楼幢入口",
+      "level_2": "楼幢单元门",
+      "level_3": "门卡",
+      "full_path": "楼幢入口/楼幢单元门/门卡",
+      "status": "active"
+    },
+    {
+      "id": 264,
+      "level_1": "楼幢入口",
+      "level_2": "楼幢单元门",
+      "level_3": "防盗门闭门器",
+      "full_path": "楼幢入口/楼幢单元门/防盗门闭门器",
+      "status": "active"
+    },
+    {
+      "id": 265,
+      "level_1": "楼幢入口",
+      "level_2": "楼幢单元门",
+      "level_3": "大门控制板",
+      "full_path": "楼幢入口/楼幢单元门/大门控制板",
+      "status": "active"
+    },
+    {
+      "id": 266,
+      "level_1": "楼幢入口",
+      "level_2": "楼栋对讲系统",
+      "level_3": "门铃及对讲",
+      "full_path": "楼幢入口/楼栋对讲系统/门铃及对讲",
+      "status": "active"
+    },
+    {
+      "id": 267,
+      "level_1": "楼幢入口",
+      "level_2": "楼栋对讲系统",
+      "level_3": "可视化屏幕",
+      "full_path": "楼幢入口/楼栋对讲系统/可视化屏幕",
+      "status": "active"
+    },
+    {
+      "id": 268,
+      "level_1": "楼幢公共",
+      "level_2": "门厅",
+      "level_3": "公告栏、宣传栏",
+      "full_path": "楼幢公共/门厅/公告栏、宣传栏",
+      "status": "active"
+    },
+    {
+      "id": 269,
+      "level_1": "楼幢公共",
+      "level_2": "门厅",
+      "level_3": "门厅整体",
+      "full_path": "楼幢公共/门厅/门厅整体",
+      "status": "active"
+    },
+    {
+      "id": 270,
+      "level_1": "楼幢公共",
+      "level_2": "门厅",
+      "level_3": "地面",
+      "full_path": "楼幢公共/门厅/地面",
+      "status": "active"
+    },
+    {
+      "id": 271,
+      "level_1": "楼幢公共",
+      "level_2": "门厅",
+      "level_3": "墙面装饰",
+      "full_path": "楼幢公共/门厅/墙面装饰",
+      "status": "active"
+    },
+    {
+      "id": 272,
+      "level_1": "楼幢公共",
+      "level_2": "门厅",
+      "level_3": "信报箱",
+      "full_path": "楼幢公共/门厅/信报箱",
+      "status": "active"
+    },
+    {
+      "id": 273,
+      "level_1": "楼幢公共",
+      "level_2": "门厅",
+      "level_3": "门厅设施",
+      "full_path": "楼幢公共/门厅/门厅设施",
+      "status": "active"
+    },
+    {
+      "id": 274,
+      "level_1": "楼道设施",
+      "level_2": "楼道墙面",
+      "level_3": "面砖",
+      "full_path": "楼道设施/楼道墙面/面砖",
+      "status": "active"
+    },
+    {
+      "id": 275,
+      "level_1": "楼道设施",
+      "level_2": "楼道墙面",
+      "level_3": "墙壁、顶板",
+      "full_path": "楼道设施/楼道墙面/墙壁、顶板",
+      "status": "active"
+    },
+    {
+      "id": 276,
+      "level_1": "楼道设施",
+      "level_2": "电梯门框",
+      "level_3": "电梯外门套",
+      "full_path": "楼道设施/电梯门框/电梯外门套",
+      "status": "active"
+    },
+    {
+      "id": 277,
+      "level_1": "楼道设施",
+      "level_2": "楼道地面",
+      "level_3": "地面",
+      "full_path": "楼道设施/楼道地面/地面",
+      "status": "active"
+    },
+    {
+      "id": 278,
+      "level_1": "楼道设施",
+      "level_2": "楼梯",
+      "level_3": "楼梯、栏杆",
+      "full_path": "楼道设施/楼梯/楼梯、栏杆",
+      "status": "active"
+    },
+    {
+      "id": 279,
+      "level_1": "楼道设施",
+      "level_2": "楼道照明",
+      "level_3": "楼道照明",
+      "full_path": "楼道设施/楼道照明/楼道照明",
+      "status": "active"
+    },
+    {
+      "id": 280,
+      "level_1": "安防设施",
+      "level_2": "小区入口",
+      "level_3": "入口大门",
+      "full_path": "安防设施/小区入口/入口大门",
+      "status": "active"
+    },
+    {
+      "id": 281,
+      "level_1": "安防设施",
+      "level_2": "小区入口",
+      "level_3": "伸缩门",
+      "full_path": "安防设施/小区入口/伸缩门",
+      "status": "active"
+    },
+    {
+      "id": 282,
+      "level_1": "楼幢入口",
+      "level_2": "楼幢单元门",
+      "level_3": "防盗门",
+      "full_path": "楼幢入口/楼幢单元门/防盗门",
+      "status": "active"
+    },
+    {
+      "id": 283,
+      "level_1": "楼幢入口",
+      "level_2": "楼幢单元门",
+      "level_3": "大门",
+      "full_path": "楼幢入口/楼幢单元门/大门",
+      "status": "active"
+    },
+    {
+      "id": 284,
+      "level_1": "监控系统",
+      "level_2": "监控室设备",
+      "level_3": "卫星和抛物面天线",
+      "full_path": "监控系统/监控室设备/卫星和抛物面天线",
+      "status": "active"
+    },
+    {
+      "id": 285,
+      "level_1": "监控系统",
+      "level_2": "监控室设备",
+      "level_3": "同轴电缆分配箱",
+      "full_path": "监控系统/监控室设备/同轴电缆分配箱",
+      "status": "active"
+    },
+    {
+      "id": 286,
+      "level_1": "监控系统",
+      "level_2": "监控室设备",
+      "level_3": "监视器（多画面）",
+      "full_path": "监控系统/监控室设备/监视器（多画面）",
+      "status": "active"
+    },
+    {
+      "id": 287,
+      "level_1": "监控系统",
+      "level_2": "监控室设备",
+      "level_3": "电视监控控制台",
+      "full_path": "监控系统/监控室设备/电视监控控制台",
+      "status": "active"
+    },
+    {
+      "id": 288,
+      "level_1": "监控系统",
+      "level_2": "监控室设备",
+      "level_3": "接收器",
+      "full_path": "监控系统/监控室设备/接收器",
+      "status": "active"
+    },
+    {
+      "id": 289,
+      "level_1": "监控系统",
+      "level_2": "监控探头",
+      "level_3": "摄像头",
+      "full_path": "监控系统/监控探头/摄像头",
+      "status": "active"
+    },
+    {
+      "id": 290,
+      "level_1": "监控系统",
+      "level_2": "对讲系统",
+      "level_3": "对讲系统",
+      "full_path": "监控系统/对讲系统/对讲系统",
+      "status": "active"
+    },
+    {
+      "id": 291,
+      "level_1": "安防设施",
+      "level_2": "安防报警系统",
+      "level_3": "安防报警器",
+      "full_path": "安防设施/安防报警系统/安防报警器",
+      "status": "active"
+    },
+    {
+      "id": 292,
+      "level_1": "安防设施",
+      "level_2": "入侵报警系统",
+      "level_3": "入侵报警器",
+      "full_path": "安防设施/入侵报警系统/入侵报警器",
+      "status": "active"
+    },
+    {
+      "id": 293,
+      "level_1": "安防设施",
+      "level_2": "电子巡更系统",
+      "level_3": "电子巡更系统",
+      "full_path": "安防设施/电子巡更系统/电子巡更系统",
+      "status": "active"
+    },
+    {
+      "id": 294,
+      "level_1": "安防设施",
+      "level_2": "小区防盗门禁",
+      "level_3": "小区防盗门禁",
+      "full_path": "安防设施/小区防盗门禁/小区防盗门禁",
+      "status": "active"
+    },
+    {
+      "id": 295,
+      "level_1": "安防设施",
+      "level_2": "小区电子围栏",
+      "level_3": "小区电子围栏",
+      "full_path": "安防设施/小区电子围栏/小区电子围栏",
+      "status": "active"
+    },
+    {
+      "id": 296,
+      "level_1": "安防设施",
+      "level_2": "小区防越报警",
+      "level_3": "防越报警器",
+      "full_path": "安防设施/小区防越报警/防越报警器",
+      "status": "active"
+    },
+    {
+      "id": 297,
+      "level_1": "安防设施",
+      "level_2": "人行道闸系统",
+      "level_3": "人行道闸",
+      "full_path": "安防设施/人行道闸系统/人行道闸",
+      "status": "active"
+    },
+    {
+      "id": 298,
+      "level_1": "安防设施",
+      "level_2": "人行道闸系统",
+      "level_3": "人行道闸控制主板",
+      "full_path": "安防设施/人行道闸系统/人行道闸控制主板",
+      "status": "active"
+    },
+    {
+      "id": 299,
+      "level_1": "安防设施",
+      "level_2": "人行道闸系统",
+      "level_3": "人行道闸系统",
+      "full_path": "安防设施/人行道闸系统/人行道闸系统",
+      "status": "active"
+    },
+    {
+      "id": 300,
+      "level_1": "安防设施",
+      "level_2": "车行道闸系统",
+      "level_3": "车行道闸",
+      "full_path": "安防设施/车行道闸系统/车行道闸",
+      "status": "active"
+    },
+    {
+      "id": 301,
+      "level_1": "安防设施",
+      "level_2": "车行道闸系统",
+      "level_3": "车行道闸控制主板",
+      "full_path": "安防设施/车行道闸系统/车行道闸控制主板",
+      "status": "active"
+    },
+    {
+      "id": 302,
+      "level_1": "安防设施",
+      "level_2": "车行道闸系统",
+      "level_3": "车牌识别系统",
+      "full_path": "安防设施/车行道闸系统/车牌识别系统",
+      "status": "active"
+    },
+    {
+      "id": 303,
+      "level_1": "安防设施",
+      "level_2": "车行道闸系统",
+      "level_3": "车行道闸系统",
+      "full_path": "安防设施/车行道闸系统/车行道闸系统",
+      "status": "active"
+    },
+    {
+      "id": 304,
+      "level_1": "消防泵",
+      "level_2": "消防泵",
+      "level_3": "消防泵",
+      "full_path": "消防泵/消防泵/消防泵",
+      "status": "active"
+    },
+    {
+      "id": 305,
+      "level_1": "消防泵",
+      "level_2": "消防泵",
+      "level_3": "稳压泵（稳压罐）",
+      "full_path": "消防泵/消防泵/稳压泵（稳压罐）",
+      "status": "active"
+    },
+    {
+      "id": 306,
+      "level_1": "生活泵",
+      "level_2": "生活泵",
+      "level_3": "生活水泵",
+      "full_path": "生活泵/生活泵/生活水泵",
+      "status": "active"
+    },
+    {
+      "id": 307,
+      "level_1": "生活泵",
+      "level_2": "生活泵",
+      "level_3": "生活泵阀门",
+      "full_path": "生活泵/生活泵/生活泵阀门",
+      "status": "active"
+    },
+    {
+      "id": 308,
+      "level_1": "生活泵",
+      "level_2": "生活泵",
+      "level_3": "电机",
+      "full_path": "生活泵/生活泵/电机",
+      "status": "active"
+    },
+    {
+      "id": 309,
+      "level_1": "生活泵",
+      "level_2": "生活泵",
+      "level_3": "电源",
+      "full_path": "生活泵/生活泵/电源",
+      "status": "active"
+    },
+    {
+      "id": 310,
+      "level_1": "生活泵",
+      "level_2": "生活泵",
+      "level_3": "控制主板",
+      "full_path": "生活泵/生活泵/控制主板",
+      "status": "active"
+    },
+    {
+      "id": 311,
+      "level_1": "生活泵",
+      "level_2": "生活泵",
+      "level_3": "水沟盖板",
+      "full_path": "生活泵/生活泵/水沟盖板",
+      "status": "active"
+    },
+    {
+      "id": 312,
+      "level_1": "生活泵",
+      "level_2": "生活泵",
+      "level_3": "水沟",
+      "full_path": "生活泵/生活泵/水沟",
+      "status": "active"
+    },
+    {
+      "id": 313,
+      "level_1": "电梯",
+      "level_2": "曳引系统",
+      "level_3": "曳引机",
+      "full_path": "电梯/曳引系统/曳引机",
+      "status": "active"
+    },
+    {
+      "id": 314,
+      "level_1": "电梯",
+      "level_2": "曳引系统",
+      "level_3": "导向轮（套）",
+      "full_path": "电梯/曳引系统/导向轮（套）",
+      "status": "active"
+    },
+    {
+      "id": 315,
+      "level_1": "电梯",
+      "level_2": "曳引系统",
+      "level_3": "反绳(复绕)轮（套）",
+      "full_path": "电梯/曳引系统/反绳(复绕)轮（套）",
+      "status": "active"
+    },
+    {
+      "id": 316,
+      "level_1": "电梯",
+      "level_2": "曳引系统",
+      "level_3": "曳引钢丝绳(钢带）",
+      "full_path": "电梯/曳引系统/曳引钢丝绳(钢带）",
+      "status": "active"
+    },
+    {
+      "id": 317,
+      "level_1": "电梯",
+      "level_2": "导向系统",
+      "level_3": "轿厢导轨校正",
+      "full_path": "电梯/导向系统/轿厢导轨校正",
+      "status": "active"
+    },
+    {
+      "id": 318,
+      "level_1": "电梯",
+      "level_2": "导向系统",
+      "level_3": "对重导轨校正",
+      "full_path": "电梯/导向系统/对重导轨校正",
+      "status": "active"
+    },
+    {
+      "id": 319,
+      "level_1": "电梯",
+      "level_2": "导向系统",
+      "level_3": "油杯（套）",
+      "full_path": "电梯/导向系统/油杯（套）",
+      "status": "active"
+    },
+    {
+      "id": 320,
+      "level_1": "电梯",
+      "level_2": "导向系统",
+      "level_3": "积油盒（套）",
+      "full_path": "电梯/导向系统/积油盒（套）",
+      "status": "active"
+    },
+    {
+      "id": 321,
+      "level_1": "电梯",
+      "level_2": "轿厢系统",
+      "level_3": "轿厢架",
+      "full_path": "电梯/轿厢系统/轿厢架",
+      "status": "active"
+    },
+    {
+      "id": 322,
+      "level_1": "电梯",
+      "level_2": "轿厢系统",
+      "level_3": "轿厢体",
+      "full_path": "电梯/轿厢系统/轿厢体",
+      "status": "active"
+    },
+    {
+      "id": 323,
+      "level_1": "电梯",
+      "level_2": "门系统",
+      "level_3": "轿门",
+      "full_path": "电梯/门系统/轿门",
+      "status": "active"
+    },
+    {
+      "id": 324,
+      "level_1": "电梯",
+      "level_2": "门系统",
+      "level_3": "层门",
+      "full_path": "电梯/门系统/层门",
+      "status": "active"
+    },
+    {
+      "id": 325,
+      "level_1": "电梯",
+      "level_2": "门系统",
+      "level_3": "开门机",
+      "full_path": "电梯/门系统/开门机",
+      "status": "active"
+    },
+    {
+      "id": 326,
+      "level_1": "电梯",
+      "level_2": "重量平衡系统",
+      "level_3": "对重",
+      "full_path": "电梯/重量平衡系统/对重",
+      "status": "active"
+    },
+    {
+      "id": 327,
+      "level_1": "电梯",
+      "level_2": "重量平衡系统",
+      "level_3": "重量补偿装置",
+      "full_path": "电梯/重量平衡系统/重量补偿装置",
+      "status": "active"
+    },
+    {
+      "id": 328,
+      "level_1": "电梯",
+      "level_2": "控制系统",
+      "level_3": "控制柜",
+      "full_path": "电梯/控制系统/控制柜",
+      "status": "active"
+    },
+    {
+      "id": 329,
+      "level_1": "电梯",
+      "level_2": "控制系统",
+      "level_3": "平层装置",
+      "full_path": "电梯/控制系统/平层装置",
+      "status": "active"
+    },
+    {
+      "id": 330,
+      "level_1": "电梯",
+      "level_2": "控制系统",
+      "level_3": "轿内控制",
+      "full_path": "电梯/控制系统/轿内控制",
+      "status": "active"
+    },
+    {
+      "id": 331,
+      "level_1": "电梯",
+      "level_2": "控制系统",
+      "level_3": "厅外控制",
+      "full_path": "电梯/控制系统/厅外控制",
+      "status": "active"
+    },
+    {
+      "id": 332,
+      "level_1": "电梯",
+      "level_2": "控制系统",
+      "level_3": "五方通话",
+      "full_path": "电梯/控制系统/五方通话",
+      "status": "active"
+    },
+    {
+      "id": 333,
+      "level_1": "电梯",
+      "level_2": "控制系统",
+      "level_3": "轿顶电气",
+      "full_path": "电梯/控制系统/轿顶电气",
+      "status": "active"
+    },
+    {
+      "id": 334,
+      "level_1": "电梯",
+      "level_2": "控制系统",
+      "level_3": "井道电气",
+      "full_path": "电梯/控制系统/井道电气",
+      "status": "active"
+    },
+    {
+      "id": 335,
+      "level_1": "电梯",
+      "level_2": "控制系统",
+      "level_3": "应急电源",
+      "full_path": "电梯/控制系统/应急电源",
+      "status": "active"
+    },
+    {
+      "id": 336,
+      "level_1": "电梯",
+      "level_2": "驱动系统",
+      "level_3": "驱动柜",
+      "full_path": "电梯/驱动系统/驱动柜",
+      "status": "active"
+    },
+    {
+      "id": 337,
+      "level_1": "电梯",
+      "level_2": "驱动系统",
+      "level_3": "供电系统",
+      "full_path": "电梯/驱动系统/供电系统",
+      "status": "active"
+    },
+    {
+      "id": 338,
+      "level_1": "电梯",
+      "level_2": "驱动系统",
+      "level_3": "速度反馈检测装置",
+      "full_path": "电梯/驱动系统/速度反馈检测装置",
+      "status": "active"
+    },
+    {
+      "id": 339,
+      "level_1": "电梯",
+      "level_2": "驱动系统",
+      "level_3": "电机调速控制装置",
+      "full_path": "电梯/驱动系统/电机调速控制装置",
+      "status": "active"
+    },
+    {
+      "id": 340,
+      "level_1": "电梯",
+      "level_2": "安全保护系统",
+      "level_3": "安全钳",
+      "full_path": "电梯/安全保护系统/安全钳",
+      "status": "active"
+    },
+    {
+      "id": 341,
+      "level_1": "电梯",
+      "level_2": "安全保护系统",
+      "level_3": "限速器",
+      "full_path": "电梯/安全保护系统/限速器",
+      "status": "active"
+    },
+    {
+      "id": 342,
+      "level_1": "电梯",
+      "level_2": "安全保护系统",
+      "level_3": "超速保护装置（套）",
+      "full_path": "电梯/安全保护系统/超速保护装置（套）",
+      "status": "active"
+    },
+    {
+      "id": 343,
+      "level_1": "电梯",
+      "level_2": "安全保护系统",
+      "level_3": "极限位置保护装置",
+      "full_path": "电梯/安全保护系统/极限位置保护装置",
+      "status": "active"
+    },
+    {
+      "id": 344,
+      "level_1": "电梯",
+      "level_2": "安全保护系统",
+      "level_3": "井道安全门（套）",
+      "full_path": "电梯/安全保护系统/井道安全门（套）",
+      "status": "active"
+    },
+    {
+      "id": 345,
+      "level_1": "电梯",
+      "level_2": "安全保护系统",
+      "level_3": "轿厢救援门(窗)",
+      "full_path": "电梯/安全保护系统/轿厢救援门(窗)",
+      "status": "active"
+    },
+    {
+      "id": 346,
+      "level_1": "电梯",
+      "level_2": "安全保护系统",
+      "level_3": "底坑检修门（套）",
+      "full_path": "电梯/安全保护系统/底坑检修门（套）",
+      "status": "active"
+    },
+    {
+      "id": 347,
+      "level_1": "电梯",
+      "level_2": "安全保护系统",
+      "level_3": "涨紧装置",
+      "full_path": "电梯/安全保护系统/涨紧装置",
+      "status": "active"
+    },
+    {
+      "id": 348,
+      "level_1": "电梯",
+      "level_2": "安全保护系统",
+      "level_3": "意外移动装置",
+      "full_path": "电梯/安全保护系统/意外移动装置",
+      "status": "active"
+    },
+    {
+      "id": 349,
+      "level_1": "电梯",
+      "level_2": "安全保护系统",
+      "level_3": "缓冲器",
+      "full_path": "电梯/安全保护系统/缓冲器",
+      "status": "active"
+    }
+  ]
+}

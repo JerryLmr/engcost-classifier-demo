@@ -1,0 +1,33 @@
+{
+  "version": "v1_0",
+  "updated_at": "2026-04-09",
+  "generic_level3_terms": [
+    "主机",
+    "系统",
+    "设备",
+    "装置",
+    "设施",
+    "工程",
+    "项目"
+  ],
+  "domain_intent_rules": [
+    {
+      "intent_keyword": "电梯",
+      "preferred_level1": "电梯",
+      "preferred_bonus": 4,
+      "non_preferred_penalty": 1
+    }
+  ],
+  "semantic_bridges": [
+    {
+      "all_keywords": ["电梯", "主机"],
+      "target_level1": "电梯",
+      "target_level3": "曳引机",
+      "bonus": 6
+    }
+  ],
+  "single_domain_focus": {
+    "enabled": true,
+    "min_score_gap": 3
+  }
+}

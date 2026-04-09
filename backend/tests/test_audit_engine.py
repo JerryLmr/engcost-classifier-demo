@@ -11,6 +11,7 @@ except (ImportError, RuntimeError):  # pragma: no cover
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.audit_service import audit_project
+from services.audit_pipeline_service import run_audit_pipeline
 from services.mapping_service import map_project_name
 
 if TestClient is not None:
@@ -18,9 +19,20 @@ if TestClient is not None:
 
 
 def find_catalog_id(full_path: str) -> int:
-    catalog_path = Path(__file__).resolve().parents[1] / "config" / "object_catalog.json"
-    with catalog_path.open("r", encoding="utf-8") as fp:
-        catalog = json.load(fp)
+    root = Path(__file__).resolve().parents[1]
+    candidates = [
+        root / "rules" / "repairable_object_catalog.json",
+        root / "config" / "object_catalog.json",
+    ]
+    catalog = None
+    for catalog_path in candidates:
+        if not catalog_path.exists():
+            continue
+        with catalog_path.open("r", encoding="utf-8") as fp:
+            catalog = json.load(fp)
+        break
+    if catalog is None:
+        raise AssertionError("未找到维修对象目录配置文件")
     for item in catalog["items"]:
         if item["full_path"] == full_path:
             return item["id"]
@@ -44,6 +56,9 @@ class AuditServiceTestCase(unittest.TestCase):
     def _audit(self, payload):
         mapping_result = map_project_name(payload["project_name"])
         return audit_project(payload, mapping_result)
+
+    def _audit_pipeline(self, payload):
+        return run_audit_pipeline(payload)
 
     def test_audit_maps_catalog_object_dynamically(self):
         data = self._audit({"project_name": "3号楼电梯曳引机维修"})
@@ -433,6 +448,89 @@ class AuditServiceTestCase(unittest.TestCase):
         self.assertEqual(data["overall_result"], "manual_review")
         self.assertIn("MULTI_PROJECT", data["reason_codes"])
         self.assertIn("CROSS_DOMAIN_PROJECT", data["reason_codes"])
+
+    def test_high_freq_fire_extinguisher_refill_direct_reject(self):
+        data = self._audit_pipeline({"project_name": "上海锦绣逸庭园区灭火器充装二氧化碳"})
+        self.assertEqual(data["overall_result"], "non_compliant")
+        self.assertIn("high_freq_mapping", data["audit_path"])
+        self.assertIn("direct_reject", data["audit_path"])
+
+    def test_high_freq_elevator_brake_testing_direct_reject(self):
+        data = self._audit_pipeline({"project_name": "电梯125%制动试验"})
+        self.assertEqual(data["overall_result"], "non_compliant")
+        self.assertIn("direct_reject", data["audit_path"])
+
+    def test_high_freq_trash_bin_replacement_direct_reject(self):
+        data = self._audit_pipeline({"project_name": "垃圾桶更换"})
+        self.assertEqual(data["overall_result"], "non_compliant")
+        self.assertIn("direct_reject", data["audit_path"])
+
+    def test_high_freq_tree_pruning_direct_reject(self):
+        data = self._audit_pipeline({"project_name": "小区树木修剪"})
+        self.assertEqual(data["overall_result"], "non_compliant")
+        self.assertIn("direct_reject", data["audit_path"])
+
+    def test_high_freq_camera_new_install_direct_reject(self):
+        data = self._audit_pipeline({"project_name": "新增摄像头安装工程"})
+        self.assertEqual(data["overall_result"], "non_compliant")
+        self.assertIn("direct_reject", data["audit_path"])
+
+    def test_high_freq_route_to_full_audit_for_elevator_mainframe_repair(self):
+        data = self._audit_pipeline({"project_name": "3号楼电梯主机维修"})
+        self.assertIn("route_to_full_audit", data["audit_path"])
+        self.assertIn("mapping", data["audit_path"])
+        self.assertNotIn("direct_reject", data["audit_path"])
+        self.assertNotEqual(data["overall_result"], "compliant")
+
+    def test_high_freq_route_to_full_audit_for_exterior_wall_repair(self):
+        data = self._audit_pipeline({"project_name": "12号楼外墙渗漏维修"})
+        self.assertIn("route_to_full_audit", data["audit_path"])
+        self.assertIn("mapping", data["audit_path"])
+        self.assertNotIn("direct_reject", data["audit_path"])
+        self.assertNotEqual(data["overall_result"], "compliant")
+
+    def test_high_freq_window_glass_goes_to_need_supplement_route(self):
+        data = self._audit_pipeline({"project_name": "2号楼楼道窗户玻璃维修"})
+        self.assertEqual(data["overall_result"], "need_supplement")
+        self.assertIn("route_to_need_supplement", data["audit_path"])
+
+    def test_high_freq_roof_repair_routes_to_full_audit(self):
+        data = self._audit_pipeline({"project_name": "屋面防水维修"})
+        self.assertIn("route_to_full_audit", data["audit_path"])
+        self.assertIn("mapping", data["audit_path"])
+
+    def test_high_freq_fire_system_repair_routes_to_full_audit(self):
+        data = self._audit_pipeline({"project_name": "消防喷淋维修"})
+        self.assertIn("route_to_full_audit", data["audit_path"])
+        self.assertIn("mapping", data["audit_path"])
+
+    def test_high_freq_greening_renovation_routes_to_manual_review(self):
+        data = self._audit_pipeline({"project_name": "公共景观绿化整体翻新"})
+        self.assertEqual(data["overall_result"], "manual_review")
+        self.assertIn("route_to_manual_review", data["audit_path"])
+
+    def test_high_freq_weak_current_optimization_routes_to_manual_review(self):
+        data = self._audit_pipeline({"project_name": "门禁线路迁改优化升级"})
+        self.assertEqual(data["overall_result"], "manual_review")
+        self.assertIn("route_to_manual_review", data["audit_path"])
+
+    def test_mapping_prefers_elevator_domain_for_elevator_mainframe_repair(self):
+        mapping = map_project_name("3号楼电梯主机维修")
+        self.assertGreater(len(mapping["mapped_objects"]), 0)
+        self.assertTrue(mapping["mapped_objects"][0]["full_path"].startswith("电梯/"))
+        self.assertNotIn("暖通系统", mapping["mapped_objects"][0]["full_path"])
+
+        data = self._audit_pipeline({"project_name": "3号楼电梯主机维修"})
+        self.assertNotIn("CROSS_DOMAIN_PROJECT", data["reason_codes"])
+
+    def test_mapping_keeps_hvac_mainframe_for_split_ac_mainframe_repair(self):
+        mapping = map_project_name("分体式空调主机维修")
+        self.assertGreater(len(mapping["mapped_objects"]), 0)
+        self.assertTrue(mapping["mapped_objects"][0]["full_path"].startswith("暖通系统/分体式空调/主机"))
+
+    def test_mapping_keeps_cross_domain_for_real_multi_project_input(self):
+        data = self._audit_pipeline({"project_name": "电梯主机维修，空调主机维修"})
+        self.assertIn("MULTI_PROJECT", data["reason_codes"])
 
 
 if __name__ == "__main__":

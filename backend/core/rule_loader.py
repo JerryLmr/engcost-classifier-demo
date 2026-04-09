@@ -3,7 +3,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, TypedDict
 
-from core.config import RULE_CONFIG_DIR, RULE_SOURCE
+from core.config import RULE_CONFIG_DIR, RULE_CONFIG_FALLBACK_DIR, RULE_SOURCE
 from core.rule_validator import validate_json_config_dir, validate_ruleset
 from data.boundaries import BOUNDARY_RULES
 from data.categories import CATEGORY_TREE
@@ -56,8 +56,23 @@ def get_python_ruleset() -> RuleSet:
 
 
 def load_json_ruleset(config_dir: Optional[Path] = None) -> RuleSet:
-    config_dir = (config_dir or RULE_CONFIG_DIR).resolve()
-    validate_json_config_dir(config_dir)
+    requested_dir = (config_dir or RULE_CONFIG_DIR).resolve()
+    config_candidates = [requested_dir]
+    fallback_resolved = RULE_CONFIG_FALLBACK_DIR.resolve()
+    if fallback_resolved not in config_candidates:
+        config_candidates.append(fallback_resolved)
+
+    config_dir = None
+    for candidate in config_candidates:
+        try:
+            validate_json_config_dir(candidate)
+            config_dir = candidate
+            break
+        except (FileNotFoundError, ValueError):
+            continue
+    if config_dir is None:
+        validate_json_config_dir(requested_dir)
+        config_dir = requested_dir
 
     with (config_dir / "taxonomy.json").open("r", encoding="utf-8") as fp:
         category_tree = json.load(fp)
