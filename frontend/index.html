@@ -112,6 +112,14 @@
         />
         <button id="auditBtn" class="search-submit" type="button">开始审计</button>
       </div>
+      <div class="examples examples-inline audit-demo-examples" id="auditDemoExamples">
+        <span class="example-hint">演示样例：</span>
+        <button class="example audit-demo-btn" type="button" data-audit-demo="excluded">排除类：小区树木修剪</button>
+        <button class="example audit-demo-btn" type="button" data-audit-demo="eligible_equipment">可纳入：电梯主机维修</button>
+        <button class="example audit-demo-btn" type="button" data-audit-demo="eligible_part">可纳入：外墙渗漏维修</button>
+        <button class="example audit-demo-btn" type="button" data-audit-demo="conflict">冲突复核：电梯主机+专有</button>
+        <button class="example audit-demo-btn" type="button" data-audit-demo="private">户内专有：室内门锁维修</button>
+      </div>
       <div class="btns audit-actions">
         <button class="secondary" id="auditResetBtn" type="button">重新开始</button>
       </div>
@@ -123,9 +131,11 @@
         <section class="audit-section audit-overview-section">
           <div class="audit-summary-card">
             <div class="audit-summary-head">
-              <span class="audit-summary-label">审计结论</span>
+              <span class="audit-summary-label">主结论</span>
               <strong id="auditDisplayResult"></strong>
             </div>
+            <div class="audit-summary-substatus" id="auditSecondaryStatus"></div>
+            <div class="audit-gap-summary" id="auditGapSummary"></div>
             <div class="audit-manual-review" id="auditManualReview" hidden>建议人工复核</div>
           </div>
           <div class="kv"><strong>项目名称：</strong><span id="auditProjectName"></span></div>
@@ -143,7 +153,7 @@
             <strong>原因码：</strong>
             <div class="audit-pill-list" id="auditReasonCodes"></div>
           </div>
-          <div class="kv">
+          <div class="kv" id="auditTopBasisBlock">
             <strong>依据：</strong>
             <div class="audit-list-block" id="auditBasisDocuments"></div>
           </div>
@@ -151,9 +161,11 @@
 
         <section class="audit-section">
           <div class="audit-section-head">
-            <h3>分项审计结果</h3>
+            <details class="audit-sub-audit-details" id="auditSubAuditDetails">
+              <summary>分项审计结果（点击展开）</summary>
+              <div class="audit-sub-audits" id="auditSubAudits"></div>
+            </details>
           </div>
-          <div class="audit-sub-audits" id="auditSubAudits"></div>
         </section>
 
         <section class="audit-section">

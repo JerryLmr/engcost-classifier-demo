@@ -377,6 +377,20 @@ button.secondary {
   margin-top: 14px;
 }
 
+.audit-demo-examples {
+  justify-content: flex-start;
+  margin-top: 14px;
+}
+
+.audit-demo-btn {
+  border: 1px solid #d8e1ef;
+  background: #fff;
+  color: #0f172a;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.06);
+  font-size: 13px;
+  padding: 10px 14px;
+}
+
 .audit-optional-panel {
   margin-top: 14px;
   border: 1px solid #e2e8f0;
@@ -494,6 +508,19 @@ button.secondary {
   color: #0f172a;
 }
 
+.audit-summary-substatus {
+  margin-top: 10px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.audit-gap-summary {
+  margin-top: 8px;
+  color: #0f766e;
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .audit-manual-review {
   margin-top: 14px;
   display: inline-flex;
@@ -542,6 +569,33 @@ button.secondary {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
+}
+
+.audit-sub-audit-details {
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 0 14px 14px;
+  background: #f8fafc;
+}
+
+.audit-sub-audit-details > summary {
+  list-style: none;
+  cursor: pointer;
+  font-weight: 700;
+  color: #1e3a8a;
+  padding: 12px 2px;
+}
+
+.audit-sub-audit-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.audit-sub-audit-details[open] > summary {
+  border-bottom: 1px solid #dbe3f2;
+}
+
+.audit-sub-audit-details .audit-sub-audits {
+  margin-top: 12px;
 }
 
 .sub-audit-card {

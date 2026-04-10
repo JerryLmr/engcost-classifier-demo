@@ -48,15 +48,19 @@ const auditResetBtn = document.getElementById("auditResetBtn");
 const auditOptionalPanel = document.getElementById("auditOptionalPanel");
 const auditOptionalFields = document.getElementById("auditOptionalFields");
 const auditDisplayResult = document.getElementById("auditDisplayResult");
+const auditSecondaryStatus = document.getElementById("auditSecondaryStatus");
+const auditGapSummary = document.getElementById("auditGapSummary");
 const auditManualReview = document.getElementById("auditManualReview");
 const auditProjectName = document.getElementById("auditProjectName");
 const auditMappedObjects = document.getElementById("auditMappedObjects");
 const auditTags = document.getElementById("auditTags");
 const auditReasons = document.getElementById("auditReasons");
 const auditReasonCodes = document.getElementById("auditReasonCodes");
+const auditTopBasisBlock = document.getElementById("auditTopBasisBlock");
 const auditBasisDocuments = document.getElementById("auditBasisDocuments");
 const auditPath = document.getElementById("auditPath");
 const auditSubAudits = document.getElementById("auditSubAudits");
+const auditSubAuditDetails = document.getElementById("auditSubAuditDetails");
 
 let focusSamplesRaw = [];
 const focusSortState = {
@@ -72,6 +76,9 @@ const SUB_AUDIT_META = [
   { key: "scope_audit", title: "使用范围审计" },
   { key: "process_audit", title: "流程合规审计" },
   { key: "document_completeness_audit", title: "资料完整性审计" },
+  { key: "timeline_audit", title: "时序合规审计" },
+  { key: "amount_audit", title: "金额合理性审计" },
+  { key: "emergency_audit", title: "应急维修审计" },
 ];
 
 const RESULT_BADGE_LABELS = {
@@ -109,6 +116,29 @@ const AUDIT_SUPPLEMENT_FIELDS = [
   { key: "is_emergency", label: "是否紧急维修", group: "gray_case_facts" },
   { key: "has_emergency_proof", label: "是否具备应急证明材料", group: "gray_case_facts" },
 ];
+
+const AUDIT_DEMO_CASES = {
+  excluded: {
+    project_name: "小区树木修剪",
+    facts: {},
+  },
+  eligible_equipment: {
+    project_name: "3号楼电梯主机维修",
+    facts: {},
+  },
+  eligible_part: {
+    project_name: "12号楼外墙渗漏维修",
+    facts: {},
+  },
+  conflict: {
+    project_name: "3号楼电梯主机维修",
+    facts: { is_private_part: true },
+  },
+  private: {
+    project_name: "室内门锁维修",
+    facts: { is_private_part: true },
+  },
+};
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -379,6 +409,21 @@ function formatFactField(name) {
   return String(name || "");
 }
 
+function formatAuditSecondaryStatus(data) {
+  const displayResult = data && data.display_result ? data.display_result : "-";
+  const overallResult = data && data.overall_result ? data.overall_result : "-";
+  return `审计状态：${displayResult}（内部结果：${overallResult}）`;
+}
+
+function formatGapSummary(summaryConclusion) {
+  const categories =
+    summaryConclusion && Array.isArray(summaryConclusion.gap_categories) ? summaryConclusion.gap_categories : [];
+  if (!categories.length) {
+    return "缺口摘要：暂无明显缺口";
+  }
+  return `缺口摘要：${categories.join(" / ")}缺口`;
+}
+
 function renderAuditOptionalFields() {
   const groupHtml = AUDIT_SUPPLEMENT_GROUPS.map((group) => {
     const fields = AUDIT_SUPPLEMENT_FIELDS.filter((field) => field.group === group.key);
@@ -437,6 +482,33 @@ function resetAuditOptionalFields() {
   }
 }
 
+function setAuditOptionalFieldValue(fieldKey, value) {
+  const element = document.querySelector(`[data-audit-field="${fieldKey}"]`);
+  if (!element) {
+    return;
+  }
+  if (value === true) {
+    element.value = "true";
+  } else if (value === false) {
+    element.value = "false";
+  } else {
+    element.value = "";
+  }
+}
+
+function applyAuditDemoCase(caseKey) {
+  const demoCase = AUDIT_DEMO_CASES[caseKey];
+  if (!demoCase) {
+    return;
+  }
+  auditProjectText.value = demoCase.project_name;
+  resetAuditOptionalFields();
+  Object.entries(demoCase.facts || {}).forEach(([fieldKey, fieldValue]) => {
+    setAuditOptionalFieldValue(fieldKey, fieldValue);
+  });
+  setAuditStatus("已填充演示样例，可直接开始审计");
+}
+
 function renderAuditPillList(container, values, emptyLabel) {
   if (!Array.isArray(values) || !values.length) {
     container.innerHTML = `<span class="audit-empty">${escapeHtml(emptyLabel)}</span>`;
@@ -486,6 +558,22 @@ function renderBasisDocuments(documents) {
     `;
   });
   renderAuditList(auditBasisDocuments, items, "暂无明确法规依据展示");
+}
+
+function isSystemRuleSourceType(sourceType) {
+  const normalized = String(sourceType || "").toLowerCase();
+  return normalized === "system_rule" || normalized === "system" || normalized.includes("system_rule");
+}
+
+function shouldHideTopBasisBlock(documents) {
+  const safeDocuments = Array.isArray(documents) ? documents : [];
+  if (!safeDocuments.length) {
+    return false;
+  }
+  return safeDocuments.every((document) => {
+    const noLocator = !document?.article && !document?.section;
+    return noLocator && isSystemRuleSourceType(document?.source_type);
+  });
 }
 
 function getDocumentGroupKey(document) {
@@ -612,7 +700,9 @@ function renderAuditResult(data) {
   auditResult = data;
   auditError = "";
   auditResultBox.hidden = false;
-  auditDisplayResult.textContent = data.display_result || "-";
+  auditDisplayResult.textContent = data.display_summary || data.display_result || "-";
+  auditSecondaryStatus.textContent = formatAuditSecondaryStatus(data);
+  auditGapSummary.textContent = formatGapSummary(data.summary_conclusion || {});
   auditManualReview.hidden = data.manual_review_required !== true;
   auditProjectName.textContent = data.project_name || "";
   renderMappedObjects(data.mapped_objects);
@@ -620,7 +710,13 @@ function renderAuditResult(data) {
   renderReasons(data.reasons);
   renderAuditPillList(auditReasonCodes, data.reason_codes, "暂无原因码");
   renderBasisDocuments(data.basis_documents);
+  if (auditTopBasisBlock) {
+    auditTopBasisBlock.hidden = shouldHideTopBasisBlock(data.basis_documents);
+  }
   renderSubAudits(data.sub_audits);
+  if (auditSubAuditDetails) {
+    auditSubAuditDetails.open = false;
+  }
   renderAuditPillList(auditPath, data.audit_path, "暂无审计路径");
 }
 
@@ -631,6 +727,8 @@ function resetAuditResult() {
   resetAuditOptionalFields();
   auditResultBox.hidden = true;
   auditDisplayResult.textContent = "";
+  auditSecondaryStatus.textContent = "";
+  auditGapSummary.textContent = "";
   auditManualReview.hidden = true;
   auditProjectName.textContent = "";
   auditMappedObjects.innerHTML = "";
@@ -638,7 +736,13 @@ function resetAuditResult() {
   auditReasons.innerHTML = "";
   auditReasonCodes.innerHTML = "";
   auditBasisDocuments.innerHTML = "";
+  if (auditTopBasisBlock) {
+    auditTopBasisBlock.hidden = false;
+  }
   auditSubAudits.innerHTML = "";
+  if (auditSubAuditDetails) {
+    auditSubAuditDetails.open = false;
+  }
   auditPath.innerHTML = "";
   setAuditLoadingState(false);
   setAuditStatus("输入工程描述后开始审计");
@@ -1069,9 +1173,15 @@ async function handleExcelAnalyze() {
   }
 }
 
-document.querySelectorAll(".example").forEach((element) => {
+document.querySelectorAll("#singleFeaturePanel .example").forEach((element) => {
   element.addEventListener("click", () => {
     projectText.value = element.textContent.trim();
+  });
+});
+
+document.querySelectorAll(".audit-demo-btn").forEach((element) => {
+  element.addEventListener("click", () => {
+    applyAuditDemoCase(element.dataset.auditDemo);
   });
 });
 

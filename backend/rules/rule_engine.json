@@ -144,7 +144,8 @@
     "WITHIN_WARRANTY": "属于保修期内",
     "OUTSIDE_SCOPE_PRIVATE_PART": "属于专有部分",
     "OUTSIDE_SCOPE_UNKNOWN_OBJECT": "无法确认维修对象",
-    "PROPERTY_SERVICE_SCOPE": "属于物业服务合同维保范围"
+    "PROPERTY_SERVICE_SCOPE": "属于物业服务合同维保范围",
+    "FACT_CONFLICT_SCOPE": "目录语义与输入事实冲突"
   },
 
   "sub_audit_definitions": {
@@ -538,6 +539,42 @@
     },
 
     {
+      "rule_id": "CATALOG_000",
+      "name": "户内专有对象可直接判定",
+      "stage": "CATALOG_CHECK",
+      "priority": 25,
+      "when": {
+        "all": [
+          { "field": "is_private_part", "op": "eq", "value": true },
+          {
+            "field": "project_name",
+            "op": "contains_any_text",
+            "values": ["室内", "户内", "门锁", "洁具", "墙面粉刷"]
+          }
+        ]
+      },
+      "then": {
+        "result": "non_compliant",
+        "reason_codes": ["OUTSIDE_SCOPE_PRIVATE_PART"],
+        "message": "项目语义明确属于户内专有部分，不应使用维修资金"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "专有部分规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "专有部分规则"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
       "rule_id": "CATALOG_001",
       "name": "目录外对象",
       "stage": "CATALOG_CHECK",
@@ -570,6 +607,82 @@
     },
 
     {
+      "rule_id": "SCOPE_000",
+      "name": "目录强语义与专有事实冲突",
+      "stage": "NORMAL_SCOPE_CHECK",
+      "priority": 53,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "shared_part" },
+              { "field": "normalized_tags", "op": "contains", "value": "shared_facility" }
+            ]
+          },
+          { "field": "is_private_part", "op": "eq", "value": true }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["FACT_CONFLICT_SCOPE"],
+        "message": "目录语义显示为共用范围，但输入标记为专有部分，建议人工复核"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "使用范围冲突规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "使用范围冲突规则"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "SCOPE_000A",
+      "name": "目录强语义与物业维保事实冲突",
+      "stage": "NORMAL_SCOPE_CHECK",
+      "priority": 53,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+          {
+            "any": [
+              { "field": "normalized_tags", "op": "contains", "value": "shared_part" },
+              { "field": "normalized_tags", "op": "contains", "value": "shared_facility" }
+            ]
+          },
+          { "field": "is_property_service_scope", "op": "eq", "value": true }
+        ]
+      },
+      "then": {
+        "result": "manual_review",
+        "reason_codes": ["FACT_CONFLICT_SCOPE"],
+        "message": "目录语义显示为共用范围，但输入标记为物业维保范围，建议人工复核"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "使用范围冲突规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "使用范围冲突规则"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
       "rule_id": "SCOPE_001",
       "name": "明确属于专有部分",
       "stage": "NORMAL_SCOPE_CHECK",
@@ -595,6 +708,74 @@
         "clause_label": null,
         "public_access": false,
         "display_name": "使用范围规则"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "SCOPE_002A",
+      "name": "目录强语义命中共用部位",
+      "stage": "NORMAL_SCOPE_CHECK",
+      "priority": 55,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+          { "field": "normalized_tags", "op": "contains", "value": "shared_part" }
+        ]
+      },
+      "then": {
+        "result": "continue",
+        "route_to": "PROCESS_CHECK",
+        "sub_audit_result": "compliant",
+        "reason_codes": ["IN_SCOPE_COMMON_PART"],
+        "message": "目录语义显示项目属于共用部位维修范围"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "目录范围语义规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "目录范围语义规则"
+      },
+      "audit_dimensions": ["scope_audit"],
+      "is_active": true
+    },
+
+    {
+      "rule_id": "SCOPE_002B",
+      "name": "目录强语义命中共用设施设备",
+      "stage": "NORMAL_SCOPE_CHECK",
+      "priority": 55,
+      "when": {
+        "all": [
+          { "field": "normalized_tags", "op": "contains", "value": "repairable_object" },
+          { "field": "normalized_tags", "op": "contains", "value": "shared_facility" }
+        ]
+      },
+      "then": {
+        "result": "continue",
+        "route_to": "PROCESS_CHECK",
+        "sub_audit_result": "compliant",
+        "reason_codes": ["IN_SCOPE_COMMON_FACILITY"],
+        "message": "目录语义显示项目属于共用设施设备维修范围"
+      },
+      "source": {
+        "source_type": "system_rule",
+        "title": "目录范围语义规则",
+        "issuer": null,
+        "document_no": null,
+        "article": null,
+        "section": null,
+        "chapter": null,
+        "clause_label": null,
+        "public_access": false,
+        "display_name": "目录范围语义规则"
       },
       "audit_dimensions": ["scope_audit"],
       "is_active": true
@@ -1143,7 +1324,7 @@
       "rule_id": "TIMELINE_001",
       "name": "表决时间早于申请时间",
       "stage": "PROCESS_CHECK",
-      "priority": 74,
+      "priority": 69,
       "when": {
         "all": [
           { "field": "vote_date", "op": "not_empty_or_null" },
@@ -1176,7 +1357,7 @@
       "rule_id": "TIMELINE_002",
       "name": "公示时间早于表决时间",
       "stage": "PROCESS_CHECK",
-      "priority": 75,
+      "priority": 69,
       "when": {
         "all": [
           { "field": "announcement_date", "op": "not_empty_or_null" },

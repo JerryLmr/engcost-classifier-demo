@@ -45,6 +45,15 @@ NON_FACT_FIELDS = {
     "extracted_document_fields",
     "field_confidence_map",
 }
+EXCLUSION_REASON_CODES = {
+    "GREENING_MAINTENANCE",
+    "CLEANING_SANITATION",
+    "INSPECTION_TESTING",
+    "NEW_CONSTRUCTION",
+    "DAILY_SERVICE",
+    "OUTSIDE_SCOPE_PRIVATE_PART",
+    "PROPERTY_SERVICE_SCOPE",
+}
 
 
 def normalize_text(text: str) -> str:
@@ -319,6 +328,14 @@ def _evaluate_condition(condition: Dict[str, Any], context: Dict[str, Any]) -> b
             reduced = reduced.replace(normalize_text(str(term)), "")
         reduced = reduced.strip(condition.get("strip_chars", "-_/"))
         return len(reduced) == 0
+    if op == "contains_any_text":
+        if current is None:
+            return False
+        haystack = normalize_text(str(current))
+        for candidate in condition.get("values", []):
+            if normalize_text(str(candidate)) in haystack:
+                return True
+        return False
     raise ValueError(f"不支持的规则操作: {op}")
 
 
@@ -557,10 +574,72 @@ def _pick_best_signal(signals: Sequence[Dict[str, Any]], stage_order: Dict[str, 
         signals,
         key=lambda item: (
             stage_order.get(item["rule"]["stage"], 999),
-            -RESULT_PRECEDENCE.get(item["result"], 0),
             item["rule"].get("priority", 9999),
+            -RESULT_PRECEDENCE.get(item["result"], 0),
         ),
     )
+
+
+def _classify_gap_categories(sub_audits: Dict[str, Any]) -> List[str]:
+    mapping = {
+        "process_audit": "流程",
+        "amount_audit": "金额",
+        "document_completeness_audit": "资料",
+        "timeline_audit": "时序",
+        "emergency_audit": "应急",
+    }
+    categories: List[str] = []
+    for key, label in mapping.items():
+        sub = sub_audits.get(key, {})
+        if not sub or sub.get("applicable") is False:
+            continue
+        result = sub.get("result")
+        if result in {"need_supplement", "manual_review", "non_compliant"}:
+            categories.append(label)
+    return categories
+
+
+def _build_summary_conclusion(
+    overall_result: str,
+    reason_codes: Sequence[str],
+    sub_audits: Dict[str, Any],
+) -> Dict[str, Any]:
+    reason_set = set(reason_codes or [])
+    gap_categories = _classify_gap_categories(sub_audits)
+    scope = sub_audits.get("scope_audit", {}) or {}
+    scope_result = scope.get("result")
+    scope_compliant = scope.get("applicable") is True and scope_result == "compliant"
+
+    summary_type = "needs_more_info"
+    base_message = "需补充信息后继续审计"
+
+    if overall_result == "non_compliant" or any(code in reason_set for code in EXCLUSION_REASON_CODES):
+        summary_type = "non_compliant"
+        base_message = "初步判断不符合维修资金使用条件"
+    elif "FACT_CONFLICT_SCOPE" in reason_set:
+        summary_type = "scope_conflict_review"
+        base_message = "范围事实存在冲突，建议人工复核"
+    elif scope_compliant:
+        summary_type = "scope_prelim_pass"
+        base_message = "可纳入维修资金（初步判断）"
+
+    if summary_type == "scope_prelim_pass" and gap_categories:
+        display_summary = f"{base_message}，但存在{'/'.join(gap_categories)}缺口"
+    elif summary_type == "scope_prelim_pass":
+        display_summary = base_message
+    elif gap_categories and summary_type in {"needs_more_info", "scope_conflict_review"}:
+        display_summary = f"{base_message}（当前主要缺口：{'/'.join(gap_categories)}）"
+    else:
+        display_summary = base_message
+
+    return {
+        "type": summary_type,
+        "scope_prelim_pass": scope_compliant,
+        "conflict_detected": "FACT_CONFLICT_SCOPE" in reason_set,
+        "gap_categories": gap_categories,
+        "primary_message": base_message,
+        "display_summary": display_summary,
+    }
 
 
 def audit_project(request_payload: Dict[str, Any], mapping_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -631,6 +710,12 @@ def audit_project(request_payload: Dict[str, Any], mapping_result: Dict[str, Any
     if not manual_review_required and advisory_signals:
         manual_review_required = True
 
+    summary_conclusion = _build_summary_conclusion(
+        overall_result=result,
+        reason_codes=reason_codes,
+        sub_audits=sub_audits,
+    )
+
     return {
         "project_name": project_name,
         "mapped_objects": mapping_result.get("mapped_objects", []),
@@ -646,4 +731,6 @@ def audit_project(request_payload: Dict[str, Any], mapping_result: Dict[str, Any
         "manual_review_required": manual_review_required,
         "sub_audits": sub_audits,
         "document_extraction_targets": engine.get("document_extraction_targets", {}),
+        "summary_conclusion": summary_conclusion,
+        "display_summary": summary_conclusion["display_summary"],
     }

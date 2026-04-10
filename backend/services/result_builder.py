@@ -52,6 +52,15 @@ def build_high_freq_result(
     display_result = DISPLAY_MAPPING.get(overall_result, DISPLAY_MAPPING["manual_review"])
     reason_codes = list(high_freq_result.get("reason_codes", []))
     reasons: List[str] = [high_freq_result.get("business_statement", "")] if high_freq_result.get("business_statement") else []
+    summary_message = reasons[0] if reasons else display_result
+    summary_conclusion = {
+        "type": "high_freq_routed",
+        "scope_prelim_pass": False,
+        "conflict_detected": False,
+        "gap_categories": [],
+        "primary_message": summary_message,
+        "display_summary": summary_message,
+    }
 
     return {
         "project_name": project_name,
@@ -68,4 +77,6 @@ def build_high_freq_result(
         "manual_review_required": overall_result == "manual_review",
         "sub_audits": _build_default_sub_audits(),
         "document_extraction_targets": {},
+        "summary_conclusion": summary_conclusion,
+        "display_summary": summary_message,
     }

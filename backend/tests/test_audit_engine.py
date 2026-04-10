@@ -134,6 +134,7 @@ class AuditServiceTestCase(unittest.TestCase):
         self.assertEqual(data["sub_audits"]["scope_audit"]["result"], "compliant")
         self.assertEqual(data["sub_audits"]["scope_audit"]["reason_codes"], ["IN_SCOPE_COMMON_PART"])
         self.assertEqual(data["sub_audits"]["scope_audit"]["facts_used"], ["is_common_part"])
+        self.assertIn("可纳入维修资金（初步判断）", data["display_summary"])
 
     def test_scope_audit_can_mark_common_facility_in_scope(self):
         data = self._audit(
@@ -148,16 +149,17 @@ class AuditServiceTestCase(unittest.TestCase):
         self.assertEqual(data["sub_audits"]["scope_audit"]["reason_codes"], ["IN_SCOPE_COMMON_FACILITY"])
         self.assertEqual(data["overall_result"], "need_supplement")
 
-    def test_scope_audit_property_service_scope_changes_overall_result(self):
+    def test_scope_audit_property_service_scope_conflicts_with_catalog_strong_semantics(self):
         data = self._audit(
             {
                 "project_name": "3号楼电梯曳引机维修",
                 "is_property_service_scope": True,
             }
         )
-        self.assertEqual(data["overall_result"], "non_compliant")
-        self.assertEqual(data["reason_codes"], ["PROPERTY_SERVICE_SCOPE"])
-        self.assertEqual(data["sub_audits"]["scope_audit"]["reason_codes"], ["PROPERTY_SERVICE_SCOPE"])
+        self.assertEqual(data["overall_result"], "manual_review")
+        self.assertIn("FACT_CONFLICT_SCOPE", data["reason_codes"])
+        self.assertEqual(data["sub_audits"]["scope_audit"]["reason_codes"], ["FACT_CONFLICT_SCOPE"])
+        self.assertIn("范围事实存在冲突", data["display_summary"])
 
     def test_process_audit_can_require_contract_without_hitting_document_audit(self):
         data = self._audit(
@@ -353,7 +355,63 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["sub_audits"]["scope_audit"]["reason_codes"], [])
+        self.assertEqual(data["sub_audits"]["scope_audit"]["result"], "compliant")
+        self.assertIn(data["sub_audits"]["scope_audit"]["reason_codes"][0], ["IN_SCOPE_COMMON_PART", "IN_SCOPE_COMMON_FACILITY"])
+
+    def test_scope_catalog_strong_semantics_gives_preliminary_pass_without_manual_scope_fields(self):
+        data = self._audit({"project_name": "3号楼电梯主机维修"})
+        self.assertEqual(data["sub_audits"]["scope_audit"]["result"], "compliant")
+        self.assertIn("可纳入维修资金（初步判断）", data["display_summary"])
+
+    def test_scope_strong_semantics_conflict_with_private_input_goes_manual_review(self):
+        data = self._audit(
+            {
+                "project_name": "3号楼电梯主机维修",
+                "is_private_part": True,
+            }
+        )
+        self.assertEqual(data["overall_result"], "manual_review")
+        self.assertIn("FACT_CONFLICT_SCOPE", data["reason_codes"])
+
+    def test_scope_weak_negative_common_part_false_does_not_trigger_conflict(self):
+        data = self._audit(
+            {
+                "project_name": "12号楼外墙渗漏维修",
+                "is_common_part": False,
+            }
+        )
+        self.assertEqual(data["sub_audits"]["scope_audit"]["result"], "compliant")
+        self.assertNotIn("FACT_CONFLICT_SCOPE", data["reason_codes"])
+
+    def test_private_indoor_object_with_private_fact_is_non_compliant(self):
+        data = self._audit(
+            {
+                "project_name": "室内门锁维修",
+                "is_private_part": True,
+            }
+        )
+        self.assertEqual(data["overall_result"], "non_compliant")
+        self.assertIn("OUTSIDE_SCOPE_PRIVATE_PART", data["reason_codes"])
+
+    def test_private_indoor_wall_paint_with_private_fact_is_non_compliant(self):
+        data = self._audit(
+            {
+                "project_name": "户内墙面粉刷",
+                "is_private_part": True,
+            }
+        )
+        self.assertEqual(data["overall_result"], "non_compliant")
+        self.assertIn("OUTSIDE_SCOPE_PRIVATE_PART", data["reason_codes"])
+
+    def test_private_indoor_sanitary_replacement_with_private_fact_is_non_compliant(self):
+        data = self._audit(
+            {
+                "project_name": "室内洁具更换",
+                "is_private_part": True,
+            }
+        )
+        self.assertEqual(data["overall_result"], "non_compliant")
+        self.assertIn("OUTSIDE_SCOPE_PRIVATE_PART", data["reason_codes"])
 
     def test_document_completeness_can_require_all_ticket_chain_items_in_fixed_order(self):
         data = self._audit(
