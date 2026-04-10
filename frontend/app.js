@@ -122,6 +122,10 @@ const AUDIT_DEMO_CASES = {
     project_name: "小区树木修剪",
     facts: {},
   },
+  excluded_elevator_test: {
+    project_name: "电梯125%制动试验",
+    facts: {},
+  },
   eligible_equipment: {
     project_name: "3号楼电梯主机维修",
     facts: {},
