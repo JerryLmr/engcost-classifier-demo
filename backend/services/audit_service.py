@@ -54,6 +54,10 @@ EXCLUSION_REASON_CODES = {
     "OUTSIDE_SCOPE_PRIVATE_PART",
     "PROPERTY_SERVICE_SCOPE",
 }
+SCOPE_REASON_CODES = {
+    "IN_SCOPE_COMMON_PART",
+    "IN_SCOPE_COMMON_FACILITY",
+}
 
 
 def normalize_text(text: str) -> str:
@@ -642,6 +646,35 @@ def _build_summary_conclusion(
     }
 
 
+def _has_specific_missing_reason(reason_codes: Sequence[str]) -> bool:
+    return any(str(code).startswith("MISSING_") for code in reason_codes)
+
+
+def _finalize_top_reason_codes(
+    result: str,
+    reason_codes: List[str],
+    sub_audits: Dict[str, Any],
+) -> List[str]:
+    codes = list(reason_codes)
+    scope_sub = sub_audits.get("scope_audit", {}) or {}
+    scope_codes = [code for code in scope_sub.get("reason_codes", []) if code in SCOPE_REASON_CODES]
+    scope_compliant = scope_sub.get("applicable") is True and scope_sub.get("result") == "compliant"
+    has_conflict = "FACT_CONFLICT_SCOPE" in codes
+
+    if _has_specific_missing_reason(codes):
+        codes = [code for code in codes if code != "INSUFFICIENT_INFO"]
+
+    if result == "need_supplement" and scope_compliant and not has_conflict and scope_codes:
+        merged: List[str] = []
+        _append_unique(merged, scope_codes)
+        _append_unique(merged, codes)
+        codes = merged
+    else:
+        codes = [code for code in codes if code not in SCOPE_REASON_CODES]
+
+    return codes
+
+
 def audit_project(request_payload: Dict[str, Any], mapping_result: Dict[str, Any]) -> Dict[str, Any]:
     normalized_payload = _merge_structured_request(request_payload)
     project_name = normalized_payload.get("project_name", "")
@@ -705,6 +738,12 @@ def audit_project(request_payload: Dict[str, Any], mapping_result: Dict[str, Any
             _append_unique(missing_items, item["missing_items"])
         if not reasons:
             reasons = list(selected["reasons"])
+
+    reason_codes = _finalize_top_reason_codes(
+        result=result,
+        reason_codes=reason_codes,
+        sub_audits=sub_audits,
+    )
 
     manual_review_required = result == "manual_review"
     if not manual_review_required and advisory_signals:

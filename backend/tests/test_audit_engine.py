@@ -70,7 +70,8 @@ class AuditServiceTestCase(unittest.TestCase):
         self.assertEqual(data["overall_result"], "need_supplement")
         self.assertIn("建议补充表决、公示及审价等流程材料", data["reasons"])
         self.assertNotIn("当前未命中明确结论规则，需补充进一步审计材料", data["reasons"])
-        self.assertEqual(data["reason_codes"], [])
+        self.assertIn("IN_SCOPE_COMMON_FACILITY", data["reason_codes"])
+        self.assertIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(data["missing_items"], [])
         self.assertIn("sub_audits", data)
         self.assertIn("process_audit", data["sub_audits"])
@@ -118,7 +119,7 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], [])
+        self.assertIn("IN_SCOPE_COMMON_PART", data["reason_codes"])
         self.assertIn("建议补充表决、公示及审价等流程材料", data["reasons"])
         self.assertNotIn("当前未命中明确结论规则，需补充进一步审计材料", data["reasons"])
         self.assertEqual(data["missing_items"], [])
@@ -169,7 +170,8 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], ["MISSING_CONTRACT"])
+        self.assertIn("MISSING_CONTRACT", data["reason_codes"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], ["MISSING_CONTRACT"])
         self.assertEqual(data["sub_audits"]["document_completeness_audit"]["reason_codes"], [])
 
@@ -181,9 +183,10 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], ["MISSING_INVOICE"])
+        self.assertIn("MISSING_INVOICE", data["reason_codes"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(data["sub_audits"]["document_completeness_audit"]["reason_codes"], ["MISSING_INVOICE"])
-        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], [])
+        self.assertIn("INSUFFICIENT_INFO", data["sub_audits"]["process_audit"]["reason_codes"])
 
     def test_document_completeness_can_require_completion_materials(self):
         data = self._audit(
@@ -193,7 +196,8 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], ["MISSING_COMPLETION_REPORT"])
+        self.assertIn("MISSING_COMPLETION_REPORT", data["reason_codes"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(data["sub_audits"]["document_completeness_audit"]["reason_codes"], ["MISSING_COMPLETION_REPORT"])
 
     def test_document_completeness_can_require_settlement_report(self):
@@ -204,12 +208,13 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], ["MISSING_SETTLEMENT_REPORT"])
+        self.assertIn("MISSING_SETTLEMENT_REPORT", data["reason_codes"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(
             data["sub_audits"]["document_completeness_audit"]["reason_codes"],
             ["MISSING_SETTLEMENT_REPORT"],
         )
-        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], [])
+        self.assertIn("INSUFFICIENT_INFO", data["sub_audits"]["process_audit"]["reason_codes"])
 
     def test_document_completeness_can_require_payment_proof(self):
         data = self._audit(
@@ -219,7 +224,8 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], ["MISSING_PAYMENT_PROOF"])
+        self.assertIn("MISSING_PAYMENT_PROOF", data["reason_codes"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(
             data["sub_audits"]["document_completeness_audit"]["reason_codes"],
             ["MISSING_PAYMENT_PROOF"],
@@ -228,7 +234,7 @@ class AuditServiceTestCase(unittest.TestCase):
             data["sub_audits"]["document_completeness_audit"]["facts_used"],
             ["has_payment_proof"],
         )
-        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], [])
+        self.assertIn("INSUFFICIENT_INFO", data["sub_audits"]["process_audit"]["reason_codes"])
 
     def test_document_completeness_can_require_site_photos_for_non_emergency_case(self):
         data = self._audit(
@@ -238,13 +244,14 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], ["MISSING_SITE_PHOTOS"])
+        self.assertIn("MISSING_SITE_PHOTOS", data["reason_codes"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(data["missing_items"], ["has_site_photos"])
         self.assertEqual(
             data["sub_audits"]["document_completeness_audit"]["reason_codes"],
             ["MISSING_SITE_PHOTOS"],
         )
-        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], [])
+        self.assertIn("INSUFFICIENT_INFO", data["sub_audits"]["process_audit"]["reason_codes"])
 
     def test_document_completeness_can_require_rectification_notice_for_non_emergency_case(self):
         data = self._audit(
@@ -254,13 +261,14 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], ["MISSING_RECTIFICATION_NOTICE"])
+        self.assertIn("MISSING_RECTIFICATION_NOTICE", data["reason_codes"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(data["missing_items"], ["has_rectification_notice"])
         self.assertEqual(
             data["sub_audits"]["document_completeness_audit"]["reason_codes"],
             ["MISSING_RECTIFICATION_NOTICE"],
         )
-        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], [])
+        self.assertIn("INSUFFICIENT_INFO", data["sub_audits"]["process_audit"]["reason_codes"])
 
     def test_document_completeness_can_require_emergency_proof(self):
         data = self._audit(
@@ -271,7 +279,8 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], ["MISSING_EMERGENCY_DOC"])
+        self.assertIn("MISSING_EMERGENCY_DOC", data["reason_codes"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(
             data["sub_audits"]["document_completeness_audit"]["reason_codes"],
             ["MISSING_EMERGENCY_DOC"],
@@ -285,7 +294,8 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], ["MISSING_COMPLETION_REPORT"])
+        self.assertIn("MISSING_COMPLETION_REPORT", data["reason_codes"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(
             data["sub_audits"]["document_completeness_audit"]["reason_codes"],
             ["MISSING_COMPLETION_REPORT"],
@@ -300,7 +310,8 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], ["MISSING_COMPLETION_REPORT"])
+        self.assertIn("MISSING_COMPLETION_REPORT", data["reason_codes"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(data["missing_items"], ["has_completion_report", "has_acceptance_record"])
         self.assertEqual(data["reasons"], ["缺少完工报告及验收记录"])
         self.assertEqual(
@@ -320,7 +331,8 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], ["MISSING_GRAY_CASE_EVIDENCE"])
+        self.assertIn("MISSING_GRAY_CASE_EVIDENCE", data["reason_codes"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(
             data["sub_audits"]["document_completeness_audit"]["reason_codes"],
             ["MISSING_GRAY_CASE_EVIDENCE"],
@@ -362,6 +374,8 @@ class AuditServiceTestCase(unittest.TestCase):
         data = self._audit({"project_name": "3号楼电梯主机维修"})
         self.assertEqual(data["sub_audits"]["scope_audit"]["result"], "compliant")
         self.assertIn("可纳入维修资金（初步判断）", data["display_summary"])
+        self.assertIn("IN_SCOPE_COMMON_FACILITY", data["reason_codes"])
+        self.assertIn("INSUFFICIENT_INFO", data["reason_codes"])
 
     def test_scope_strong_semantics_conflict_with_private_input_goes_manual_review(self):
         data = self._audit(
@@ -372,6 +386,7 @@ class AuditServiceTestCase(unittest.TestCase):
         )
         self.assertEqual(data["overall_result"], "manual_review")
         self.assertIn("FACT_CONFLICT_SCOPE", data["reason_codes"])
+        self.assertNotIn("IN_SCOPE_COMMON_FACILITY", data["reason_codes"])
 
     def test_scope_weak_negative_common_part_false_does_not_trigger_conflict(self):
         data = self._audit(
@@ -433,7 +448,9 @@ class AuditServiceTestCase(unittest.TestCase):
             "has_payment_proof",
         ]
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], expected_reason_codes)
+        filtered = [code for code in data["reason_codes"] if code.startswith("MISSING_")]
+        self.assertEqual(filtered, expected_reason_codes)
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(data["missing_items"], expected_missing_items)
         self.assertEqual(
             data["sub_audits"]["document_completeness_audit"]["reason_codes"],
@@ -443,7 +460,7 @@ class AuditServiceTestCase(unittest.TestCase):
             data["sub_audits"]["document_completeness_audit"]["missing_items"],
             expected_missing_items,
         )
-        self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], [])
+        self.assertIn("INSUFFICIENT_INFO", data["sub_audits"]["process_audit"]["reason_codes"])
 
     def test_document_completeness_can_require_invoice_and_settlement_in_fixed_order(self):
         data = self._audit(
@@ -453,10 +470,9 @@ class AuditServiceTestCase(unittest.TestCase):
                 "has_settlement_report": False,
             }
         )
-        self.assertEqual(
-            data["reason_codes"],
-            ["MISSING_INVOICE", "MISSING_SETTLEMENT_REPORT"],
-        )
+        filtered = [code for code in data["reason_codes"] if code.startswith("MISSING_")]
+        self.assertEqual(filtered, ["MISSING_INVOICE", "MISSING_SETTLEMENT_REPORT"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(
             data["missing_items"],
             ["has_invoice", "has_settlement_report"],
@@ -471,7 +487,7 @@ class AuditServiceTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(data["overall_result"], "need_supplement")
-        self.assertEqual(data["reason_codes"], ["MISSING_EMERGENCY_DOC"])
+        self.assertIn("MISSING_EMERGENCY_DOC", data["reason_codes"])
         self.assertNotIn("MISSING_SITE_PHOTOS", data["reason_codes"])
         self.assertEqual(
             data["sub_audits"]["document_completeness_audit"]["reason_codes"],
@@ -566,9 +582,17 @@ class AuditServiceTestCase(unittest.TestCase):
         )
         self.assertEqual(data["overall_result"], "need_supplement")
         self.assertIn("MISSING_VOTE", data["reason_codes"])
+        self.assertIn("IN_SCOPE_COMMON_FACILITY", data["reason_codes"])
+        self.assertNotIn("INSUFFICIENT_INFO", data["reason_codes"])
         self.assertEqual(data["sub_audits"]["process_audit"]["reason_codes"], ["MISSING_VOTE"])
         self.assertIn("has_invoice", data["sub_audits"]["document_completeness_audit"]["facts_used"])
         self.assertIn("application_date", data["sub_audits"]["timeline_audit"]["facts_used"])
+
+    def test_non_compliant_exclusion_does_not_mix_in_scope_reason(self):
+        data = self._audit({"project_name": "小区树木修剪"})
+        self.assertEqual(data["overall_result"], "non_compliant")
+        self.assertNotIn("IN_SCOPE_COMMON_PART", data["reason_codes"])
+        self.assertNotIn("IN_SCOPE_COMMON_FACILITY", data["reason_codes"])
 
     def test_multi_project_cross_domain_adds_reason_code(self):
         data = self._audit(
