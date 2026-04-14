@@ -78,4 +78,5 @@ def match_high_freq_category(project_name: str) -> Dict[str, Any]:
         "matched_patterns": best_hits,
         "reason_codes": list(best.get("reason_codes", [])),
         "business_statement": best.get("business_statement", ""),
+        "source": best.get("source"),
     }

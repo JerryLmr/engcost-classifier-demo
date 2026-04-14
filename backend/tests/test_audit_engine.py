@@ -612,6 +612,8 @@ class AuditServiceTestCase(unittest.TestCase):
         data = self._audit_pipeline({"project_name": "电梯125%制动试验"})
         self.assertEqual(data["overall_result"], "non_compliant")
         self.assertIn("direct_reject", data["audit_path"])
+        self.assertTrue(any(doc.get("document_no") == "DB31/T 360—2020" for doc in data["basis_documents"]))
+        self.assertTrue(any((doc.get("section") or "").startswith("附录E") for doc in data["basis_documents"]))
 
     def test_high_freq_trash_bin_replacement_direct_reject(self):
         data = self._audit_pipeline({"project_name": "垃圾桶更换"})
@@ -622,6 +624,13 @@ class AuditServiceTestCase(unittest.TestCase):
         data = self._audit_pipeline({"project_name": "小区树木修剪"})
         self.assertEqual(data["overall_result"], "non_compliant")
         self.assertIn("direct_reject", data["audit_path"])
+        self.assertTrue(any(doc.get("document_no") == "DB31/T 360—2020" for doc in data["basis_documents"]))
+        self.assertTrue(any(doc.get("section") == "第8章" for doc in data["basis_documents"]))
+
+    def test_registry_basis_for_missing_vote_uses_article_22(self):
+        data = self._audit({"project_name": "3号楼电梯曳引机维修", "has_vote": False})
+        self.assertIn("MISSING_VOTE", data["reason_codes"])
+        self.assertTrue(any(doc.get("article") == "第二十二条" for doc in data["basis_documents"]))
 
     def test_high_freq_camera_new_install_direct_reject(self):
         data = self._audit_pipeline({"project_name": "新增摄像头安装工程"})

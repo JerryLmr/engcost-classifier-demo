@@ -4,6 +4,7 @@ from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from core.config import resolve_rule_file
+from services.basis_resolver import resolve_basis_documents
 
 
 FLOW_BY_STAGE = {
@@ -506,38 +507,47 @@ def _build_sub_audit_result(
             sub_audit_result = then.get("sub_audit_result")
             if not sub_audit_result:
                 continue
+            reason_codes = list(then.get("reason_codes", []))
             return {
                 "applicable": True,
                 "result": sub_audit_result,
                 "display_result": _build_display_result(sub_audit_result),
-                "reason_codes": list(then.get("reason_codes", [])),
+                "reason_codes": reason_codes,
                 "reasons": [then["message"]] if then.get("message") else [],
                 "missing_items": [],
-                "basis_documents": _build_basis_documents([rule]),
+                "basis_documents": resolve_basis_documents(
+                    reason_codes,
+                    fallback_sources=_build_basis_documents([rule]),
+                ),
                 "audit_path": [stage_path, sub_audit_key],
                 "facts_used": rule_facts_used,
             }
+        reason_codes = list(then.get("reason_codes", []))
         return {
             "applicable": True,
             "result": then["result"],
             "display_result": _build_display_result(then["result"]),
-            "reason_codes": list(then.get("reason_codes", [])),
+            "reason_codes": reason_codes,
             "reasons": [then["message"]],
             "missing_items": _collect_missing_items(rule["when"], context),
-            "basis_documents": _build_basis_documents([rule]),
+            "basis_documents": resolve_basis_documents(
+                reason_codes,
+                fallback_sources=_build_basis_documents([rule]),
+            ),
             "audit_path": [stage_path, sub_audit_key],
             "facts_used": rule_facts_used,
         }
 
     default_result = definition.get("default_result")
+    default_reason_codes = list(definition.get("default_reason_codes", []))
     return {
         "applicable": True,
         "result": default_result,
         "display_result": _build_display_result(default_result) if default_result else None,
-        "reason_codes": list(definition.get("default_reason_codes", [])),
+        "reason_codes": default_reason_codes,
         "reasons": [definition["default_message"]] if definition.get("default_message") else [],
         "missing_items": _collect_required_missing_fields(context, definition.get("required_fields", [])),
-        "basis_documents": [],
+        "basis_documents": resolve_basis_documents(default_reason_codes),
         "audit_path": list(definition.get("default_audit_path", [])),
         "facts_used": facts_used,
     }
@@ -764,7 +774,10 @@ def audit_project(request_payload: Dict[str, Any], mapping_result: Dict[str, Any
         "display_result": _build_display_result(result),
         "reason_codes": reason_codes,
         "reasons": reasons,
-        "basis_documents": _build_basis_documents(triggered_rules),
+        "basis_documents": resolve_basis_documents(
+            reason_codes,
+            fallback_sources=_build_basis_documents(triggered_rules),
+        ),
         "missing_items": missing_items,
         "audit_path": audit_path,
         "manual_review_required": manual_review_required,

@@ -1,5 +1,7 @@
 from typing import Any, Dict, List
 
+from services.basis_resolver import resolve_basis_documents
+
 
 DISPLAY_MAPPING = {
     "compliant": "初步符合",
@@ -52,6 +54,13 @@ def build_high_freq_result(
     display_result = DISPLAY_MAPPING.get(overall_result, DISPLAY_MAPPING["manual_review"])
     reason_codes = list(high_freq_result.get("reason_codes", []))
     reasons: List[str] = [high_freq_result.get("business_statement", "")] if high_freq_result.get("business_statement") else []
+    fallback_sources: List[Dict[str, Any]] = []
+    source = high_freq_result.get("source")
+    if isinstance(source, dict):
+        fallback_sources = [source]
+    elif isinstance(source, list):
+        fallback_sources = [item for item in source if isinstance(item, dict)]
+    basis_documents = resolve_basis_documents(reason_codes, fallback_sources=fallback_sources)
     summary_message = reasons[0] if reasons else display_result
     summary_conclusion = {
         "type": "high_freq_routed",
@@ -71,7 +80,7 @@ def build_high_freq_result(
         "display_result": display_result,
         "reason_codes": reason_codes,
         "reasons": reasons,
-        "basis_documents": [],
+        "basis_documents": basis_documents,
         "missing_items": [],
         "audit_path": ["input_normalization", "high_freq_mapping", action],
         "manual_review_required": overall_result == "manual_review",
