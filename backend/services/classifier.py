@@ -18,7 +18,6 @@ from classifier.rule_engine import (
 from classifier.settings import (
     DEFAULT_FALLBACK_LEVEL1,
     DEFAULT_FALLBACK_LEVEL2,
-    DEFAULT_FALLBACK_LEVEL3,
 )
 
 
@@ -31,6 +30,9 @@ def _result_from_item(
     needs_review: bool,
     ids: Sequence[str],
     reason: str,
+    level3_item: str = "",
+    matched_level3_items: Sequence[str] | None = None,
+    candidate_level3_items: Sequence[str] | None = None,
 ) -> Dict[str, object]:
     unique_ids: List[str] = []
     for item_id in ids:
@@ -40,17 +42,21 @@ def _result_from_item(
         unique_ids.insert(0, item.id)
 
     labels = candidate_labels_by_id(unique_ids)
+    matched_items = list(matched_level3_items or [])
+    primary_level3_item = level3_item or (matched_items[0] if matched_items else "")
     return {
         "project_name": text,
         "level1": item.level1,
         "level2": item.level2,
-        "level3": item.level3,
+        "level3_item": primary_level3_item,
+        "matched_level3_items": matched_items,
         "method": method,
         "confidence": confidence,
         "match_type": match_type,
         "needs_review": needs_review,
         "candidate_ids": unique_ids,
         "candidate_labels": [labels[item_id] for item_id in unique_ids if item_id in labels],
+        "candidate_level3_items": list(candidate_level3_items or matched_items),
         "reason": reason,
     }
 
@@ -62,13 +68,15 @@ def fallback_classify(text: str, reason: str, candidate_ids_value: Sequence[str]
         "project_name": text,
         "level1": DEFAULT_FALLBACK_LEVEL1,
         "level2": DEFAULT_FALLBACK_LEVEL2,
-        "level3": DEFAULT_FALLBACK_LEVEL3,
+        "level3_item": "",
+        "matched_level3_items": [],
         "method": "默认兜底",
         "confidence": "低",
         "match_type": "fallback",
         "needs_review": True,
         "candidate_ids": ids,
         "candidate_labels": [labels[item_id] for item_id in ids if item_id in labels],
+        "candidate_level3_items": [],
         "reason": reason,
     }
 
@@ -85,7 +93,7 @@ def _llm_candidates(rule_candidates: Sequence[ScoredCandidate]) -> List[CatalogI
 def _classify_with_llm(text: str, rule_candidates: Sequence[ScoredCandidate]) -> Dict[str, object]:
     ids = candidate_ids(rule_candidates)
     try:
-        item, reason, _llm_needs_review = llm_select_item(text, _llm_candidates(rule_candidates))
+        item, level3_item, reason, _llm_needs_review = llm_select_item(text, _llm_candidates(rule_candidates))
     except Exception as exc:  # noqa: BLE001
         return fallback_classify(text, f"LLM 不可用或返回无效目录，返回默认分类：{exc}", ids)
 
@@ -98,6 +106,9 @@ def _classify_with_llm(text: str, rule_candidates: Sequence[ScoredCandidate]) ->
         needs_review=True,
         ids=[item.id, *ids],
         reason=reason,
+        level3_item=level3_item,
+        matched_level3_items=[level3_item] if level3_item else [],
+        candidate_level3_items=[level3_item] if level3_item else [],
     )
 
 
@@ -112,6 +123,12 @@ def rule_classify(text: str) -> Dict[str, object] | None:
 
     selected = select_candidate_window(candidates)
     ids = candidate_ids(selected or candidates)
+    selected_candidates = selected or candidates[:1]
+    candidate_level3_items: List[str] = []
+    for candidate in selected_candidates:
+        for level3_item in candidate.level3_item_hits:
+            if level3_item not in candidate_level3_items:
+                candidate_level3_items.append(level3_item)
     confidence = confidence_for_score(top.score)
     match_type = match_type_for_candidates(candidates)
     needs_review = needs_review_for_match(match_type, confidence)
@@ -124,6 +141,8 @@ def rule_classify(text: str) -> Dict[str, object] | None:
         needs_review=needs_review,
         ids=ids,
         reason=build_reason(top),
+        matched_level3_items=top.level3_item_hits,
+        candidate_level3_items=candidate_level3_items,
     )
 
 

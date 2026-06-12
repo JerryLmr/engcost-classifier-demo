@@ -90,12 +90,14 @@ def build_focus_rows(records: List[Dict[str, object]]) -> List[List[object]]:
         "一级分类",
         "二级分类",
         "三级分类",
+        "具体细项",
         "分类方式",
         "置信度",
         "匹配类型",
         "是否建议复核",
         "候选目录ID",
         "候选目录",
+        "候选细项",
         "分类依据",
     ]
     rows = [headers]
@@ -108,13 +110,15 @@ def build_focus_rows(records: List[Dict[str, object]]) -> List[List[object]]:
                 record["project_name"],
                 record["level1"],
                 record["level2"],
-                record["level3"],
+                record["level3_item"],
+                " | ".join(record["matched_level3_items"]),
                 record["method"],
                 record["confidence"],
                 record["match_type"],
                 "是" if record["needs_review"] else "否",
                 " | ".join(record["candidate_ids"]),
                 " | ".join(record["candidate_labels"]),
+                " | ".join(record["candidate_level3_items"]),
                 record["reason"],
             ]
         )

@@ -24,12 +24,14 @@ RESULT_HEADERS = [
     "一级分类",
     "二级分类",
     "三级分类",
+    "具体细项",
     "分类方式",
     "置信度",
     "匹配类型",
     "是否建议复核",
     "候选目录ID",
     "候选目录",
+    "候选细项",
     "分类依据",
 ]
 
@@ -57,11 +59,13 @@ class ApiAndExcelTestCase(unittest.TestCase):
         for field in [
             "level1",
             "level2",
-            "level3",
+            "level3_item",
+            "matched_level3_items",
             "confidence",
             "match_type",
             "needs_review",
             "candidate_ids",
+            "candidate_level3_items",
             "reason",
         ]:
             self.assertIn(field, data)
@@ -90,12 +94,14 @@ class ApiAndExcelTestCase(unittest.TestCase):
                 "消防工程",
                 "消防栓、箱",
                 "更换消防栓、箱",
+                "更换消防栓、箱",
                 "规则优先",
                 "高",
                 "single",
                 "否",
                 "038",
-                "038 消防工程 > 消防栓、箱 > 更换消防栓、箱",
+                "038 消防工程 > 消防栓、箱",
+                "更换消防栓、箱",
                 "命中对象词：消防栓",
             ]
         )

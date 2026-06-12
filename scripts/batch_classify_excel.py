@@ -17,12 +17,14 @@ RESULT_HEADERS = [
     "一级分类",
     "二级分类",
     "三级分类",
+    "具体细项",
     "分类方式",
     "置信度",
     "匹配类型",
     "是否建议复核",
     "候选目录ID",
     "候选目录",
+    "候选细项",
     "分类依据",
 ]
 
@@ -80,14 +82,16 @@ def classify_workbook(path: Path, output_path: Path, classify_text_func) -> tupl
         result = classify_text_func(str(project_name))
         worksheet.cell(row=row, column=result_start_col, value=result["level1"])
         worksheet.cell(row=row, column=result_start_col + 1, value=result["level2"])
-        worksheet.cell(row=row, column=result_start_col + 2, value=result["level3"])
-        worksheet.cell(row=row, column=result_start_col + 3, value=result["method"])
-        worksheet.cell(row=row, column=result_start_col + 4, value=result["confidence"])
-        worksheet.cell(row=row, column=result_start_col + 5, value=result["match_type"])
-        worksheet.cell(row=row, column=result_start_col + 6, value="是" if result["needs_review"] else "否")
-        worksheet.cell(row=row, column=result_start_col + 7, value=" | ".join(result["candidate_ids"]))
-        worksheet.cell(row=row, column=result_start_col + 8, value=" | ".join(result["candidate_labels"]))
-        worksheet.cell(row=row, column=result_start_col + 9, value=result["reason"])
+        worksheet.cell(row=row, column=result_start_col + 2, value=result["level3_item"])
+        worksheet.cell(row=row, column=result_start_col + 3, value=" | ".join(result["matched_level3_items"]))
+        worksheet.cell(row=row, column=result_start_col + 4, value=result["method"])
+        worksheet.cell(row=row, column=result_start_col + 5, value=result["confidence"])
+        worksheet.cell(row=row, column=result_start_col + 6, value=result["match_type"])
+        worksheet.cell(row=row, column=result_start_col + 7, value="是" if result["needs_review"] else "否")
+        worksheet.cell(row=row, column=result_start_col + 8, value=" | ".join(result["candidate_ids"]))
+        worksheet.cell(row=row, column=result_start_col + 9, value=" | ".join(result["candidate_labels"]))
+        worksheet.cell(row=row, column=result_start_col + 10, value=" | ".join(result["candidate_level3_items"]))
+        worksheet.cell(row=row, column=result_start_col + 11, value=result["reason"])
         processed += 1
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

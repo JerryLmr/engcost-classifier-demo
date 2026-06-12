@@ -11,13 +11,15 @@ class ClassifyResponse(BaseModel):
     project_name: str
     level1: str
     level2: str
-    level3: str
+    level3_item: str
+    matched_level3_items: List[str] = Field(default_factory=list)
     method: str
     confidence: str
     match_type: str
     needs_review: bool
     candidate_ids: List[str]
     candidate_labels: List[str] = Field(default_factory=list)
+    candidate_level3_items: List[str] = Field(default_factory=list)
     reason: str
 
 
@@ -49,7 +51,8 @@ class FocusSample(BaseModel):
     project_name: str
     level1: str
     level2: str
-    level3: str
+    level3_item: str
+    matched_level3_items: List[str] = Field(default_factory=list)
     method: str
     confidence: str
     match_type: str
@@ -57,6 +60,7 @@ class FocusSample(BaseModel):
     needs_review: bool
     candidate_ids: List[str] = Field(default_factory=list)
     candidate_labels: List[str] = Field(default_factory=list)
+    candidate_level3_items: List[str] = Field(default_factory=list)
 
 
 class AnalyzeResponse(BaseModel):

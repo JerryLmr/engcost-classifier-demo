@@ -11,12 +11,14 @@ REQUIRED_RESULT_COLUMNS = [
     "一级分类",
     "二级分类",
     "三级分类",
+    "具体细项",
     "分类方式",
     "置信度",
     "匹配类型",
     "是否建议复核",
     "候选目录ID",
     "候选目录",
+    "候选细项",
     "分类依据",
 ]
 
@@ -63,13 +65,15 @@ def _read_result_rows_from_workbook(workbook: openpyxl.Workbook, source_name: st
                 "project_name": str(project_name),
                 "level1": row[index["一级分类"]],
                 "level2": row[index["二级分类"]],
-                "level3": row[index["三级分类"]],
+                "level3_item": row[index["三级分类"]],
+                "matched_level3_items": _split_pipe_text(row[index["具体细项"]]),
                 "method": normalize_method(row[index["分类方式"]]),
                 "confidence": row[index["置信度"]],
                 "match_type": row[index["匹配类型"]],
                 "needs_review": row[index["是否建议复核"]] == "是",
                 "candidate_ids": _split_pipe_text(row[index["候选目录ID"]]),
                 "candidate_labels": _split_pipe_text(row[index["候选目录"]]),
+                "candidate_level3_items": _split_pipe_text(row[index["候选细项"]]),
                 "reason": row[index["分类依据"]],
             }
         )

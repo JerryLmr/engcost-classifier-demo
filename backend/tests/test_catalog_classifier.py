@@ -14,7 +14,7 @@ class CatalogClassifierTestCase(unittest.TestCase):
         catalog = load_catalog()
         self.assertGreater(len(catalog), 0)
         self.assertEqual(catalog[0].id, "001")
-        self.assertTrue(all(item.level1 and item.level2 and item.level3 for item in catalog))
+        self.assertTrue(all(item.level1 and item.level2 and item.level3_items for item in catalog))
 
     def test_direct_catalog_hits_return_three_levels(self):
         samples = [
@@ -31,7 +31,7 @@ class CatalogClassifierTestCase(unittest.TestCase):
                 result = classify_text(text)
                 self.assertEqual(result["method"], "规则优先")
                 self.assertEqual(result["level2"], expected_level2)
-                self.assertTrue(result["level3"])
+                self.assertIn("level3_item", result)
                 self.assertEqual(result["confidence"], "高")
                 self.assertIn(result["candidate_ids"][0], result["candidate_ids"])
 
@@ -56,6 +56,37 @@ class CatalogClassifierTestCase(unittest.TestCase):
         self.assertEqual(result["match_type"], "fallback")
         self.assertTrue(result["needs_review"])
         self.assertIn("LLM 不可用", result["reason"])
+
+    @patch("classifier.llm_client.request_llm_classification", side_effect=RuntimeError("ollama offline"))
+    def test_generic_actions_do_not_create_high_confidence_rule_results(self, _mock_request):
+        for text in ["维修", "更换", "改造"]:
+            with self.subTest(text=text):
+                result = classify_text(text)
+                self.assertNotEqual(result["method"], "规则优先")
+                self.assertNotEqual(result["confidence"], "高")
+
+    @patch("classifier.llm_client.request_llm_classification", side_effect=RuntimeError("ollama offline"))
+    def test_regression_samples_do_not_hit_monitor_room_or_garbage_by_action_only(self, _mock_request):
+        samples = [
+            ("外墙渗水维修", {"059"}),
+            ("生活水泵维修", {"059"}),
+            ("小区消火栓损坏维修", {"059"}),
+            ("屋面维修工程", {"059"}),
+            ("出入口改造车辆识别系统", {"027"}),
+        ]
+        for text, forbidden_ids in samples:
+            with self.subTest(text=text):
+                result = classify_text(text)
+                self.assertNotIn(result["candidate_ids"][0] if result["candidate_ids"] else "", forbidden_ids)
+
+    def test_real_objects_still_match_target_catalog_items(self):
+        monitor = classify_text("电视监控控制台维修")
+        self.assertEqual(monitor["candidate_ids"][0], "059")
+        self.assertEqual(monitor["method"], "规则优先")
+
+        garbage = classify_text("垃圾房维修")
+        self.assertEqual(garbage["candidate_ids"][0], "027")
+        self.assertEqual(garbage["method"], "规则优先")
 
 
 if __name__ == "__main__":
