@@ -73,7 +73,7 @@ python -m unittest discover -s tests -p "test_*.py"
 ```bash
 cd /home/jerrylmr/githubRepository/engcost-classifier-demo
 source backend/.venv/bin/activate
-python scripts/batch_classify_excel.py /path/to/excel_dir --rule-source python
+python scripts/batch_classify_excel.py /path/to/excel_dir --overwrite
 ```
 
 默认会把结果输出到 `/path/to/excel_dir/classified_results/`。
@@ -81,39 +81,22 @@ python scripts/batch_classify_excel.py /path/to/excel_dir --rule-source python
 常用参数：
 
 ```bash
-python scripts/batch_classify_excel.py /path/to/excel_dir --overwrite --rule-source python
-python scripts/batch_classify_excel.py /path/to/excel_dir -o /path/to/output_dir --rule-source json
+python scripts/batch_classify_excel.py /path/to/excel_dir --overwrite
+python scripts/batch_classify_excel.py /path/to/excel_dir -o /path/to/output_dir --overwrite
+python scripts/batch_classify_excel.py /path/to/input.xlsx -o /path/to/output.xlsx --overwrite
 ```
 
 脚本默认会跳过已经带 `_分类结果` 或 `_classified` 后缀的文件。
 
-## 9. JSON 配置化与对比
+## 9. 固定三级目录
 
-当前规则已经支持双轨运行：
+当前分类只使用固定目录文件：
 
-- 默认 `RULE_SOURCE=json`：使用 `backend/config/*.json` 中的配置
-- `RULE_SOURCE=python`：仍可切回 Python 基线规则做对比
-
-导出当前 Python 基线到 JSON：
-
-```bash
-python scripts/export_rules_to_json.py
+```text
+backend/config/catalog.json
 ```
 
-对同一批输入分别跑 Python 版和 JSON 版：
-
-```bash
-source backend/.venv/bin/activate
-python scripts/batch_classify_excel.py excel_inputs -o excel_outputs_python --overwrite --rule-source python
-python scripts/batch_classify_excel.py excel_inputs -o excel_outputs_json --overwrite --rule-source json
-```
-
-对比两套结果：
-
-```bash
-source backend/.venv/bin/activate
-python scripts/compare_excel_outputs.py excel_outputs_python excel_outputs_json --csv compare_reports/python_vs_json_diff.csv
-```
+分类结果直接返回一级、二级、三级目录，不再支持 `RULE_SOURCE` 双轨切换。
 
 ## 10. 分析分类结果
 
@@ -148,7 +131,7 @@ python scripts/analyze_excel_outputs.py excel_outputs -o reports/分析汇总.xl
 前端页面现在支持上传**已分类结果 Excel** 并直接展示：
 
 - 总览摘要
-- 结构统计
+- 匹配类型统计
 - 一级分类统计
 - 二级分类统计
 - 重点样本
@@ -157,15 +140,17 @@ python scripts/analyze_excel_outputs.py excel_outputs -o reports/分析汇总.xl
 
 - `一级分类`
 - `二级分类`
+- `三级分类`
 - `分类方式`
-- `分类依据`
-- `是否复合工程`
+- `置信度`
+- `匹配类型`
 - `是否建议复核`
-- `结构类型`
+- `候选目录ID`
+- `候选目录`
+- `分类依据`
 
 ## 12. 可继续扩展
 
-- 把分类体系从代码中迁移到 JSON 配置文件
 - 记录分类日志和命中率
 - 增加“人工修正后回写训练集”功能
 - 接入你现有的 demo 首页或系统菜单

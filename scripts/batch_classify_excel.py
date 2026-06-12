@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import io
-import os
 import sys
 from pathlib import Path
 
@@ -17,23 +16,24 @@ if str(BACKEND_DIR) not in sys.path:
 RESULT_HEADERS = [
     "一级分类",
     "二级分类",
+    "三级分类",
     "分类方式",
-    "分类依据",
-    "是否复合工程",
+    "置信度",
+    "匹配类型",
     "是否建议复核",
-    "结构类型",
-    "复合原因",
-    "候选分类",
+    "候选目录ID",
+    "候选目录",
+    "分类依据",
 ]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="批量处理目录中的 Excel 工程分类文件")
-    parser.add_argument("input_dir", help="待处理 Excel 所在目录")
+    parser = argparse.ArgumentParser(description="批量处理 Excel 工程三级目录分类文件")
+    parser.add_argument("input_path", help="待处理 Excel 文件或目录")
     parser.add_argument(
         "-o",
-        "--output-dir",
-        help="结果输出目录，默认输出到 input_dir/classified_results",
+        "--output",
+        help="输出文件或目录。输入为目录时默认输出到 input/classified_results",
     )
     parser.add_argument(
         "--overwrite",
@@ -43,13 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--include-classified",
         action="store_true",
-        help="默认会跳过已带 _分类结果 / _classified 后缀的文件；设置后不跳过",
-    )
-    parser.add_argument(
-        "--rule-source",
-        choices=["python", "json"],
-        default="json",
-        help="规则来源，默认使用 json 配置规则",
+        help="目录模式默认跳过已带 _分类结果 / _classified 后缀的文件；设置后不跳过",
     )
     return parser.parse_args()
 
@@ -61,13 +55,6 @@ def should_skip_file(path: Path, include_classified: bool) -> bool:
         return False
     stem = path.stem
     return stem.endswith("_分类结果") or stem.endswith("_classified")
-
-
-def get_classify_text(rule_source: str):
-    os.environ["RULE_SOURCE"] = rule_source
-    from services.classifier import classify_text  # noqa: E402
-
-    return classify_text
 
 
 def classify_workbook(path: Path, output_path: Path, classify_text_func) -> tuple[int, int]:
@@ -93,13 +80,14 @@ def classify_workbook(path: Path, output_path: Path, classify_text_func) -> tupl
         result = classify_text_func(str(project_name))
         worksheet.cell(row=row, column=result_start_col, value=result["level1"])
         worksheet.cell(row=row, column=result_start_col + 1, value=result["level2"])
-        worksheet.cell(row=row, column=result_start_col + 2, value=result["method"])
-        worksheet.cell(row=row, column=result_start_col + 3, value=result["reason"])
-        worksheet.cell(row=row, column=result_start_col + 4, value="是" if result["is_composite"] else "否")
-        worksheet.cell(row=row, column=result_start_col + 5, value="是" if result["needs_review"] else "否")
-        worksheet.cell(row=row, column=result_start_col + 6, value=result["structure_type"])
-        worksheet.cell(row=row, column=result_start_col + 7, value=result["composite_reason"] or "")
-        worksheet.cell(row=row, column=result_start_col + 8, value=" | ".join(result["secondary_candidates"]))
+        worksheet.cell(row=row, column=result_start_col + 2, value=result["level3"])
+        worksheet.cell(row=row, column=result_start_col + 3, value=result["method"])
+        worksheet.cell(row=row, column=result_start_col + 4, value=result["confidence"])
+        worksheet.cell(row=row, column=result_start_col + 5, value=result["match_type"])
+        worksheet.cell(row=row, column=result_start_col + 6, value="是" if result["needs_review"] else "否")
+        worksheet.cell(row=row, column=result_start_col + 7, value=" | ".join(result["candidate_ids"]))
+        worksheet.cell(row=row, column=result_start_col + 8, value=" | ".join(result["candidate_labels"]))
+        worksheet.cell(row=row, column=result_start_col + 9, value=result["reason"])
         processed += 1
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,47 +97,55 @@ def classify_workbook(path: Path, output_path: Path, classify_text_func) -> tupl
     return processed, skipped
 
 
+def resolve_jobs(input_path: Path, output_arg: str | None, include_classified: bool) -> list[tuple[Path, Path]]:
+    if input_path.is_file():
+        if input_path.suffix.lower() not in {".xlsx", ".xlsm"}:
+            raise ValueError(f"输入文件不是 Excel: {input_path}")
+        output_path = Path(output_arg).expanduser().resolve() if output_arg else input_path.with_name(f"{input_path.stem}_分类结果.xlsx")
+        return [(input_path, output_path)]
+
+    if not input_path.is_dir():
+        raise ValueError(f"输入路径不存在: {input_path}")
+
+    output_dir = Path(output_arg).expanduser().resolve() if output_arg else input_path / "classified_results"
+    excel_files = sorted(
+        path for path in input_path.iterdir() if not should_skip_file(path, include_classified)
+    )
+    return [(path, output_dir / f"{path.stem}_分类结果.xlsx") for path in excel_files]
+
+
 def main() -> int:
     args = parse_args()
-    input_dir = Path(args.input_dir).expanduser().resolve()
-    if not input_dir.exists() or not input_dir.is_dir():
-        print(f"[ERROR] 输入目录不存在: {input_dir}")
+    input_path = Path(args.input_path).expanduser().resolve()
+
+    try:
+        jobs = resolve_jobs(input_path, args.output, args.include_classified)
+    except ValueError as exc:
+        print(f"[ERROR] {exc}")
         return 1
 
-    output_dir = (
-        Path(args.output_dir).expanduser().resolve()
-        if args.output_dir
-        else input_dir / "classified_results"
-    )
-
-    excel_files = sorted(
-        path for path in input_dir.iterdir() if not should_skip_file(path, args.include_classified)
-    )
-    if not excel_files:
-        print(f"[ERROR] 目录中没有可处理的 Excel 文件: {input_dir}")
+    if not jobs:
+        print(f"[ERROR] 没有可处理的 Excel 文件: {input_path}")
         return 1
+
+    from services.classifier import classify_text  # noqa: E402
 
     total_files = 0
     total_processed = 0
     total_skipped = 0
     failed_files: list[tuple[str, str]] = []
 
-    print(f"[INFO] 输入目录: {input_dir}")
-    print(f"[INFO] 输出目录: {output_dir}")
-    print(f"[INFO] 待处理文件数: {len(excel_files)}")
-    print(f"[INFO] 规则来源: {args.rule_source}")
+    print(f"[INFO] 输入路径: {input_path}")
+    print(f"[INFO] 待处理文件数: {len(jobs)}")
 
-    classify_text_func = get_classify_text(args.rule_source)
-
-    for path in excel_files:
-        output_path = output_dir / f"{path.stem}_分类结果.xlsx"
+    for path, output_path in jobs:
         if output_path.exists() and not args.overwrite:
-            print(f"[SKIP] 输出已存在，跳过: {output_path.name}")
+            print(f"[SKIP] 输出已存在，跳过: {output_path}")
             continue
 
         print(f"[RUN ] {path.name}")
         try:
-            processed, skipped = classify_workbook(path, output_path, classify_text_func)
+            processed, skipped = classify_workbook(path, output_path, classify_text)
             total_files += 1
             total_processed += processed
             total_skipped += skipped

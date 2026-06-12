@@ -61,20 +61,22 @@ def build_summary_rows(records: List[Dict[str, object]]) -> List[List[object]]:
     files = sorted({record["source_file"] for record in records})
     analysis = summarize_records(records)
     summary = analysis["summary"]
-    structure = analysis["structure_counts"]
+    match_types = analysis["match_type_counts"]
     rows = [SUMMARY_HEADERS]
     rows.extend(
         [
             ["文件数", len(files)],
             ["总记录数", len(records)],
             ["规则优先", summary["rule_method_count"]],
-            ["LLM 辅助分类", summary["llm_method_count"]],
-            ["体系外默认分类", summary["fallback_method_count"]],
-            ["复合工程=是", summary["composite_count"]],
+            ["LLM兜底", summary["llm_method_count"]],
+            ["默认兜底", summary["fallback_method_count"]],
             ["建议复核=是", summary["review_count"]],
-            ["single_project", structure["single_project"]],
-            ["multi_system_same_domain", structure["multi_system_same_domain"]],
-            ["composite_project", structure["composite_project"]],
+            ["single", match_types["single"]],
+            ["cross_domain", match_types["cross_domain"]],
+            ["same_domain_multi_item", match_types["same_domain_multi_item"]],
+            ["low_confidence", match_types["low_confidence"]],
+            ["llm_fallback", match_types["llm_fallback"]],
+            ["fallback", match_types["fallback"]],
         ]
     )
     return rows
@@ -87,10 +89,13 @@ def build_focus_rows(records: List[Dict[str, object]]) -> List[List[object]]:
         "工程名称",
         "一级分类",
         "二级分类",
+        "三级分类",
         "分类方式",
-        "是否复合工程",
+        "置信度",
+        "匹配类型",
         "是否建议复核",
-        "结构类型",
+        "候选目录ID",
+        "候选目录",
         "分类依据",
     ]
     rows = [headers]
@@ -103,10 +108,13 @@ def build_focus_rows(records: List[Dict[str, object]]) -> List[List[object]]:
                 record["project_name"],
                 record["level1"],
                 record["level2"],
+                record["level3"],
                 record["method"],
-                "是" if record["is_composite"] else "否",
+                record["confidence"],
+                record["match_type"],
                 "是" if record["needs_review"] else "否",
-                record["structure_type"],
+                " | ".join(record["candidate_ids"]),
+                " | ".join(record["candidate_labels"]),
                 record["reason"],
             ]
         )
@@ -154,7 +162,7 @@ def main() -> int:
     workbook.save(output_path)
 
     summary = analysis["summary"]
-    structure = analysis["structure_counts"]
+    match_types = analysis["match_type_counts"]
 
     print(f"[DONE] 分析目录: {input_dir}")
     print(f"[DONE] 汇总文件: {output_path}")
@@ -163,16 +171,17 @@ def main() -> int:
     print(
         "[DONE] 分类方式: "
         f"规则优先={summary['rule_method_count']}, "
-        f"LLM辅助分类={summary['llm_method_count']}, "
-        f"体系外默认分类={summary['fallback_method_count']}"
+        f"LLM兜底={summary['llm_method_count']}, "
+        f"默认兜底={summary['fallback_method_count']}"
     )
     print(
-        "[DONE] 结构统计: "
-        f"复合工程={summary['composite_count']}, "
+        "[DONE] 匹配类型: "
         f"建议复核={summary['review_count']}, "
-        f"single={structure['single_project']}, "
-        f"multi_system={structure['multi_system_same_domain']}, "
-        f"composite={structure['composite_project']}"
+        f"single={match_types['single']}, "
+        f"cross_domain={match_types['cross_domain']}, "
+        f"same_domain_multi_item={match_types['same_domain_multi_item']}, "
+        f"llm_fallback={match_types['llm_fallback']}, "
+        f"fallback={match_types['fallback']}"
     )
     return 0
 

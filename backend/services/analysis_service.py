@@ -10,16 +10,14 @@ from fastapi import HTTPException, UploadFile
 REQUIRED_RESULT_COLUMNS = [
     "一级分类",
     "二级分类",
+    "三级分类",
     "分类方式",
-    "分类依据",
-    "是否复合工程",
+    "置信度",
+    "匹配类型",
     "是否建议复核",
-    "结构类型",
-]
-
-OPTIONAL_RESULT_COLUMNS = [
-    "复合原因",
-    "候选分类",
+    "候选目录ID",
+    "候选目录",
+    "分类依据",
 ]
 
 FOCUS_SAMPLE_LIMIT = 2000
@@ -27,19 +25,18 @@ FOCUS_SAMPLE_LIMIT = 2000
 
 def normalize_method(method: Any) -> str:
     text = str(method or "").strip()
-    if text == "LLM 兜底":
-        return "LLM 辅助分类"
-    if text == "降级兜底":
-        return "体系外默认分类"
+    if text in {"LLM 兜底", "LLM 辅助分类"}:
+        return "LLM兜底"
+    if text in {"降级兜底", "体系外默认分类"}:
+        return "默认兜底"
     return text
 
 
-def should_review_record(method: str, structure_type: str) -> bool:
-    return (
-        method == "体系外默认分类"
-        or structure_type == "multi_system_same_domain"
-        or structure_type == "composite_project"
-    )
+def _split_pipe_text(value: Any) -> List[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [part.strip() for part in text.split("|") if part.strip()]
 
 
 def _read_result_rows_from_workbook(workbook: openpyxl.Workbook, source_name: str) -> List[Dict[str, Any]]:
@@ -59,29 +56,23 @@ def _read_result_rows_from_workbook(workbook: openpyxl.Workbook, source_name: st
         project_name = row[0]
         if project_name is None or str(project_name).strip() == "":
             continue
-        record = {
-            "source_file": source_name,
-            "row_num": row_num,
-            "project_name": str(project_name),
-            "level1": row[index["一级分类"]],
-            "level2": row[index["二级分类"]],
-            "method": normalize_method(row[index["分类方式"]]),
-            "reason": row[index["分类依据"]],
-            "is_composite": row[index["是否复合工程"]] == "是",
-            "structure_type": row[index["结构类型"]],
-            "composite_reason": "",
-            "secondary_candidates": [],
-        }
-        record["needs_review"] = should_review_record(record["method"], record["structure_type"])
-        if "复合原因" in index:
-            record["composite_reason"] = str(row[index["复合原因"]] or "").strip()
-        if "候选分类" in index:
-            candidates_text = str(row[index["候选分类"]] or "").strip()
-            if candidates_text:
-                record["secondary_candidates"] = [
-                    part.strip() for part in candidates_text.split("|") if part.strip()
-                ]
-        records.append(record)
+        records.append(
+            {
+                "source_file": source_name,
+                "row_num": row_num,
+                "project_name": str(project_name),
+                "level1": row[index["一级分类"]],
+                "level2": row[index["二级分类"]],
+                "level3": row[index["三级分类"]],
+                "method": normalize_method(row[index["分类方式"]]),
+                "confidence": row[index["置信度"]],
+                "match_type": row[index["匹配类型"]],
+                "needs_review": row[index["是否建议复核"]] == "是",
+                "candidate_ids": _split_pipe_text(row[index["候选目录ID"]]),
+                "candidate_labels": _split_pipe_text(row[index["候选目录"]]),
+                "reason": row[index["分类依据"]],
+            }
+        )
     return records
 
 
@@ -105,19 +96,18 @@ def summarize_records(records: List[Dict[str, Any]], top_n: int = 20) -> Dict[st
     method_counter = Counter(record["method"] for record in records)
     level1_counter = Counter(record["level1"] for record in records)
     level2_counter = Counter(record["level2"] for record in records)
-    structure_counter = Counter(record["structure_type"] for record in records)
+    match_type_counter = Counter(record["match_type"] for record in records)
 
-    focus_samples: List[Dict[str, Any]] = []
-    for record in records:
-        if record["method"] != "规则优先" or record["is_composite"] or record["needs_review"]:
-            focus_samples.append(record)
-
+    focus_samples = [
+        record
+        for record in records
+        if record["method"] != "规则优先" or record["needs_review"]
+    ]
     focus_samples.sort(
         key=lambda item: (
             item["source_file"],
             item["method"] == "规则优先",
             not item["needs_review"],
-            not item["is_composite"],
             item["row_num"],
         )
     )
@@ -126,15 +116,17 @@ def summarize_records(records: List[Dict[str, Any]], top_n: int = 20) -> Dict[st
         "summary": {
             "total_records": len(records),
             "rule_method_count": method_counter.get("规则优先", 0),
-            "llm_method_count": method_counter.get("LLM 辅助分类", 0),
-            "fallback_method_count": method_counter.get("体系外默认分类", 0),
-            "composite_count": sum(1 for record in records if record["is_composite"]),
+            "llm_method_count": method_counter.get("LLM兜底", 0),
+            "fallback_method_count": method_counter.get("默认兜底", 0),
             "review_count": sum(1 for record in records if record["needs_review"]),
         },
-        "structure_counts": {
-            "single_project": structure_counter.get("single_project", 0),
-            "multi_system_same_domain": structure_counter.get("multi_system_same_domain", 0),
-            "composite_project": structure_counter.get("composite_project", 0),
+        "match_type_counts": {
+            "single": match_type_counter.get("single", 0),
+            "cross_domain": match_type_counter.get("cross_domain", 0),
+            "same_domain_multi_item": match_type_counter.get("same_domain_multi_item", 0),
+            "low_confidence": match_type_counter.get("low_confidence", 0),
+            "llm_fallback": match_type_counter.get("llm_fallback", 0),
+            "fallback": match_type_counter.get("fallback", 0),
         },
         "level1_top": [{"name": name, "count": count} for name, count in level1_counter.most_common(top_n)],
         "level2_top": [{"name": name, "count": count} for name, count in level2_counter.most_common(top_n)],

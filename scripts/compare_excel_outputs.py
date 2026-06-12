@@ -6,7 +6,16 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 
-COMPARE_COLUMNS = ["一级分类", "二级分类", "分类方式", "是否复合工程", "是否建议复核", "结构类型"]
+COMPARE_COLUMNS = [
+    "一级分类",
+    "二级分类",
+    "三级分类",
+    "分类方式",
+    "置信度",
+    "匹配类型",
+    "是否建议复核",
+    "候选目录ID",
+]
 
 
 def parse_args() -> argparse.Namespace:

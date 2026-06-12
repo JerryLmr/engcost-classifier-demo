@@ -1,362 +1,142 @@
-import re
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Sequence
 
-from core.rule_loader import get_ruleset
-from data.boundaries import find_boundary_decision
-from core.config import DEFAULT_FALLBACK_LEVEL1, DEFAULT_FALLBACK_LEVEL2
-from data.rules import DetailedLevel2Rule, KeywordRule
-from services.llm_client import llm_classify
-
-
-def normalize_text(text: str) -> str:
-    return re.sub(r"\s+", "", text.strip())
-
-
-def score_keywords(text: str, rules: List[KeywordRule]) -> Tuple[int, List[str]]:
-    score = 0
-    hits: List[str] = []
-    for keyword, weight in rules:
-        if keyword in text:
-            score += weight
-            hits.append(keyword)
-    return score, hits
-
-
-def collect_level1_candidates(text: str) -> List[Tuple[str, int, List[str]]]:
-    level1_rules = get_ruleset()["level1_rules"]
-    candidates: List[Tuple[str, int, List[str]]] = []
-    for name, rules in level1_rules.items():
-        score, hits = score_keywords(text, rules)
-        if score > 0:
-            candidates.append((name, score, hits))
-    return sorted(candidates, key=lambda item: (item[1], len(item[2])), reverse=True)
+from classifier.catalog_loader import CatalogItem
+from classifier.llm_client import llm_select_item
+from classifier.rule_engine import (
+    HIGH_CONFIDENCE_SCORE,
+    MEDIUM_CONFIDENCE_SCORE,
+    ScoredCandidate,
+    build_reason,
+    candidate_ids,
+    candidate_labels_by_id,
+    confidence_for_score,
+    match_type_for_candidates,
+    needs_review_for_match,
+    score_catalog,
+    select_candidate_window,
+)
+from classifier.settings import (
+    DEFAULT_FALLBACK_LEVEL1,
+    DEFAULT_FALLBACK_LEVEL2,
+    DEFAULT_FALLBACK_LEVEL3,
+)
 
 
-def collect_strong_domain_hits(text: str) -> Dict[str, List[str]]:
-    domain_strong_keywords = get_ruleset()["domain_strong_keywords"]
-    domain_hits: Dict[str, List[str]] = {}
-    has_monitor_context = any(keyword in text for keyword in ["监控", "摄像头", "球机", "录像"])
-    has_sewage_context = any(keyword in text for keyword in ["污水泵", "排污泵", "集水井", "化粪池", "污水井", "污水总管", "排污"])
-    has_elevator_decoration_context = any(keyword in text for keyword in ["墙面", "粉刷", "翻新", "涂料", "装修"])
-    has_waterproof_context = any(keyword in text for keyword in ["屋顶", "屋面", "防水", "漏水", "渗漏", "渗水"])
-    has_access_control_context = any(keyword in text for keyword in ["门禁", "对讲", "可视对讲", "智能化", "门禁系统", "梯控"])
-    for level1, keywords in domain_strong_keywords.items():
-        hits = [keyword for keyword in keywords if keyword in text]
-        if level1 == "电梯" and ("电梯房" in text or has_monitor_context):
-            explicit_elevator_work = any(
-                keyword in text
-                for keyword in [
-                    "钢丝绳",
-                    "主机",
-                    "抱闸",
-                    "层门",
-                    "扶梯",
-                    "电梯维修",
-                    "电梯更换",
-                    "电梯改造",
-                    "电梯更新",
-                    "电梯升级",
-                    "电梯故障",
-                    "电梯抢修",
-                ]
-            )
-            if not explicit_elevator_work:
-                hits = [keyword for keyword in hits if keyword != "电梯"]
-        if level1 == "电梯" and any(keyword in text for keyword in ["电梯厅", "电梯间", "电梯门套"]) and has_elevator_decoration_context:
-            hits = [keyword for keyword in hits if keyword not in {"电梯"}]
-        if level1 == "电梯" and "电梯底坑" in text and has_waterproof_context:
-            hits = [keyword for keyword in hits if keyword not in {"电梯"}]
-        if level1 == "电梯" and has_access_control_context:
-            explicit_elevator_work = any(
-                keyword in text
-                for keyword in [
-                    "钢丝绳",
-                    "主机",
-                    "抱闸",
-                    "层门",
-                    "扶梯",
-                    "曳引机",
-                    "限速器",
-                    "控制柜",
-                    "主钢索",
-                    "电梯维修",
-                    "电梯更换",
-                    "电梯改造",
-                    "电梯更新",
-                    "电梯升级",
-                    "电梯故障",
-                    "电梯抢修",
-                ]
-            )
-            if not explicit_elevator_work:
-                hits = [keyword for keyword in hits if keyword not in {"电梯"}]
-        if level1 == "道路工程" and has_monitor_context:
-            explicit_road_work = any(
-                keyword in text
-                for keyword in ["道路改造", "道路维修", "道路拓宽", "路面维修", "路面翻新", "沥青"]
-            )
-            if not explicit_road_work:
-                hits = [keyword for keyword in hits if keyword not in {"道路", "路面", "人行道"}]
-        if level1 == "给排水" and has_sewage_context:
-            hits = [keyword for keyword in hits if keyword not in {"排水", "水泵", "水管"}]
-        if level1 == "给排水" and "消防泵房" in text:
-            hits = [keyword for keyword in hits if keyword != "水泵"]
-        if level1 == "弱电系统" and "门禁" in text:
-            hits = [keyword for keyword in hits if keyword not in {"楼宇对讲", "对讲", "可视对讲"}]
-        if level1 == "防水工程" and "消防水带" in text:
-            hits = [keyword for keyword in hits if keyword not in {"防水", "防水工程", "防水维修", "防水施工"}]
-        if level1 == "污水" and "防汛挡板" in text:
-            hits = []
-        if hits:
-            domain_hits[level1] = hits
-    return domain_hits
-
-
-def collect_same_domain_components(text: str, primary_level1: str) -> Set[str]:
-    components = get_ruleset()["same_domain_components"].get(primary_level1, {})
-    matched: Set[str] = set()
-    for component_name, keywords in components.items():
-        if any(keyword in text for keyword in keywords):
-            matched.add(component_name)
-    return matched
-
-
-def should_mark_multi_system(primary_level1: str, same_domain_components: Set[str]) -> bool:
-    if len(same_domain_components) < 2:
-        return False
-    if primary_level1 == "电梯" and same_domain_components == {"整梯", "部件"}:
-        return False
-    if primary_level1 == "门禁设施" and same_domain_components.issubset({"门禁", "对讲"}):
-        return False
-    return True
-
-
-def resolve_structure_type(
-    primary_level1: str,
-    strong_candidate_names: List[str],
-    same_domain_components: Set[str],
-) -> Tuple[str, List[str]]:
-    if len(strong_candidate_names) <= 1:
-        if should_mark_multi_system(primary_level1, same_domain_components):
-            return "multi_system_same_domain", []
-        return "single_project", []
-
-    cross_domain = [level1 for level1 in strong_candidate_names if level1 != primary_level1]
-    if cross_domain:
-        return "composite_project", cross_domain
-
-    if should_mark_multi_system(primary_level1, same_domain_components):
-        return "multi_system_same_domain", []
-
-    return "single_project", []
-
-
-def match_best_rule(rule_map: Dict[str, List[KeywordRule]], text: str) -> Tuple[Optional[str], List[str], int]:
-    best_name: Optional[str] = None
-    best_hits: List[str] = []
-    best_score = 0
-
-    for name, rules in rule_map.items():
-        score, hits = score_keywords(text, rules)
-        if score == 0:
-            continue
-        if (
-            score > best_score
-            or (score == best_score and len(hits) > len(best_hits))
-            or (score == best_score and len(hits) == len(best_hits) and best_name is None)
-        ):
-            best_name = name
-            best_hits = hits
-            best_score = score
-
-    return best_name, best_hits, best_score
-
-
-def filter_rule_map(
-    rule_map: Dict[str, List[KeywordRule]],
-    allowed_names: Optional[Sequence[str]],
-) -> Dict[str, List[KeywordRule]]:
-    if not allowed_names:
-        return rule_map
-    allowed = set(allowed_names)
-    return {name: rules for name, rules in rule_map.items() if name in allowed}
-
-
-def score_detailed_rule(text: str, rule: DetailedLevel2Rule) -> Tuple[int, int, int, List[str]]:
-    object_score, object_hits = score_keywords(text, rule.get("object_keywords", []))
-    action_score, action_hits = score_keywords(text, rule.get("action_keywords", []))
-    weak_score, weak_hits = score_keywords(text, rule.get("weak_keywords", []))
-
-    total_score = object_score + action_score + weak_score
-    hits = object_hits + [keyword for keyword in action_hits if keyword not in object_hits]
-    hits += [keyword for keyword in weak_hits if keyword not in hits]
-    return total_score, object_score, action_score, hits
-
-
-def match_detailed_level2(
+def _result_from_item(
     text: str,
-    level1: str,
-    allowed_level2: Optional[Sequence[str]] = None,
-) -> Tuple[Optional[str], List[str], int]:
-    rules = get_ruleset()["detailed_level2_rules"].get(level1)
-    if not rules:
-        return None, [], 0
+    item: CatalogItem,
+    method: str,
+    confidence: str,
+    match_type: str,
+    needs_review: bool,
+    ids: Sequence[str],
+    reason: str,
+) -> Dict[str, object]:
+    unique_ids: List[str] = []
+    for item_id in ids:
+        if item_id not in unique_ids:
+            unique_ids.append(item_id)
+    if item.id not in unique_ids:
+        unique_ids.insert(0, item.id)
 
-    allowed = set(allowed_level2) if allowed_level2 else None
-    best_name: Optional[str] = None
-    best_hits: List[str] = []
-    best_score = 0
-    best_object_score = 0
-    best_action_score = 0
-
-    for name, rule in rules.items():
-        if allowed is not None and name not in allowed:
-            continue
-
-        total_score, object_score, action_score, hits = score_detailed_rule(text, rule)
-        min_score = rule.get("min_score", 1)
-        if object_score == 0 and not rule.get("default_on_object", False):
-            continue
-        if object_score > 0 and action_score == 0 and not rule.get("default_on_object", False):
-            continue
-        if object_score == 0 and action_score > 0:
-            continue
-        if object_score > 0 and action_score == 0 and rule.get("default_on_object", False):
-            total_score = max(total_score, min_score)
-        if total_score < min_score:
-            continue
-
-        if (
-            object_score > best_object_score
-            or (object_score == best_object_score and action_score > best_action_score)
-            or (
-                object_score == best_object_score
-                and action_score == best_action_score
-                and total_score > best_score
-            )
-        ):
-            best_name = name
-            best_hits = hits
-            best_score = total_score
-            best_object_score = object_score
-            best_action_score = action_score
-
-    return best_name, best_hits, best_score
-
-
-def fallback_classify(text: str, reason: str):
+    labels = candidate_labels_by_id(unique_ids)
     return {
         "project_name": text,
-        "level1": DEFAULT_FALLBACK_LEVEL1,
-        "level2": DEFAULT_FALLBACK_LEVEL2,
-        "method": "体系外默认分类",
+        "level1": item.level1,
+        "level2": item.level2,
+        "level3": item.level3,
+        "method": method,
+        "confidence": confidence,
+        "match_type": match_type,
+        "needs_review": needs_review,
+        "candidate_ids": unique_ids,
+        "candidate_labels": [labels[item_id] for item_id in unique_ids if item_id in labels],
         "reason": reason,
     }
 
 
-def build_candidate_labels(level1_names: Sequence[str]) -> List[str]:
-    labels: List[str] = []
-    for level1 in level1_names:
-        if level1 not in labels:
-            labels.append(level1)
-        if len(labels) >= 3:
-            break
-    return labels
-
-
-def detect_composite_metadata(
-    text: str,
-    primary_level1: str,
-    method: str,
-) -> Dict[str, object]:
-    normalized = normalize_text(text)
-    candidates = collect_level1_candidates(normalized)
-    strong_domain_hits = collect_strong_domain_hits(normalized)
-    same_domain_components = collect_same_domain_components(normalized, primary_level1)
-
-    strong_candidate_names = [
-        level1
-        for level1, score, _hits in candidates
-        if score >= 3 and level1 in strong_domain_hits
-    ]
-    is_composite = False
-    needs_review = method == "体系外默认分类"
-    composite_reason = None
-    structure_type, cross_domain = resolve_structure_type(
-        primary_level1,
-        strong_candidate_names,
-        same_domain_components,
-    )
-    secondary_candidates: List[str] = []
-
-    if structure_type == "composite_project":
-        is_composite = True
-        secondary_names = cross_domain[:2]
-        reason_domains = strong_candidate_names[:3] if strong_candidate_names else [primary_level1]
-        composite_reason = (
-            f"同时命中多个工程域：{'、'.join(reason_domains)}"
-        )
-        secondary_candidates = build_candidate_labels(secondary_names)
-        needs_review = True
-    elif structure_type == "multi_system_same_domain":
-        needs_review = True
-
-    if method == "体系外默认分类":
-        needs_review = True
-
-    return {
-        "is_composite": is_composite,
-        "needs_review": needs_review,
-        "composite_reason": composite_reason,
-        "secondary_candidates": secondary_candidates,
-        "structure_type": structure_type,
-    }
-
-
-def attach_result_metadata(text: str, result: Dict[str, str]) -> Dict[str, object]:
-    metadata = detect_composite_metadata(text, result["level1"], result["method"])
-    return {**result, **metadata}
-
-
-def rule_classify(text: str):
-    ruleset = get_ruleset()
-    normalized = normalize_text(text)
-    boundary = find_boundary_decision(normalized, ruleset["boundary_rules"])
-    allowed_level1 = [boundary["level1"]] if boundary else None
-    level1_map = filter_rule_map(ruleset["level1_rules"], allowed_level1)
-    level1, level1_hits, _ = match_best_rule(level1_map, normalized)
-    if boundary and boundary.get("level1") and not level1:
-        level1 = boundary["level1"]
-        level1_hits = []
-    if not level1:
-        return None
-
-    allowed_level2 = boundary.get("allowed_level2") if boundary else None
-    level2, level2_hits, _ = match_detailed_level2(normalized, level1, allowed_level2)
-    if not level2:
-        level2_map = filter_rule_map(ruleset["level2_rules"][level1], allowed_level2)
-        level2, level2_hits, _ = match_best_rule(level2_map, normalized)
-    if not level2:
-        return None
-
-    hits = level1_hits + [keyword for keyword in level2_hits if keyword not in level1_hits]
-    if not hits and boundary:
-        hits = [boundary["reason"]]
-
-    reason_parts = [f"一级命中：{level1}"]
-    if boundary:
-        reason_parts.append(f"边界判定：{boundary['reason']}")
-    if hits:
-        reason_parts.append(f"关键词：{'、'.join(hits)}")
+def fallback_classify(text: str, reason: str, candidate_ids_value: Sequence[str] | None = None) -> Dict[str, object]:
+    ids = list(candidate_ids_value or [])
+    labels = candidate_labels_by_id(ids)
     return {
         "project_name": text,
-        "level1": level1,
-        "level2": level2,
-        "method": "规则优先",
-        "reason": "；".join(reason_parts),
+        "level1": DEFAULT_FALLBACK_LEVEL1,
+        "level2": DEFAULT_FALLBACK_LEVEL2,
+        "level3": DEFAULT_FALLBACK_LEVEL3,
+        "method": "默认兜底",
+        "confidence": "低",
+        "match_type": "fallback",
+        "needs_review": True,
+        "candidate_ids": ids,
+        "candidate_labels": [labels[item_id] for item_id in ids if item_id in labels],
+        "reason": reason,
     }
 
 
-def classify_text(text: str):
-    result = rule_classify(text) or llm_classify(text)
-    return attach_result_metadata(text, result)
+def _llm_candidates(rule_candidates: Sequence[ScoredCandidate]) -> List[CatalogItem] | None:
+    if not rule_candidates:
+        return None
+    window = select_candidate_window(rule_candidates)
+    if window:
+        return [candidate.item for candidate in window]
+    return [candidate.item for candidate in rule_candidates[:10]]
+
+
+def _classify_with_llm(text: str, rule_candidates: Sequence[ScoredCandidate]) -> Dict[str, object]:
+    ids = candidate_ids(rule_candidates)
+    try:
+        item, reason, _llm_needs_review = llm_select_item(text, _llm_candidates(rule_candidates))
+    except Exception as exc:  # noqa: BLE001
+        return fallback_classify(text, f"LLM 不可用或返回无效目录，返回默认分类：{exc}", ids)
+
+    return _result_from_item(
+        text=text,
+        item=item,
+        method="LLM兜底",
+        confidence="中",
+        match_type="llm_fallback",
+        needs_review=True,
+        ids=[item.id, *ids],
+        reason=reason,
+    )
+
+
+def rule_classify(text: str) -> Dict[str, object] | None:
+    candidates = score_catalog(text)
+    if not candidates:
+        return None
+
+    top = candidates[0]
+    if top.score < MEDIUM_CONFIDENCE_SCORE:
+        return None
+
+    selected = select_candidate_window(candidates)
+    ids = candidate_ids(selected or candidates)
+    confidence = confidence_for_score(top.score)
+    match_type = match_type_for_candidates(candidates)
+    needs_review = needs_review_for_match(match_type, confidence)
+    return _result_from_item(
+        text=text,
+        item=top.item,
+        method="规则优先",
+        confidence=confidence,
+        match_type=match_type,
+        needs_review=needs_review,
+        ids=ids,
+        reason=build_reason(top),
+    )
+
+
+def classify_text(text: str) -> Dict[str, object]:
+    candidates = score_catalog(text)
+    if candidates and candidates[0].score >= HIGH_CONFIDENCE_SCORE:
+        result = rule_classify(text)
+        if result is not None:
+            return result
+
+    if candidates and candidates[0].score >= MEDIUM_CONFIDENCE_SCORE:
+        result = rule_classify(text)
+        if result is not None and result["match_type"] in {"single", "same_domain_multi_item", "cross_domain"}:
+            return result
+
+    return _classify_with_llm(text, candidates)

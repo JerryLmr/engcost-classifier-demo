@@ -1,6 +1,6 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from core.config import OLLAMA_MODEL
+from classifier.settings import OLLAMA_MODEL
 from models.schemas import AnalyzeResponse, ClassifyRequest, ClassifyResponse
 from services.analysis_service import analyze_excel_file
 from services.classifier import classify_text
