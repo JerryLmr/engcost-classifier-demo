@@ -1,11 +1,16 @@
 import os
 
 
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "300"))
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
-LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "90"))
+
+LMSTUDIO_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://172.18.0.1:1234/v1")
+LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "qwen/qwen3.6-35b-a3b")
+LMSTUDIO_API_KEY = os.getenv("LMSTUDIO_API_KEY", "lm-studio")
 
 DEFAULT_FALLBACK_LEVEL1 = os.getenv("DEFAULT_FALLBACK_LEVEL1", "公共设施")
 DEFAULT_FALLBACK_LEVEL2 = os.getenv("DEFAULT_FALLBACK_LEVEL2", "公共区域维修")
 DEFAULT_FALLBACK_LEVEL3 = os.getenv("DEFAULT_FALLBACK_LEVEL3", "综合维修")
-

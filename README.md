@@ -23,6 +23,28 @@ ollama run qwen3:8b
 
 只要本地 `http://127.0.0.1:11434` 可访问即可。
 
+## 2.1. 可选：使用 LM Studio 测试本地 35B 模型
+
+Windows + WSL 示例环境变量：
+
+```bash
+export LLM_PROVIDER=lmstudio
+export LMSTUDIO_BASE_URL=http://172.18.0.1:1234/v1
+export LMSTUDIO_MODEL=qwen/qwen3.6-35b-a3b
+export LMSTUDIO_API_KEY=lm-studio
+export LLM_TIMEOUT_SECONDS=300
+```
+
+LM Studio 需要开启 `Serve on local network`。
+
+手动运行示例：
+
+```bash
+python scripts/batch_classify_excel.py excel_inputs/d1_error_sample.xlsx -o excel_outputs_lmstudio --overwrite --mode llm
+```
+
+注意：这条命令用于本地手动测试，不应由 Codex 执行。
+
 ## 3. 启动后端
 
 ```bash

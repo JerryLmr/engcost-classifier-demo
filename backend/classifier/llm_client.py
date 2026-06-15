@@ -4,7 +4,15 @@ from typing import Any, Dict, Sequence
 import requests
 
 from classifier.catalog_loader import CatalogItem, get_catalog_by_id, load_catalog
-from classifier.settings import LLM_TIMEOUT_SECONDS, OLLAMA_BASE_URL, OLLAMA_MODEL
+from classifier.settings import (
+    LLM_PROVIDER,
+    LLM_TIMEOUT_SECONDS,
+    LMSTUDIO_API_KEY,
+    LMSTUDIO_BASE_URL,
+    LMSTUDIO_MODEL,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
+)
 
 
 def _catalog_prompt_lines(items: Sequence[CatalogItem]) -> str:
@@ -45,9 +53,8 @@ def _match_catalog_level3_item(raw_level3_item: str, catalog_level3_items: Seque
     return ""
 
 
-def request_llm_classification(text: str, candidate_items: Sequence[CatalogItem] | None = None) -> Dict[str, Any]:
-    items = list(candidate_items or load_catalog())
-    prompt = f"""
+def build_classification_prompt(text: str, items: Sequence[CatalogItem]) -> str:
+    return f"""
 你是物业工程目录分类助手。只能从给定 catalog id 中选择最合适的一个三级目录。
 输入可能是“项目名称 + 工程概况”的拼接文本，需要综合判断。
 
@@ -82,6 +89,8 @@ catalog:
 输入文本：{text}
 """.strip()
 
+
+def _request_ollama_classification(prompt: str) -> Dict[str, Any]:
     payload = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
@@ -107,6 +116,41 @@ catalog:
     response.raise_for_status()
     data = response.json()
     return json.loads(data["response"])
+
+
+def _request_lmstudio_classification(prompt: str) -> Dict[str, Any]:
+    payload = {
+        "model": LMSTUDIO_MODEL,
+        "messages": [
+            {"role": "system", "content": "你是物业工程目录分类助手，只能输出 JSON。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+    response = requests.post(
+        f"{LMSTUDIO_BASE_URL}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {LMSTUDIO_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return json.loads(data["choices"][0]["message"]["content"])
+
+
+def request_llm_classification(text: str, candidate_items: Sequence[CatalogItem] | None = None) -> Dict[str, Any]:
+    items = list(candidate_items or load_catalog())
+    prompt = build_classification_prompt(text, items)
+    provider = LLM_PROVIDER.strip().lower()
+    if provider == "ollama":
+        return _request_ollama_classification(prompt)
+    if provider == "lmstudio":
+        return _request_lmstudio_classification(prompt)
+    raise ValueError(f"Unsupported LLM_PROVIDER: {LLM_PROVIDER}")
 
 
 def llm_select_item(text: str, candidate_items: Sequence[CatalogItem] | None = None) -> tuple[CatalogItem, str, str, bool]:

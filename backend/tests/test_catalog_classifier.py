@@ -1,10 +1,11 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from classifier import llm_client
 from classifier.catalog_loader import load_catalog
 from services.classifier import classify_text, classify_text_llm_only
 
@@ -189,6 +190,37 @@ class CatalogClassifierTestCase(unittest.TestCase):
         self.assertEqual(result["match_type"], "fallback")
         self.assertTrue(result["needs_review"])
         self.assertIn("LLM-only 模式不可用", result["reason"])
+
+    @patch("classifier.llm_client.requests.post")
+    @patch("classifier.llm_client.LLM_PROVIDER", "lmstudio")
+    def test_lmstudio_classification_parses_json_content(self, mock_post):
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "{\"id\":\"049\",\"level3_item\":\"更换￠150以上(含￠150)管道\","
+                            "\"reason\":\"消防管道\",\"needs_review\":true}"
+                        )
+                    }
+                }
+            ]
+        }
+        mock_post.return_value = mock_response
+
+        result = llm_client.request_llm_classification("消防管道更换", [])
+
+        self.assertEqual(result["id"], "049")
+        self.assertEqual(result["level3_item"], "更换￠150以上(含￠150)管道")
+        self.assertEqual(result["reason"], "消防管道")
+        self.assertTrue(result["needs_review"])
+        mock_response.raise_for_status.assert_called_once()
+        mock_post.assert_called_once()
+        _args, kwargs = mock_post.call_args
+        self.assertEqual(kwargs["json"]["model"], "qwen/qwen3.6-35b-a3b")
+        self.assertEqual(kwargs["json"]["temperature"], 0)
+        self.assertEqual(kwargs["json"]["response_format"], {"type": "json_object"})
 
 
 if __name__ == "__main__":
