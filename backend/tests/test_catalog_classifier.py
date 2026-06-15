@@ -148,6 +148,39 @@ class CatalogClassifierTestCase(unittest.TestCase):
         self.assertTrue(result["needs_review"])
         self.assertIn("不在标准目录中", result["reason"])
 
+    @patch(
+        "classifier.llm_client.request_llm_classification",
+        return_value={
+            "id": "049",
+            "level3_item": " 更换￠150以上（含￠150）管道 ",
+            "reason": "消防管道更换",
+            "needs_review": False,
+        },
+    )
+    def test_llm_only_normalizes_level3_item_format_only(self, _mock_request):
+        result = classify_text_llm_only("消防管道更换")
+        self.assertEqual(result["candidate_ids"], ["049"])
+        self.assertEqual(result["level3_item"], "更换￠150以上(含￠150)管道")
+        self.assertEqual(result["matched_level3_items"], ["更换￠150以上(含￠150)管道"])
+        self.assertFalse(result["needs_review"])
+
+    @patch(
+        "classifier.llm_client.request_llm_classification",
+        return_value={
+            "id": "046",
+            "level3_item": "更换￠150以上(含￠150)管道",
+            "reason": "消防管道更换",
+            "needs_review": False,
+        },
+    )
+    def test_llm_only_does_not_correct_level3_item_across_ids(self, _mock_request):
+        result = classify_text_llm_only("消防管道更换")
+        self.assertEqual(result["candidate_ids"], ["046"])
+        self.assertEqual(result["level3_item"], "未明确具体细项")
+        self.assertEqual(result["matched_level3_items"], [])
+        self.assertTrue(result["needs_review"])
+        self.assertIn("不在标准目录中", result["reason"])
+
     @patch("classifier.llm_client.request_llm_classification", side_effect=RuntimeError("offline"))
     def test_llm_only_falls_back_when_llm_unavailable(self, _mock_request):
         result = classify_text_llm_only("某小区综合整治提升项目")
