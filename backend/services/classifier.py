@@ -127,6 +127,28 @@ def _classify_with_llm(text: str, rule_candidates: Sequence[ScoredCandidate]) ->
     )
 
 
+def classify_text_llm_only(text: str) -> Dict[str, object]:
+    try:
+        item, level3_item, reason, llm_needs_review = llm_select_item(text, None)
+    except Exception as exc:  # noqa: BLE001
+        return fallback_classify(text, f"LLM-only 模式不可用或返回无效目录，返回默认分类：{exc}")
+
+    matched_level3_items = [level3_item] if level3_item else []
+    return _result_from_item(
+        text=text,
+        item=item,
+        method="LLM-only",
+        confidence="中",
+        match_type="llm_only",
+        needs_review=llm_needs_review,
+        ids=[item.id],
+        reason=reason,
+        level3_item=level3_item,
+        matched_level3_items=matched_level3_items,
+        candidate_level3_items=matched_level3_items,
+    )
+
+
 def rule_classify(text: str) -> Dict[str, object] | None:
     candidates = score_catalog(text)
     if not candidates:

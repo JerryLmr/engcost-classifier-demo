@@ -19,6 +19,7 @@ def request_llm_classification(text: str, candidate_items: Sequence[CatalogItem]
     items = list(candidate_items or load_catalog())
     prompt = f"""
 你是物业工程目录分类助手。只能从给定 catalog id 中选择最合适的一个三级目录。
+输入可能是“项目名称 + 工程概况”的拼接文本，需要综合判断。
 
 catalog:
 {_catalog_prompt_lines(items)}
@@ -27,11 +28,13 @@ catalog:
 1. 只能返回 catalog 中已有 id，不允许创造目录。
 2. 输出必须是 JSON。
 3. JSON 字段固定为：id, level3_item, reason, needs_review。
-4. level3_item 必须为空字符串或所选 id 下列出的原始细项，不允许创造细项。
-5. 如果输入是混合工程，选择最主要工程对象对应的 id，并在 reason 说明其他候选。
-6. 不要输出 markdown，不要输出解释。
+4. 优先判断工程对象和设施对象，不要只根据“维修、改造、更换、整治”等通用动作词分类。
+5. level3_item 必须从所选 id 下列出的原始细项中选择，不允许创造细项。
+6. 如果没有完全对应细项，选择最接近的已列出细项，并设置 needs_review=true。
+7. 如果输入是混合工程，选择最主要工程对象对应的 id，并在 reason 说明其他候选。
+8. 不要输出 markdown，不要输出解释。
 
-输入工程名称：{text}
+输入文本：{text}
 """.strip()
 
     payload = {

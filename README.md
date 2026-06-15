@@ -84,7 +84,10 @@ python scripts/batch_classify_excel.py /path/to/excel_dir --overwrite
 python scripts/batch_classify_excel.py /path/to/excel_dir --overwrite
 python scripts/batch_classify_excel.py /path/to/excel_dir -o /path/to/output_dir --overwrite
 python scripts/batch_classify_excel.py /path/to/input.xlsx -o /path/to/output.xlsx --overwrite
+python scripts/batch_classify_excel.py /path/to/input.xlsx -o /path/to/output.xlsx --overwrite --mode llm
 ```
+
+`--mode` 支持 `auto`、`llm`、`rule`。默认 `auto` 保持规则优先并用 LLM 兜底；`llm` 会直接用完整目录交给 LLM；`rule` 只跑规则，规则无结果时默认兜底。
 
 脚本默认会跳过已经带 `_分类结果` 或 `_classified` 后缀的文件。
 

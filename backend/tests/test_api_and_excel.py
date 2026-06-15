@@ -1,3 +1,4 @@
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -7,7 +8,8 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "backend"))
 
 try:
     import openpyxl
@@ -119,8 +121,7 @@ class ApiAndExcelTestCase(unittest.TestCase):
 
     @patch("classifier.llm_client.request_llm_classification", side_effect=RuntimeError("offline"))
     def test_cli_single_file_and_directory_modes(self, _mock_request):
-        root = Path(__file__).resolve().parents[2]
-        script = root / "scripts" / "batch_classify_excel.py"
+        script = ROOT / "scripts" / "batch_classify_excel.py"
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             input_file = tmp_path / "input.xlsx"
@@ -129,7 +130,7 @@ class ApiAndExcelTestCase(unittest.TestCase):
 
             single = subprocess.run(
                 [sys.executable, str(script), str(input_file), "-o", str(output_file), "--overwrite"],
-                cwd=root,
+                cwd=ROOT,
                 check=False,
                 capture_output=True,
                 text=True,
@@ -143,13 +144,46 @@ class ApiAndExcelTestCase(unittest.TestCase):
             (input_dir / "batch.xlsx").write_bytes(make_workbook("屋面防水"))
             batch = subprocess.run(
                 [sys.executable, str(script), str(input_dir), "-o", str(output_dir), "--overwrite"],
-                cwd=root,
+                cwd=ROOT,
                 check=False,
                 capture_output=True,
                 text=True,
             )
             self.assertEqual(batch.returncode, 0, batch.stderr + batch.stdout)
             self.assertTrue((output_dir / "batch_分类结果.xlsx").exists())
+
+            rule_output = tmp_path / "rule.xlsx"
+            rule = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    str(input_file),
+                    "-o",
+                    str(rule_output),
+                    "--overwrite",
+                    "--mode",
+                    "rule",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(rule.returncode, 0, rule.stderr + rule.stdout)
+            self.assertIn("[INFO] 分类模式: rule", rule.stdout)
+            self.assertTrue(rule_output.exists())
+
+    def test_cli_mode_dispatch(self):
+        script = ROOT / "scripts" / "batch_classify_excel.py"
+        spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        self.assertEqual(module.select_classifier("auto").__name__, "classify_text")
+        self.assertEqual(module.select_classifier("llm").__name__, "classify_text_llm_only")
+        self.assertEqual(module.select_classifier("rule")("不匹配内容")["method"], "默认兜底")
 
 
 if __name__ == "__main__":

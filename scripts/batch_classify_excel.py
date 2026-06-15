@@ -47,6 +47,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="目录模式默认跳过已带 _分类结果 / _classified 后缀的文件；设置后不跳过",
     )
+    parser.add_argument(
+        "--mode",
+        choices=("auto", "llm", "rule"),
+        default="auto",
+        help=(
+            "分类模式：auto=规则优先并用 LLM 兜底；llm=直接用完整 catalog 调 LLM；"
+            "rule=只跑规则，规则无结果时默认兜底。单文件示例："
+            "python scripts/batch_classify_excel.py input.xlsx -o output.xlsx --overwrite --mode llm"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -118,6 +128,26 @@ def resolve_jobs(input_path: Path, output_arg: str | None, include_classified: b
     return [(path, output_dir / f"{path.stem}_分类结果.xlsx") for path in excel_files]
 
 
+def select_classifier(mode: str):
+    from services.classifier import (  # noqa: E402
+        classify_text,
+        classify_text_llm_only,
+        fallback_classify,
+        rule_classify,
+    )
+
+    if mode == "auto":
+        return classify_text
+    if mode == "llm":
+        return classify_text_llm_only
+    if mode == "rule":
+        return lambda text: rule_classify(text) or fallback_classify(
+            text,
+            "rule 模式未命中规则，返回默认分类",
+        )
+    raise ValueError(f"未知分类模式: {mode}")
+
+
 def main() -> int:
     args = parse_args()
     input_path = Path(args.input_path).expanduser().resolve()
@@ -132,7 +162,11 @@ def main() -> int:
         print(f"[ERROR] 没有可处理的 Excel 文件: {input_path}")
         return 1
 
-    from services.classifier import classify_text  # noqa: E402
+    try:
+        classify_text_func = select_classifier(args.mode)
+    except ValueError as exc:
+        print(f"[ERROR] {exc}")
+        return 1
 
     total_files = 0
     total_processed = 0
@@ -141,6 +175,7 @@ def main() -> int:
 
     print(f"[INFO] 输入路径: {input_path}")
     print(f"[INFO] 待处理文件数: {len(jobs)}")
+    print(f"[INFO] 分类模式: {args.mode}")
 
     for path, output_path in jobs:
         if output_path.exists() and not args.overwrite:
@@ -149,7 +184,7 @@ def main() -> int:
 
         print(f"[RUN ] {path.name}")
         try:
-            processed, skipped = classify_workbook(path, output_path, classify_text)
+            processed, skipped = classify_workbook(path, output_path, classify_text_func)
             total_files += 1
             total_processed += processed
             total_skipped += skipped

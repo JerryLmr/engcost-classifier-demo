@@ -6,7 +6,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from classifier.catalog_loader import load_catalog
-from services.classifier import classify_text
+from services.classifier import classify_text, classify_text_llm_only
 
 
 class CatalogClassifierTestCase(unittest.TestCase):
@@ -111,6 +111,51 @@ class CatalogClassifierTestCase(unittest.TestCase):
         self.assertTrue(result["needs_review"])
         self.assertNotEqual(result["confidence"], "高")
         self.assertIn("未命中具体三级细项", result["reason"])
+
+    @patch(
+        "classifier.llm_client.request_llm_classification",
+        return_value={
+            "id": "046",
+            "level3_item": "更换消防栓、箱",
+            "reason": "主工程对象为消防栓",
+            "needs_review": False,
+        },
+    )
+    def test_llm_only_returns_valid_catalog_item(self, _mock_request):
+        result = classify_text_llm_only("消防栓更换")
+        self.assertEqual(result["method"], "LLM-only")
+        self.assertEqual(result["match_type"], "llm_only")
+        self.assertEqual(result["candidate_ids"], ["046"])
+        self.assertEqual(result["level2"], "消防栓、箱")
+        self.assertEqual(result["level3_item"], "更换消防栓、箱")
+        self.assertEqual(result["matched_level3_items"], ["更换消防栓、箱"])
+        self.assertFalse(result["needs_review"])
+
+    @patch(
+        "classifier.llm_client.request_llm_classification",
+        return_value={
+            "id": "046",
+            "level3_item": "自造消防细项",
+            "reason": "主工程对象为消防栓",
+            "needs_review": False,
+        },
+    )
+    def test_llm_only_invalid_level3_item_requires_review(self, _mock_request):
+        result = classify_text_llm_only("消防栓更换")
+        self.assertEqual(result["method"], "LLM-only")
+        self.assertEqual(result["level3_item"], "未明确具体细项")
+        self.assertEqual(result["matched_level3_items"], [])
+        self.assertTrue(result["needs_review"])
+        self.assertIn("不在标准目录中", result["reason"])
+
+    @patch("classifier.llm_client.request_llm_classification", side_effect=RuntimeError("offline"))
+    def test_llm_only_falls_back_when_llm_unavailable(self, _mock_request):
+        result = classify_text_llm_only("某小区综合整治提升项目")
+        self.assertEqual(result["method"], "默认兜底")
+        self.assertEqual(result["confidence"], "低")
+        self.assertEqual(result["match_type"], "fallback")
+        self.assertTrue(result["needs_review"])
+        self.assertIn("LLM-only 模式不可用", result["reason"])
 
 
 if __name__ == "__main__":
