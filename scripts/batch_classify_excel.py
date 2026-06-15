@@ -28,6 +28,8 @@ RESULT_HEADERS = [
     "分类依据",
 ]
 
+EXCEL_SUFFIXES = {".xlsx", ".xlsm"}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="批量处理 Excel 工程三级目录分类文件")
@@ -61,12 +63,16 @@ def parse_args() -> argparse.Namespace:
 
 
 def should_skip_file(path: Path, include_classified: bool) -> bool:
-    if path.suffix.lower() not in {".xlsx", ".xlsm"}:
+    if path.suffix.lower() not in EXCEL_SUFFIXES:
         return True
     if include_classified:
         return False
     stem = path.stem
     return stem.endswith("_分类结果") or stem.endswith("_classified")
+
+
+def classified_output_name(input_file: Path) -> str:
+    return f"{input_file.stem}_分类结果.xlsx"
 
 
 def classify_workbook(path: Path, output_path: Path, classify_text_func) -> tuple[int, int]:
@@ -111,11 +117,28 @@ def classify_workbook(path: Path, output_path: Path, classify_text_func) -> tupl
     return processed, skipped
 
 
+def resolve_single_file_output(input_path: Path, output_arg: str | None) -> Path:
+    if not output_arg:
+        return input_path.with_name(classified_output_name(input_path))
+
+    raw_output = output_arg.strip()
+    output_path = Path(raw_output).expanduser()
+    is_directory_output = (
+        raw_output.endswith(("/", "\\"))
+        or output_path.exists() and output_path.is_dir()
+        or (not output_path.exists() and output_path.suffix == "")
+    )
+    if is_directory_output:
+        return (output_path / classified_output_name(input_path)).resolve()
+
+    return output_path.resolve()
+
+
 def resolve_jobs(input_path: Path, output_arg: str | None, include_classified: bool) -> list[tuple[Path, Path]]:
     if input_path.is_file():
-        if input_path.suffix.lower() not in {".xlsx", ".xlsm"}:
+        if input_path.suffix.lower() not in EXCEL_SUFFIXES:
             raise ValueError(f"输入文件不是 Excel: {input_path}")
-        output_path = Path(output_arg).expanduser().resolve() if output_arg else input_path.with_name(f"{input_path.stem}_分类结果.xlsx")
+        output_path = resolve_single_file_output(input_path, output_arg)
         return [(input_path, output_path)]
 
     if not input_path.is_dir():
@@ -125,7 +148,35 @@ def resolve_jobs(input_path: Path, output_arg: str | None, include_classified: b
     excel_files = sorted(
         path for path in input_path.iterdir() if not should_skip_file(path, include_classified)
     )
-    return [(path, output_dir / f"{path.stem}_分类结果.xlsx") for path in excel_files]
+    return [(path, output_dir / classified_output_name(path)) for path in excel_files]
+
+
+def validate_jobs(jobs: list[tuple[Path, Path]], overwrite: bool) -> None:
+    for input_path, output_path in jobs:
+        if not input_path.exists():
+            raise ValueError(f"输入文件不存在: {input_path}")
+        if not input_path.is_file():
+            raise ValueError(f"输入路径不是文件: {input_path}")
+        if input_path.suffix.lower() not in EXCEL_SUFFIXES:
+            raise ValueError(f"输入文件不是 Excel: {input_path}")
+        if output_path.exists() and output_path.is_dir():
+            raise ValueError(f"输出路径是目录，不是文件: {output_path}")
+        if output_path.exists() and not overwrite:
+            raise ValueError(f"输出已存在，请加 --overwrite 或更换输出路径: {output_path}")
+
+        output_parent = output_path.parent
+        output_parent.mkdir(parents=True, exist_ok=True)
+        if not output_parent.is_dir():
+            raise ValueError(f"输出父路径不是目录: {output_parent}")
+
+        probe_path = output_parent / f".batch_classify_excel_write_test_{id(output_path)}.tmp"
+        try:
+            probe_path.write_text("ok", encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"输出目录不可写: {output_parent}: {exc}") from exc
+        finally:
+            if probe_path.exists():
+                probe_path.unlink()
 
 
 def select_classifier(mode: str):
@@ -154,6 +205,7 @@ def main() -> int:
 
     try:
         jobs = resolve_jobs(input_path, args.output, args.include_classified)
+        validate_jobs(jobs, args.overwrite)
     except ValueError as exc:
         print(f"[ERROR] {exc}")
         return 1
@@ -176,12 +228,10 @@ def main() -> int:
     print(f"[INFO] 输入路径: {input_path}")
     print(f"[INFO] 待处理文件数: {len(jobs)}")
     print(f"[INFO] 分类模式: {args.mode}")
+    for path, output_path in jobs:
+        print(f"[PLAN] {path} -> {output_path}")
 
     for path, output_path in jobs:
-        if output_path.exists() and not args.overwrite:
-            print(f"[SKIP] 输出已存在，跳过: {output_path}")
-            continue
-
         print(f"[RUN ] {path.name}")
         try:
             processed, skipped = classify_workbook(path, output_path, classify_text_func)
