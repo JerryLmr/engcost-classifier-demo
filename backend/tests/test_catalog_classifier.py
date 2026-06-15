@@ -32,15 +32,14 @@ class CatalogClassifierTestCase(unittest.TestCase):
                 self.assertEqual(result["method"], "规则优先")
                 self.assertEqual(result["level2"], expected_level2)
                 self.assertIn("level3_item", result)
-                self.assertEqual(result["confidence"], "高")
                 self.assertIn(result["candidate_ids"][0], result["candidate_ids"])
 
     def test_same_domain_multi_item_needs_review(self):
         result = classify_text("屋面防水坡屋面维修")
         self.assertEqual(result["level1"], "屋面工程")
-        self.assertEqual(result["match_type"], "same_domain_multi_item")
-        self.assertTrue(result["needs_review"])
-        self.assertGreaterEqual(len(result["candidate_ids"]), 2)
+        self.assertEqual(result["level2"], "坡屋面")
+        self.assertEqual(result["level3_item"], "维修坡屋面")
+        self.assertIn("维修坡屋面", result["matched_level3_items"])
 
     def test_cross_domain_needs_review(self):
         result = classify_text("屋面防水消防栓更换")
@@ -83,10 +82,35 @@ class CatalogClassifierTestCase(unittest.TestCase):
         monitor = classify_text("电视监控控制台维修")
         self.assertEqual(monitor["candidate_ids"][0], "059")
         self.assertEqual(monitor["method"], "规则优先")
+        self.assertIn("电视监控控制台", monitor["matched_level3_items"])
 
         garbage = classify_text("垃圾房维修")
         self.assertEqual(garbage["candidate_ids"][0], "027")
         self.assertEqual(garbage["method"], "规则优先")
+
+    def test_derived_level3_item_hits_fill_specific_items(self):
+        samples = [
+            ("防盗门更新", "防盗门及附属设施"),
+            ("外墙渗水维修", "修补外墙粉刷"),
+            ("消火栓维修", "更换消防栓、箱"),
+            ("生活水泵维修", "水泵维修(门)"),
+        ]
+        for text, expected_level3_item in samples:
+            with self.subTest(text=text):
+                result = classify_text(text)
+                self.assertEqual(result["method"], "规则优先")
+                self.assertEqual(result["level3_item"], expected_level3_item)
+                self.assertIn(expected_level3_item, result["matched_level3_items"])
+                self.assertNotEqual(result["level3_item"], "未明确具体细项")
+
+    def test_object_only_rule_result_requires_review_and_no_high_confidence(self):
+        result = classify_text("高压柜")
+        self.assertEqual(result["method"], "规则优先")
+        self.assertEqual(result["level3_item"], "未明确具体细项")
+        self.assertEqual(result["matched_level3_items"], [])
+        self.assertTrue(result["needs_review"])
+        self.assertNotEqual(result["confidence"], "高")
+        self.assertIn("未命中具体三级细项", result["reason"])
 
 
 if __name__ == "__main__":

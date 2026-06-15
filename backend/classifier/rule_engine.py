@@ -43,6 +43,23 @@ TERM_ALIASES = {
     "消防栓": ("消火栓",),
     "消火栓": ("消防栓",),
 }
+OBJECT_MARKERS = (
+    "外墙",
+    "屋面",
+    "坡屋面",
+    "平屋面",
+    "水泵",
+    "污水泵",
+    "排水泵",
+    "生活水泵",
+    "生活用泵",
+    "消防栓",
+    "消火栓",
+    "防盗门",
+    "视频监控",
+    "电视监控控制台",
+    "垃圾房",
+)
 
 
 @dataclass(frozen=True)
@@ -50,7 +67,9 @@ class ScoredCandidate:
     item: CatalogItem
     score: int
     level2_hit: bool
-    level3_item_hits: tuple[str, ...]
+    exact_level3_item_hits: tuple[str, ...]
+    derived_level3_item_hits: tuple[str, ...]
+    matched_level3_items: tuple[str, ...]
     object_hits: tuple[str, ...]
     action_hits: tuple[str, ...]
     weak_hits: tuple[str, ...]
@@ -60,8 +79,8 @@ class ScoredCandidate:
         return self.item.id
 
 
-def _split_phrases(value: str) -> List[str]:
-    separators = [",", "，", "、", ";", "；"]
+def split_comma_separated_items(value: str) -> List[str]:
+    separators = [",", "，", ";", "；"]
     phrases = [value]
     for separator in separators:
         next_phrases: List[str] = []
@@ -95,7 +114,7 @@ def _term_variants(value: str) -> List[str]:
                         variants.append(alias_term)
 
     add(value)
-    for phrase in _split_phrases(value):
+    for phrase in split_comma_separated_items(value):
         add(phrase)
     if value.endswith("工程"):
         add(value.removesuffix("工程"))
@@ -111,7 +130,7 @@ def _strip_leading_action(value: str) -> str:
     return value
 
 
-def _derived_object_terms(item: CatalogItem) -> tuple[str, ...]:
+def extract_level3_core_terms(level3_item: str) -> tuple[str, ...]:
     terms: List[str] = []
 
     def add(term: str) -> None:
@@ -119,18 +138,34 @@ def _derived_object_terms(item: CatalogItem) -> tuple[str, ...]:
             if not is_generic_action_phrase(variant) and variant not in terms:
                 terms.append(variant)
 
+    stripped = _strip_leading_action(level3_item)
+    add(stripped)
+    for phrase in split_comma_separated_items(stripped):
+        add(_strip_leading_action(phrase))
+    for marker in OBJECT_MARKERS:
+        if marker in stripped:
+            add(marker)
+    return tuple(terms)
+
+
+def _derived_object_terms(item: CatalogItem) -> tuple[str, ...]:
+    terms: List[str] = []
+
+    def add(term: str) -> None:
+        for variant in _term_variants(term):
+            if not is_generic_action_phrase(variant) and variant not in terms:
+                terms.append(variant)
+        for marker in OBJECT_MARKERS:
+            if marker in term and marker not in terms:
+                terms.append(marker)
+
     add(item.level1)
     add(item.level2)
     for keyword in item.object_keywords:
         add(keyword)
     for level3_item in item.level3_items:
-        stripped = _strip_leading_action(level3_item)
-        add(stripped)
-        for phrase in _split_phrases(stripped):
-            add(phrase)
-        for marker in ("外墙", "屋面", "坡屋面", "平屋面", "水泵", "生活水泵", "生活用泵", "消防栓", "消火栓", "视频监控", "电视监控控制台", "垃圾房"):
-            if marker in stripped:
-                add(marker)
+        for term in extract_level3_core_terms(level3_item):
+            add(term)
     return tuple(terms)
 
 
@@ -159,14 +194,21 @@ def _hits(
 def score_item(text: str, item: CatalogItem) -> ScoredCandidate:
     level2_hit = any(
         _phrase_matches(text, phrase)
-        for phrase in [item.level2, *_split_phrases(item.level2)]
+        for phrase in [item.level2, *split_comma_separated_items(item.level2)]
     )
-    level3_item_hits = _hits(
+    exact_level3_item_hits = _hits(
         text,
         item.level3_items,
         include_generic_actions=False,
         split_keyword=False,
     )
+    derived_level3_item_hits: List[str] = []
+    for level3_item in item.level3_items:
+        if level3_item in exact_level3_item_hits:
+            continue
+        if any(_phrase_matches(text, term) for term in extract_level3_core_terms(level3_item)):
+            derived_level3_item_hits.append(level3_item)
+    matched_level3_items = tuple([*exact_level3_item_hits, *derived_level3_item_hits])
     object_hits = _hits(
         text,
         _derived_object_terms(item),
@@ -176,11 +218,11 @@ def score_item(text: str, item: CatalogItem) -> ScoredCandidate:
     action_hits = _hits(text, item.action_keywords)
     weak_hits = _hits(text, item.weak_keywords)
 
-    has_object_signal = bool(level2_hit or level3_item_hits or object_hits)
+    has_object_signal = bool(level2_hit or matched_level3_items or object_hits)
     score = 0
     if level2_hit:
         score += 4
-    if level3_item_hits:
+    if matched_level3_items:
         score += 4
     score += len(object_hits) * 3
     if has_object_signal:
@@ -191,7 +233,9 @@ def score_item(text: str, item: CatalogItem) -> ScoredCandidate:
         item=item,
         score=score,
         level2_hit=level2_hit,
-        level3_item_hits=level3_item_hits,
+        exact_level3_item_hits=exact_level3_item_hits,
+        derived_level3_item_hits=tuple(derived_level3_item_hits),
+        matched_level3_items=matched_level3_items,
         object_hits=object_hits,
         action_hits=action_hits if has_object_signal else (),
         weak_hits=weak_hits,
@@ -210,9 +254,10 @@ def score_catalog(text: str) -> List[ScoredCandidate]:
         candidates,
         key=lambda candidate: (
             candidate.score,
-            bool(candidate.level3_item_hits),
+            bool(candidate.exact_level3_item_hits),
+            bool(candidate.matched_level3_items),
             bool(candidate.object_hits),
-            len(candidate.level3_item_hits) + len(candidate.object_hits) + len(candidate.action_hits),
+            len(candidate.matched_level3_items) + len(candidate.object_hits) + len(candidate.action_hits),
         ),
         reverse=True,
     )
@@ -271,14 +316,18 @@ def build_reason(candidate: ScoredCandidate) -> str:
     parts: List[str] = []
     if candidate.level2_hit:
         parts.append(f"命中二级目录：{candidate.item.level2}")
-    if candidate.level3_item_hits:
-        parts.append(f"命中三级细项：{'、'.join(candidate.level3_item_hits)}")
+    if candidate.exact_level3_item_hits:
+        parts.append(f"完整命中三级细项：{'、'.join(candidate.exact_level3_item_hits)}")
+    if candidate.derived_level3_item_hits:
+        parts.append(f"推断命中三级细项：{'、'.join(candidate.derived_level3_item_hits)}")
     if candidate.object_hits:
         parts.append(f"命中对象词：{'、'.join(candidate.object_hits)}")
     if candidate.action_hits:
         parts.append(f"命中动作词：{'、'.join(candidate.action_hits)}")
     if candidate.weak_hits:
         parts.append(f"命中弱词：{'、'.join(candidate.weak_hits)}")
+    if (candidate.level2_hit or candidate.object_hits) and not candidate.matched_level3_items:
+        parts.append("仅命中二级/对象词，未命中具体三级细项")
     parts.append(f"得分：{candidate.score}")
     return "；".join(parts)
 

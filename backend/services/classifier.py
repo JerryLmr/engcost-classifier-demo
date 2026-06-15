@@ -21,6 +21,9 @@ from classifier.settings import (
 )
 
 
+UNCLEAR_LEVEL3_ITEM = "未明确具体细项"
+
+
 def _result_from_item(
     text: str,
     item: CatalogItem,
@@ -43,7 +46,19 @@ def _result_from_item(
 
     labels = candidate_labels_by_id(unique_ids)
     matched_items = list(matched_level3_items or [])
-    primary_level3_item = level3_item or (matched_items[0] if matched_items else "")
+    primary_level3_item = level3_item or (matched_items[0] if matched_items else UNCLEAR_LEVEL3_ITEM)
+    final_confidence = confidence
+    final_needs_review = needs_review
+    final_reason = reason
+    if not matched_items:
+        final_needs_review = True
+        if final_confidence == "高":
+            final_confidence = "中"
+        if "未命中具体三级细项" not in final_reason:
+            if method == "规则优先":
+                final_reason = f"{final_reason}；仅命中二级/对象词，未命中具体三级细项"
+            else:
+                final_reason = f"{final_reason}；未明确具体三级细项"
     return {
         "project_name": text,
         "level1": item.level1,
@@ -51,13 +66,13 @@ def _result_from_item(
         "level3_item": primary_level3_item,
         "matched_level3_items": matched_items,
         "method": method,
-        "confidence": confidence,
+        "confidence": final_confidence,
         "match_type": match_type,
-        "needs_review": needs_review,
+        "needs_review": final_needs_review,
         "candidate_ids": unique_ids,
         "candidate_labels": [labels[item_id] for item_id in unique_ids if item_id in labels],
         "candidate_level3_items": list(candidate_level3_items or matched_items),
-        "reason": reason,
+        "reason": final_reason,
     }
 
 
@@ -68,7 +83,7 @@ def fallback_classify(text: str, reason: str, candidate_ids_value: Sequence[str]
         "project_name": text,
         "level1": DEFAULT_FALLBACK_LEVEL1,
         "level2": DEFAULT_FALLBACK_LEVEL2,
-        "level3_item": "",
+        "level3_item": UNCLEAR_LEVEL3_ITEM,
         "matched_level3_items": [],
         "method": "默认兜底",
         "confidence": "低",
@@ -126,7 +141,7 @@ def rule_classify(text: str) -> Dict[str, object] | None:
     selected_candidates = selected or candidates[:1]
     candidate_level3_items: List[str] = []
     for candidate in selected_candidates:
-        for level3_item in candidate.level3_item_hits:
+        for level3_item in candidate.matched_level3_items:
             if level3_item not in candidate_level3_items:
                 candidate_level3_items.append(level3_item)
     confidence = confidence_for_score(top.score)
@@ -141,7 +156,7 @@ def rule_classify(text: str) -> Dict[str, object] | None:
         needs_review=needs_review,
         ids=ids,
         reason=build_reason(top),
-        matched_level3_items=top.level3_item_hits,
+        matched_level3_items=top.matched_level3_items,
         candidate_level3_items=candidate_level3_items,
     )
 
