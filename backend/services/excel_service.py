@@ -1,62 +1,78 @@
 import io
-from urllib.parse import quote
 
 import openpyxl
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
-from services.classifier import classify_text
+from services.standard_classifier import classify_project_standard
 
 
 RESULT_HEADERS = [
+    "工程名称",
+    "catalog_id",
     "一级分类",
     "二级分类",
-    "三级分类",
-    "具体细项",
-    "分类方式",
-    "置信度",
-    "匹配类型",
+    "维修状态",
+    "标准对象",
+    "是否复合工程",
+    "复合候选目录",
+    "是否紧急维修",
+    "是否白蚁相关",
     "是否建议复核",
-    "候选目录ID",
     "候选目录",
-    "候选细项",
     "分类依据",
 ]
 
 
-def build_classified_workbook_bytes(data: bytes) -> bytes:
-    workbook = openpyxl.load_workbook(io.BytesIO(data))
-    worksheet = workbook.active
+def _bool_text(value: object) -> str:
+    return "是" if bool(value) else "否"
 
-    headers = [worksheet.cell(row=1, column=i).value for i in range(1, worksheet.max_column + 1)]
-    if not headers or headers[0] is None:
+
+def _write_result_row(worksheet, row: int, result: dict[str, object]) -> None:
+    values = [
+        result["project_name"],
+        result["catalog_id"],
+        result["category"],
+        result["item"],
+        result["repair_status"],
+        result["standard_group"],
+        _bool_text(result["is_composite"]),
+        " | ".join(result["secondary_catalog_labels"]),
+        _bool_text(result["is_emergency"]),
+        _bool_text(result["termite_related"]),
+        _bool_text(result["needs_review"]),
+        " | ".join(result["candidate_labels"]),
+        result["reason"],
+    ]
+    for column, value in enumerate(values, start=1):
+        worksheet.cell(row=row, column=column, value=value)
+
+
+def build_classified_workbook_bytes(data: bytes) -> bytes:
+    source_workbook = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    source_sheet = source_workbook.active
+
+    first_header = source_sheet.cell(row=1, column=1).value
+    if first_header is None or str(first_header).strip() == "":
         raise HTTPException(status_code=400, detail="第一列表头不能为空")
 
-    result_start_col = worksheet.max_column + 1
-    for offset, header in enumerate(RESULT_HEADERS):
-        worksheet.cell(row=1, column=result_start_col + offset, value=header)
+    output_workbook = openpyxl.Workbook()
+    output_sheet = output_workbook.active
+    output_sheet.title = "分类结果"
+    for column, header in enumerate(RESULT_HEADERS, start=1):
+        output_sheet.cell(row=1, column=column, value=header)
 
-    for row in range(2, worksheet.max_row + 1):
-        project_name = worksheet.cell(row=row, column=1).value
+    output_row = 2
+    for source_row in range(2, source_sheet.max_row + 1):
+        project_name = source_sheet.cell(row=source_row, column=1).value
         if project_name is None or str(project_name).strip() == "":
             continue
-
-        result = classify_text(str(project_name))
-        worksheet.cell(row=row, column=result_start_col, value=result["level1"])
-        worksheet.cell(row=row, column=result_start_col + 1, value=result["level2"])
-        worksheet.cell(row=row, column=result_start_col + 2, value=result["level3_item"])
-        worksheet.cell(row=row, column=result_start_col + 3, value=" | ".join(result["matched_level3_items"]))
-        worksheet.cell(row=row, column=result_start_col + 4, value=result["method"])
-        worksheet.cell(row=row, column=result_start_col + 5, value=result["confidence"])
-        worksheet.cell(row=row, column=result_start_col + 6, value=result["match_type"])
-        worksheet.cell(row=row, column=result_start_col + 7, value="是" if result["needs_review"] else "否")
-        worksheet.cell(row=row, column=result_start_col + 8, value=" | ".join(result["candidate_ids"]))
-        worksheet.cell(row=row, column=result_start_col + 9, value=" | ".join(result["candidate_labels"]))
-        worksheet.cell(row=row, column=result_start_col + 10, value=" | ".join(result["candidate_level3_items"]))
-        worksheet.cell(row=row, column=result_start_col + 11, value=result["reason"])
+        result = classify_project_standard(str(project_name).strip())
+        _write_result_row(output_sheet, output_row, result)
+        output_row += 1
 
     output = io.BytesIO()
-    workbook.save(output)
+    output_workbook.save(output)
     return output.getvalue()
 
 
@@ -64,21 +80,8 @@ def classify_excel_file(file: UploadFile):
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(status_code=400, detail="请上传 .xlsx 或 .xlsm 文件")
 
-    data = file.file.read()
-    output = io.BytesIO(build_classified_workbook_bytes(data))
-
-    base_name = file.filename.rsplit(".", 1)[0]
-    safe_filename = f"{base_name}_classified.xlsx"
-    encoded_filename = quote(f"{base_name}_分类结果.xlsx")
-    headers = {
-        "Content-Disposition": (
-            f"attachment; filename={safe_filename}; "
-            f"filename*=UTF-8''{encoded_filename}"
-        )
-    }
-
+    output = io.BytesIO(build_classified_workbook_bytes(file.file.read()))
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers=headers,
     )
