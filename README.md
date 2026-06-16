@@ -40,7 +40,7 @@ LM Studio 需要开启 `Serve on local network`。
 手动运行示例：
 
 ```bash
-python scripts/batch_classify_excel.py excel_inputs/d1_error_sample.xlsx -o excel_outputs_lmstudio --overwrite --mode llm
+python scripts/batch_classify_excel.py excel_inputs/d1_error_sample.xlsx -o excel_outputs_lmstudio --overwrite
 ```
 
 注意：这条命令用于本地手动测试，不应由 Codex 执行。
@@ -70,14 +70,13 @@ uvicorn app:app --reload
 ## 5. Excel 批量处理约定
 
 - 第一列：工程名称
-- 结果追加四列：一级分类、二级分类、分类方式、分类依据
+- 标准目录批处理输出 `catalog_id`、一级分类、二级分类、维修状态、复合工程、复核建议、候选目录和分类依据等列
 
 ## 6. 展示亮点
 
 - 输入一句工程名称，立即返回细分类结果
 - 支持 Excel 批量分类，更像企业可用工具
-- 规则优先，减少常见分类抖动
-- LLM 辅助分类，兼顾覆盖率与展示效果
+- CP/CF 标准目录采用 LLM 主分类，规则、alias 和候选召回只作为上下文与约束
 - 后端已模块化，便于继续扩展规则、配置和测试
 
 ## 7. 运行测试
@@ -106,22 +105,28 @@ python scripts/batch_classify_excel.py /path/to/excel_dir --overwrite
 python scripts/batch_classify_excel.py /path/to/excel_dir --overwrite
 python scripts/batch_classify_excel.py /path/to/excel_dir -o /path/to/output_dir --overwrite
 python scripts/batch_classify_excel.py /path/to/input.xlsx -o /path/to/output.xlsx --overwrite
-python scripts/batch_classify_excel.py /path/to/input.xlsx -o /path/to/output.xlsx --overwrite --mode llm
 ```
 
-`--mode` 支持 `auto`、`llm`、`rule`。默认 `auto` 保持规则优先并用 LLM 兜底；`llm` 会直接用完整目录交给 LLM；`rule` 只跑规则，规则无结果时默认兜底。
+当前标准目录批处理不再提供 `rule-first / llm-fallback` 模式。默认流程是 LLM 主分类，normalizer、alias、候选召回和复核提示只作为上下文与约束；最终 `OUT_OF_SCOPE` 由后处理/复核策略兜底决定。
 
 脚本默认会跳过已经带 `_分类结果` 或 `_classified` 后缀的文件。
 
-## 9. 固定三级目录
+## 9. 固定目录
 
-当前分类只使用固定目录文件：
+CP/CF 标准目录批处理使用：
+
+```text
+backend/config/standard_catalog.json
+backend/config/alias_dictionary.json
+```
+
+旧三位数字演示 API 仍保留固定目录文件：
 
 ```text
 backend/config/catalog.json
 ```
 
-分类结果直接返回一级、二级、三级目录，不再支持 `RULE_SOURCE` 双轨切换。
+CP/CF 标准目录主路径不再支持 `rule-first / llm-fallback` 双轨语义。
 
 ## 10. 分析分类结果
 

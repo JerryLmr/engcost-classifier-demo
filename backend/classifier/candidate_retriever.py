@@ -5,10 +5,13 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Iterable
 
+from classifier.alias_matcher import match_aliases
 from classifier.standard_catalog_loader import StandardCatalogItem, load_standard_catalog
+from classifier.standard_normalizer import normalize_project_text
 
 
-TOP_K = min(max(int(os.getenv("CLASSIFIER_TOP_K", "5")), 3), 5)
+TOP_K = min(max(int(os.getenv("CLASSIFIER_TOP_K", "5")), 3), 8)
+INTERNAL_TOP_K = min(max(int(os.getenv("CLASSIFIER_INTERNAL_TOP_K", "20")), 15), 50)
 
 _ASCII_TOKEN_RE = re.compile(r"[a-z0-9]+")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
@@ -19,6 +22,8 @@ class RetrievedCandidate:
     item: StandardCatalogItem
     rank: int
     retrieval_score: float
+    source: str = "ngram"
+    reason: str = ""
 
 
 def normalize_retrieval_text(text: str) -> str:
@@ -92,22 +97,45 @@ def _phrase_bonus(query_text: str, item: StandardCatalogItem, search_text: str) 
 
 
 def retrieve_candidates(project_name: str, top_k: int | None = None) -> list[RetrievedCandidate]:
-    limit = min(max(top_k if top_k is not None else TOP_K, 3), 5)
-    query_text = normalize_retrieval_text(project_name)
-    query_tokens = tokenize_for_retrieval(project_name)
+    limit = min(max(top_k if top_k is not None else TOP_K, 3), 8)
+    normalized = normalize_project_text(project_name)
+    query_text = normalize_retrieval_text(normalized.retrieval_text)
+    query_tokens = tokenize_for_retrieval(normalized.retrieval_text)
+    alias_result = match_aliases(normalized)
+    alias_hits_by_id = {hit.catalog_id: hit for hit in alias_result.catalog_hits}
 
-    scored: list[tuple[float, StandardCatalogItem]] = []
+    scored: list[tuple[float, StandardCatalogItem, str, str]] = []
     for item, search_text, item_tokens in _indexed_catalog():
         overlap = query_tokens & item_tokens
         score = float(len(overlap))
         if query_tokens:
             score += len(overlap) / max(len(query_tokens), 1)
         score += _phrase_bonus(query_text, item, search_text)
+        source = "ngram"
+        reason = ""
+        alias_hit = alias_hits_by_id.get(item.id)
+        if alias_hit:
+            score += 1000.0 + alias_hit.weight
+            source = "alias+ngram" if score > 1000.0 + alias_hit.weight else "alias"
+            reason = alias_hit.reason
         if score > 0:
-            scored.append((score, item))
+            scored.append((score, item, source, reason))
 
     scored.sort(key=lambda entry: (entry[0], entry[1].id), reverse=True)
+    internal = scored[:INTERNAL_TOP_K]
+    forced_alias_ids = set(alias_hits_by_id)
+    selected: list[tuple[float, StandardCatalogItem, str, str]] = []
+    for entry in internal:
+        if entry[1].id in forced_alias_ids:
+            selected.append(entry)
+    for entry in internal:
+        if entry in selected:
+            continue
+        if len(selected) >= limit:
+            break
+        selected.append(entry)
+    selected.sort(key=lambda entry: (entry[0], entry[1].id), reverse=True)
     return [
-        RetrievedCandidate(item=item, rank=index + 1, retrieval_score=score)
-        for index, (score, item) in enumerate(scored[:limit])
+        RetrievedCandidate(item=item, rank=index + 1, retrieval_score=score, source=source, reason=reason)
+        for index, (score, item, source, reason) in enumerate(selected)
     ]

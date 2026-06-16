@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 import openpyxl
 
+from classifier.alias_matcher import load_alias_dictionary, match_aliases
 from classifier.candidate_retriever import candidate_label, retrieve_candidates
 from classifier.llm_client import llm_select_catalog_item, llm_select_repair_status
 from classifier.standard_catalog_loader import (
@@ -84,6 +85,92 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                 ids = [candidate.item.id for candidate in retrieve_candidates(text)]
                 self.assertIn(expected_id, ids)
                 self.assertLessEqual(len(ids), 5)
+
+    def test_alias_dictionary_loads_and_matches_contains_alias(self):
+        entries = load_alias_dictionary()
+        self.assertGreater(len(entries), 0)
+        result = match_aliases("致远大厦外立面修缮工程")
+        self.assertIn("CP-003-01", [hit.catalog_id for hit in result.catalog_hits])
+        self.assertTrue(any("外立面" in hit.matched_aliases for hit in result.catalog_hits))
+
+    def test_out_of_scope_alias_is_negative_hint_only(self):
+        result = match_aliases("消防技术咨询服务合同 消防泵故障维修")
+        self.assertIn("消防技术咨询", result.negative_hints)
+        self.assertIn("CF-022-01", [hit.catalog_id for hit in result.catalog_hits])
+
+    def test_alias_positive_hit_is_forced_into_candidates(self):
+        candidates = retrieve_candidates("车牌识别系统改造")
+        by_id = {candidate.item.id: candidate for candidate in candidates}
+        self.assertIn("CF-018-07", by_id)
+        self.assertIn("alias", by_id["CF-018-07"].source)
+
+    def test_out41_key_samples_recall_acceptable_catalog_candidates(self):
+        gold_path = ROOT / "backend/tests/gold/gold_regression_outofscope41.csv"
+        import csv
+
+        key_cases = {"G001", "G003", "G006", "G012", "G017", "G023", "G030", "G033"}
+        with gold_path.open("r", encoding="utf-8-sig", newline="") as fp:
+            rows = [row for row in csv.DictReader(fp) if row["case_id"] in key_cases]
+        self.assertEqual(len(rows), len(key_cases))
+        for row in rows:
+            with self.subTest(case_id=row["case_id"]):
+                acceptable = {
+                    value.strip()
+                    for value in (row["acceptable_catalog_ids"] or row["gold_primary_catalog_id"]).split(";")
+                    if value.strip() and value.strip() != OUT_OF_SCOPE_ID
+                }
+                ids = {candidate.item.id for candidate in retrieve_candidates(row["工程名称"])}
+                self.assertTrue(acceptable & ids, f"acceptable={acceptable}, candidates={ids}")
+
+    def test_eval_regression_metrics_allow_acceptable_out_of_scope(self):
+        script = ROOT / "scripts/eval_regression.py"
+        spec = importlib.util.spec_from_file_location("eval_regression", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        gold = [
+            {
+                "case_id": "A",
+                "工程名称": "咨询服务",
+                "gold_primary_catalog_id": OUT_OF_SCOPE_ID,
+                "acceptable_catalog_ids": OUT_OF_SCOPE_ID,
+            },
+            {
+                "case_id": "B",
+                "工程名称": "外立面修缮",
+                "gold_primary_catalog_id": "CP-003-01",
+                "acceptable_catalog_ids": "CP-003-01;CP-002-03",
+            },
+        ]
+        pred = [
+            {
+                "case_id": "A",
+                "工程名称": "咨询服务",
+                "catalog_id": OUT_OF_SCOPE_ID,
+                "是否建议复核": "是",
+                "是否复合工程": "否",
+                "候选目录": "",
+                "分类依据": "服务类项目",
+            },
+            {
+                "case_id": "B",
+                "工程名称": "外立面修缮",
+                "catalog_id": "CP-003-01",
+                "是否建议复核": "否",
+                "是否复合工程": "否",
+                "候选目录": "CP-003-01 | 外墙面 | 面层",
+                "分类依据": "对象明确",
+            },
+        ]
+        metrics, mismatches = module.evaluate(gold, pred)
+        self.assertEqual(metrics["gold_catalog_pass_count"], 2)
+        self.assertEqual(metrics["gold_catalog_pass_rate"], 1.0)
+        self.assertEqual(metrics["out_of_scope_count"], 1)
+        self.assertEqual(metrics["review_required_count"], 1)
+        self.assertEqual(metrics["no_candidate_count"], 1)
+        self.assertEqual(mismatches, [])
 
     @patch(
         "classifier.llm_client.request_llm_json",

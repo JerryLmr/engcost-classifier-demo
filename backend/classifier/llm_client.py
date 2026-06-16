@@ -330,12 +330,19 @@ def request_llm_classification(text: str, candidate_items: Sequence[CatalogItem]
     raise ValueError(f"Unsupported LLM_PROVIDER: {LLM_PROVIDER}")
 
 
-def build_item_selection_prompt(project_name: str, candidates: Sequence[StandardCatalogItem]) -> str:
+def build_item_selection_prompt(
+    project_name: str,
+    candidates: Sequence[StandardCatalogItem],
+    context_hints: Sequence[str] | None = None,
+) -> str:
     candidate_lines = "\n".join(candidate_prompt_label(item) for item in candidates)
+    hint_lines = "\n".join(f"- {hint}" for hint in context_hints or [] if hint)
+    hint_section = f"\n辅助提示（只作判断依据，不能替代候选目录）：\n{hint_lines}\n" if hint_lines else ""
     return f"""
 你是物业工程标准目录分类助手。只能从给定 top 候选中选择最合适的 catalog_id。
 
 工程名称：{project_name}
+{hint_section}
 
 候选目录：
 {candidate_lines}
@@ -343,15 +350,17 @@ def build_item_selection_prompt(project_name: str, candidates: Sequence[Standard
 输出要求：
 1. catalog_id 必须是候选中的 id，或者 OUT_OF_SCOPE。
 2. secondary_catalog_ids 只能来自候选 id。
-3. 如果没有合适候选，catalog_id 返回 OUT_OF_SCOPE。
+3. 如果候选目录都不适合，catalog_id 才返回 OUT_OF_SCOPE。
 4. 如果是复合工程，主对象放 catalog_id，其它对象放 secondary_catalog_ids。
 5. 如果主对象不明确，needs_review=true。
 6. 不要创造候选外分类。
-7. 不要输出思考过程。
-8. 不要输出 <think>。
-9. 不要输出 markdown。
-10. reason 不超过 40 个汉字。
-11. 只输出 JSON，不要自然语言段落。
+7. alias、动作词、复核提示只能辅助判断，不能绕过候选目录直接决定 catalog_id。
+8. 不要因为出现咨询、设计、检测、维保、综合品质改造等提示词就直接 OUT；只有缺少明确维修对象时才 OUT_OF_SCOPE。
+9. 不要输出思考过程。
+10. 不要输出 <think>。
+11. 不要输出 markdown。
+12. reason 不超过 40 个汉字。
+13. 只输出 JSON，不要自然语言段落。
 
 JSON 字段固定为：catalog_id, secondary_catalog_ids, is_composite, needs_review, reason。
 """.strip()
@@ -442,8 +451,12 @@ def _validate_status_selection(content: Dict[str, Any], selected_item: StandardC
     )
 
 
-def llm_select_catalog_item(project_name: str, candidates: Sequence[StandardCatalogItem]) -> ItemSelection:
-    prompt = build_item_selection_prompt(project_name, candidates)
+def llm_select_catalog_item(
+    project_name: str,
+    candidates: Sequence[StandardCatalogItem],
+    context_hints: Sequence[str] | None = None,
+) -> ItemSelection:
+    prompt = build_item_selection_prompt(project_name, candidates, context_hints)
     last_error: Exception | None = None
     for _attempt in range(2):
         try:
