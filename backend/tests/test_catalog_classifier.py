@@ -220,7 +220,93 @@ class CatalogClassifierTestCase(unittest.TestCase):
         _args, kwargs = mock_post.call_args
         self.assertEqual(kwargs["json"]["model"], "qwen/qwen3.6-35b-a3b")
         self.assertEqual(kwargs["json"]["temperature"], 0)
-        self.assertEqual(kwargs["json"]["response_format"], {"type": "json_object"})
+        self.assertEqual(kwargs["json"]["max_tokens"], 256)
+        self.assertNotIn("response_format", kwargs["json"])
+
+    @patch("classifier.llm_client.requests.post")
+    @patch("classifier.llm_client.LLM_PROVIDER", "lmstudio")
+    def test_lmstudio_json_omits_response_format_by_default(self, mock_post):
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "{\"catalog_id\":\"001\"}"}}]
+        }
+        mock_post.return_value = mock_response
+
+        result = llm_client.request_llm_json("选择目录")
+
+        self.assertEqual(result, {"catalog_id": "001"})
+        _args, kwargs = mock_post.call_args
+        self.assertEqual(kwargs["json"]["max_tokens"], 256)
+        self.assertNotIn("response_format", kwargs["json"])
+
+    @patch("classifier.llm_client.requests.post")
+    @patch("classifier.llm_client.LMSTUDIO_RESPONSE_FORMAT", "text")
+    @patch("classifier.llm_client.LLM_PROVIDER", "lmstudio")
+    def test_lmstudio_json_supports_text_response_format(self, mock_post):
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "{\"catalog_id\":\"001\"}"}}]
+        }
+        mock_post.return_value = mock_response
+
+        result = llm_client.request_llm_json("选择目录")
+
+        self.assertEqual(result, {"catalog_id": "001"})
+        _args, kwargs = mock_post.call_args
+        self.assertEqual(kwargs["json"]["response_format"], {"type": "text"})
+
+    @patch("classifier.llm_client.requests.post")
+    @patch("classifier.llm_client.LMSTUDIO_RESPONSE_FORMAT", "json_schema")
+    @patch("classifier.llm_client.LLM_PROVIDER", "lmstudio")
+    def test_lmstudio_json_supports_json_schema_response_format(self, mock_post):
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "{\"catalog_id\":\"001\"}"}}]
+        }
+        mock_post.return_value = mock_response
+
+        result = llm_client.request_llm_json("选择目录")
+
+        self.assertEqual(result, {"catalog_id": "001"})
+        _args, kwargs = mock_post.call_args
+        response_format = kwargs["json"]["response_format"]
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertEqual(response_format["json_schema"]["name"], "classification_result")
+        self.assertEqual(response_format["json_schema"]["schema"]["type"], "object")
+        self.assertTrue(response_format["json_schema"]["schema"]["additionalProperties"])
+
+    @patch("classifier.llm_client.requests.post")
+    @patch("classifier.llm_client.LMSTUDIO_RESPONSE_FORMAT", "json_object")
+    @patch("classifier.llm_client.LLM_PROVIDER", "lmstudio")
+    def test_lmstudio_json_rejects_unsupported_response_format(self, mock_post):
+        with self.assertRaisesRegex(ValueError, "Unsupported LMSTUDIO_RESPONSE_FORMAT"):
+            llm_client.request_llm_json("选择目录")
+        mock_post.assert_not_called()
+
+    def test_extract_json_object_accepts_direct_json(self):
+        self.assertEqual(llm_client._extract_json_object("{\"catalog_id\":\"001\"}"), {"catalog_id": "001"})
+
+    def test_extract_json_object_strips_reasoning(self):
+        text = "<think>先分析候选</think>{\"catalog_id\":\"001\"}"
+        self.assertEqual(llm_client._extract_json_object(text), {"catalog_id": "001"})
+
+    def test_extract_json_object_unwraps_markdown_fence(self):
+        text = "```json\n{\"catalog_id\":\"001\"}\n```"
+        self.assertEqual(llm_client._extract_json_object(text), {"catalog_id": "001"})
+
+    def test_extract_json_object_accepts_prose_around_json(self):
+        text = "结果如下：{\"catalog_id\":\"001\",\"reason\":\"匹配\"}。"
+        self.assertEqual(
+            llm_client._extract_json_object(text),
+            {"catalog_id": "001", "reason": "匹配"},
+        )
+
+    def test_extract_json_object_returns_first_valid_object(self):
+        text = "无效片段 {not json} 有效 {\"catalog_id\":\"001\",\"nested\":{\"ok\":true}} 结束"
+        self.assertEqual(
+            llm_client._extract_json_object(text),
+            {"catalog_id": "001", "nested": {"ok": True}},
+        )
 
 
 if __name__ == "__main__":

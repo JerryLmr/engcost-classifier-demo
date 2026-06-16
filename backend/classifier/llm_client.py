@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Sequence
 
@@ -11,7 +12,9 @@ from classifier.settings import (
     LLM_TIMEOUT_SECONDS,
     LMSTUDIO_API_KEY,
     LMSTUDIO_BASE_URL,
+    LMSTUDIO_MAX_TOKENS,
     LMSTUDIO_MODEL,
+    LMSTUDIO_RESPONSE_FORMAT,
     OLLAMA_BASE_URL,
     OLLAMA_MODEL,
 )
@@ -143,12 +146,20 @@ def _request_lmstudio_classification(prompt: str) -> Dict[str, Any]:
     payload = {
         "model": LMSTUDIO_MODEL,
         "messages": [
-            {"role": "system", "content": "你是物业工程目录分类助手，只能输出 JSON。"},
+            {
+                "role": "system",
+                "content": (
+                    "你是物业工程目录分类助手。"
+                    "不要输出思考过程，不要输出 <think>，不要输出 markdown。"
+                    "最终答案只能是一个 JSON object。"
+                ),
+            },
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,
-        "response_format": {"type": "json_object"},
+        "max_tokens": LMSTUDIO_MAX_TOKENS,
     }
+    _apply_lmstudio_response_format(payload)
     response = requests.post(
         f"{LMSTUDIO_BASE_URL}/chat/completions",
         headers={
@@ -160,22 +171,92 @@ def _request_lmstudio_classification(prompt: str) -> Dict[str, Any]:
     )
     response.raise_for_status()
     data = response.json()
-    return json.loads(data["choices"][0]["message"]["content"])
+    return _extract_json_object(data["choices"][0]["message"]["content"])
+
+
+def _apply_lmstudio_response_format(payload: Dict[str, Any]) -> None:
+    response_format = LMSTUDIO_RESPONSE_FORMAT.strip().lower()
+    if response_format == "text":
+        payload["response_format"] = {"type": "text"}
+    elif response_format == "json_schema":
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "classification_result",
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": True,
+                },
+            },
+        }
+    elif response_format == "none":
+        pass
+    else:
+        raise ValueError(
+            f"Unsupported LMSTUDIO_RESPONSE_FORMAT: {LMSTUDIO_RESPONSE_FORMAT}. "
+            "Use one of: none, text, json_schema."
+        )
+
+
+def _strip_reasoning_and_fences(text: str) -> str:
+    raw = str(text or "").strip()
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE).strip()
+
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", raw, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
+
+    return raw
 
 
 def _extract_json_object(text: str) -> Dict[str, Any]:
-    raw = str(text or "").strip()
+    raw = _strip_reasoning_and_fences(text)
+
     try:
         data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("LLM response is not a JSON object")
+        return data
     except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start < 0 or end < start:
-            raise
-        data = json.loads(raw[start : end + 1])
-    if not isinstance(data, dict):
-        raise ValueError("LLM response is not a JSON object")
-    return data
+        pass
+
+    for start, char in enumerate(raw):
+        if char != "{":
+            continue
+
+        depth = 0
+        in_string = False
+        escape = False
+
+        for index in range(start, len(raw)):
+            ch = raw[index]
+
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = raw[start : index + 1]
+                    try:
+                        data = json.loads(candidate)
+                    except json.JSONDecodeError:
+                        break
+                    if not isinstance(data, dict):
+                        raise ValueError("LLM response is not a JSON object")
+                    return data
+
+    raise ValueError("No valid JSON object found in LLM response")
 
 
 def _request_ollama_json(prompt: str) -> Dict[str, Any]:
@@ -200,12 +281,20 @@ def _request_lmstudio_json(prompt: str) -> Dict[str, Any]:
     payload = {
         "model": LMSTUDIO_MODEL,
         "messages": [
-            {"role": "system", "content": "你是物业工程分类助手，只能输出 JSON。"},
+            {
+                "role": "system",
+                "content": (
+                    "你是物业工程分类助手。"
+                    "不要输出思考过程，不要输出 <think>，不要输出 markdown。"
+                    "最终答案只能是一个 JSON object。"
+                ),
+            },
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,
-        "response_format": {"type": "json_object"},
+        "max_tokens": LMSTUDIO_MAX_TOKENS,
     }
+    _apply_lmstudio_response_format(payload)
     response = requests.post(
         f"{LMSTUDIO_BASE_URL}/chat/completions",
         headers={
@@ -257,7 +346,12 @@ def build_item_selection_prompt(project_name: str, candidates: Sequence[Standard
 3. 如果没有合适候选，catalog_id 返回 OUT_OF_SCOPE。
 4. 如果是复合工程，主对象放 catalog_id，其它对象放 secondary_catalog_ids。
 5. 如果主对象不明确，needs_review=true。
-6. 只输出 JSON，不要 markdown，不要自然语言段落。
+6. 不要创造候选外分类。
+7. 不要输出思考过程。
+8. 不要输出 <think>。
+9. 不要输出 markdown。
+10. reason 不超过 40 个汉字。
+11. 只输出 JSON，不要自然语言段落。
 
 JSON 字段固定为：catalog_id, secondary_catalog_ids, is_composite, needs_review, reason。
 """.strip()
@@ -280,6 +374,10 @@ id: {selected_item.id}
 
 请只从上述状态中选择一个。
 如果工程名称无法判断具体状态，选择“不确定”。
+不要输出思考过程。
+不要输出 <think>。
+不要输出 markdown。
+reason 不超过 40 个汉字。
 只输出 JSON。
 
 JSON 字段固定为：repair_status, needs_review, reason。

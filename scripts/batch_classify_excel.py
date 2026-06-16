@@ -16,10 +16,10 @@ if str(BACKEND_DIR) not in sys.path:
 RESULT_HEADERS = [
     "工程名称",
     "catalog_id",
-    "标准对象",
     "一级分类",
     "二级分类",
     "维修状态",
+    "标准对象",
     "是否复合工程",
     "复合候选目录",
     "是否紧急维修",
@@ -27,8 +27,6 @@ RESULT_HEADERS = [
     "是否建议复核",
     "候选目录",
     "分类依据",
-    "原始文件",
-    "原始行号",
 ]
 
 EXCEL_SUFFIXES = {".xlsx", ".xlsm"}
@@ -76,10 +74,10 @@ def _write_result_row(worksheet, row: int, result: dict[str, object], source_fil
     values = [
         result["project_name"],
         result["catalog_id"],
-        result["standard_group"],
         result["category"],
         result["item"],
         result["repair_status"],
+        result["standard_group"],
         _bool_text(result["is_composite"]),
         " | ".join(result["secondary_catalog_labels"]),
         _bool_text(result["is_emergency"]),
@@ -87,8 +85,6 @@ def _write_result_row(worksheet, row: int, result: dict[str, object], source_fil
         _bool_text(result["needs_review"]),
         " | ".join(result["candidate_labels"]),
         result["reason"],
-        source_file.name,
-        source_row,
     ]
     for column, value in enumerate(values, start=1):
         worksheet.cell(row=row, column=column, value=value)

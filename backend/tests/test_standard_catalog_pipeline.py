@@ -26,10 +26,10 @@ from services.standard_classifier import classify_project_standard
 NEW_HEADERS = [
     "工程名称",
     "catalog_id",
-    "标准对象",
     "一级分类",
     "二级分类",
     "维修状态",
+    "标准对象",
     "是否复合工程",
     "复合候选目录",
     "是否紧急维修",
@@ -37,8 +37,6 @@ NEW_HEADERS = [
     "是否建议复核",
     "候选目录",
     "分类依据",
-    "原始文件",
-    "原始行号",
 ]
 
 OLD_HEADERS = {"置信度", "匹配类型", "分类方式"}
