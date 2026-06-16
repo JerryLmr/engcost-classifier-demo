@@ -28,6 +28,13 @@ EMERGENCY_TERMS = (
     "安全隐患",
     "必须消除",
 )
+LLM_SERVICE_ERROR_TERMS = (
+    "Connection refused",
+    "RemoteDisconnected",
+    "Max retries exceeded",
+    "Connection aborted",
+    "HTTPConnectionPool",
+)
 
 
 def _contains_any(text: str, terms: list[str] | tuple[str, ...]) -> bool:
@@ -43,6 +50,11 @@ def is_termite_related(project_name: str, catalog_id: str) -> bool:
     return catalog_id == "TERMITE-001" or _contains_any(project_name, TERMITE_TERMS)
 
 
+def is_llm_service_error(reason: str) -> bool:
+    text = str(reason or "")
+    return any(term in text for term in LLM_SERVICE_ERROR_TERMS)
+
+
 def _fallback_result(
     project_name: str,
     reason: str,
@@ -50,6 +62,7 @@ def _fallback_result(
 ) -> dict[str, Any]:
     fallback = load_fallback_config()
     catalog_id = str(fallback.get("id") or OUT_OF_SCOPE_ID)
+    pipeline_status = "llm_service_error" if is_llm_service_error(reason) else "fallback"
     return {
         "project_name": project_name,
         "catalog_id": catalog_id,
@@ -65,7 +78,7 @@ def _fallback_result(
         "needs_review": True,
         "candidate_labels": candidate_labels or [],
         "reason": reason,
-        "pipeline_status": "fallback",
+        "pipeline_status": pipeline_status,
     }
 
 

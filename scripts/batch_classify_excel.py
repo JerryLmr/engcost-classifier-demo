@@ -111,16 +111,46 @@ def classify_workbook(path: Path, output_path: Path, classify_project_func) -> t
     processed = 0
     skipped = 0
     output_row = 2
+    consecutive_llm_service_errors = 0
+    max_consecutive_llm_service_errors = 3
     for source_row in range(2, source_sheet.max_row + 1):
         project_name = source_sheet.cell(row=source_row, column=1).value
         if project_name is None or str(project_name).strip() == "":
             skipped += 1
             continue
 
-        result = classify_project_func(str(project_name).strip())
+        project_text = str(project_name).strip()
+        print(f"[ROW ] {path.name}:{source_row} {project_text[:80]}", flush=True)
+
+        result = classify_project_func(project_text)
+
+        print(
+            f"[DONE] {path.name}:{source_row} "
+            f"{result.get('catalog_id')} "
+            f"{result.get('category')} / {result.get('item')} "
+            f"status={result.get('pipeline_status')}",
+            flush=True,
+        )
+
         _write_result_row(output_sheet, output_row, result, path, source_row)
         output_row += 1
         processed += 1
+
+        if result.get("pipeline_status") == "llm_service_error":
+            consecutive_llm_service_errors += 1
+        else:
+            consecutive_llm_service_errors = 0
+
+        if consecutive_llm_service_errors >= max_consecutive_llm_service_errors:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output = io.BytesIO()
+            output_workbook.save(output)
+            output_path.write_bytes(output.getvalue())
+            raise RuntimeError(
+                f"连续 {max_consecutive_llm_service_errors} 行 LLM 服务连接失败，"
+                f"已停止处理当前文件。最后失败行: {source_row}。"
+                f"已保存部分结果: {output_path}"
+            )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output = io.BytesIO()

@@ -32,7 +32,7 @@ export LLM_PROVIDER=lmstudio
 export LMSTUDIO_BASE_URL=http://172.18.0.1:1234/v1
 export LMSTUDIO_MODEL=qwen/qwen3.6-35b-a3b
 export LMSTUDIO_API_KEY=lm-studio
-export LLM_TIMEOUT_SECONDS=300
+export LLM_TIMEOUT_SECONDS=60
 ```
 
 LM Studio 需要开启 `Serve on local network`。
@@ -140,6 +140,7 @@ excel_outputs/分析汇总.xlsx
 ```
 
 汇总文件包含 4 个 sheet：
+
 - `总览`
 - `一级分类统计`
 - `二级分类统计`
