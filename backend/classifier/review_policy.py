@@ -46,35 +46,47 @@ def decide_review(
     item_selection: ItemSelection,
     status_selection: StatusSelection | None,
 ) -> ReviewDecision:
+    """Decide whether a row truly needs manual review.
+
+    The previous policy treated every secondary candidate and every alias review_hint as
+    a hard review trigger. That made normal weak-current / waterproofing rows flood the
+    review queue even when the selected catalog item was already clear. Secondary IDs are
+    now kept as useful context only; soft alias hints are written only when another hard
+    signal already requires review.
+    """
     secondary_ids = list(item_selection.secondary_catalog_ids)
     is_composite = item_selection.is_composite or infer_is_composite(normalized.original_text)
-    reason_suffixes: list[str] = []
 
-    if alias_result.negative_hints:
-        reason_suffixes.append(f"负向提示：{'、'.join(alias_result.negative_hints)}")
-    if normalized.review_hints or alias_result.review_hints:
-        hints = [*normalized.review_hints, *alias_result.review_hints]
-        reason_suffixes.append(f"复核提示：{'、'.join(dict.fromkeys(hints))}")
-    if is_composite:
-        reason_suffixes.append("疑似复合工程")
-
-    needs_review = (
+    item_needs_review = (
         item_selection.needs_review
         or item_selection.catalog_id == OUT_OF_SCOPE_ID
-        or bool(secondary_ids)
-        or is_composite
-        or bool(normalized.review_hints)
-        or bool(alias_result.negative_hints)
-        or bool(alias_result.review_hints)
         or item_selection.invalid_after_retry
     )
+    status_needs_review = False
     if status_selection is not None:
-        needs_review = (
-            needs_review
-            or status_selection.needs_review
+        status_needs_review = (
+            status_selection.needs_review
             or status_selection.repair_status == UNCERTAIN_STATUS
             or status_selection.invalid_after_retry
         )
+
+    needs_review = (
+        item_needs_review
+        or status_needs_review
+        or is_composite
+        or bool(normalized.review_hints)
+        or bool(alias_result.negative_hints)
+    )
+
+    reason_suffixes: list[str] = []
+    if alias_result.negative_hints:
+        reason_suffixes.append(f"负向提示：{'、'.join(alias_result.negative_hints)}")
+    if normalized.review_hints:
+        reason_suffixes.append(f"复核提示：{'、'.join(dict.fromkeys(normalized.review_hints))}")
+    if needs_review and alias_result.review_hints and (item_needs_review or status_needs_review):
+        reason_suffixes.append(f"复核提示：{'、'.join(dict.fromkeys(alias_result.review_hints))}")
+    if is_composite:
+        reason_suffixes.append("疑似复合工程")
 
     return ReviewDecision(
         needs_review=needs_review,
