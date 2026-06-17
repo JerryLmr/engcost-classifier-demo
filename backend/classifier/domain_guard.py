@@ -193,7 +193,7 @@ def _generic_elevator_guard(text: str) -> GuardDecision:
             forced_catalog_id="CF-017-00",
             blocked_catalog_ids=("CF-017-13",),
             needs_review=True,
-            reason="工程仅明确为电梯类维修/更新/改造，未明确四川表17中的具体部件或子系统，使用内部扩展项",
+            reason="仅明确为电梯类项目，未说明曳引机、钢丝绳、控制柜等具体部件",
             context_hints=("普通电梯项目未明确具体部件，优先使用 CF-017-00，不要误选自动扶梯及自动人行道",),
         )
     return GuardDecision()
