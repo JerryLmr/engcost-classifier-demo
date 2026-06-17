@@ -7,11 +7,12 @@ from typing import Iterable
 
 from classifier.alias_matcher import match_aliases
 from classifier.standard_catalog_loader import StandardCatalogItem, load_standard_catalog
-from classifier.standard_normalizer import normalize_project_text
+from classifier.standard_normalizer import NormalizedProjectText, normalize_project_text
 
 
 TOP_K = min(max(int(os.getenv("CLASSIFIER_TOP_K", "5")), 3), 8)
 INTERNAL_TOP_K = min(max(int(os.getenv("CLASSIFIER_INTERNAL_TOP_K", "20")), 15), 50)
+FAMILY_FALLBACK_IDS = {"CF-017-00", "CF-018-00", "CF-028-00"}
 TERMITE_TERMS = (
     "白蚁",
     "蚁害",
@@ -81,6 +82,26 @@ NON_ELEVATOR_OBJECT_CONTEXT_TERMS = (
     "梯控",
     "电梯门禁",
 )
+FAMILY_FORCED_CANDIDATES = (
+    {
+        "catalog_id": "CF-017-00",
+        "family": "电梯",
+        "terms": ("电梯", "货梯", "客梯", "乘客电梯", "住宅电梯", "老旧电梯", "垂直电梯"),
+        "exclude_terms": NON_ELEVATOR_OBJECT_CONTEXT_TERMS,
+    },
+    {
+        "catalog_id": "CF-018-00",
+        "family": "弱电系统",
+        "terms": ("弱电", "智能化", "弱电智能化", "安防系统", "安保系统"),
+        "exclude_terms": (),
+    },
+    {
+        "catalog_id": "CF-028-00",
+        "family": "消防系统",
+        "terms": ("消防", "消防系统", "消防设施", "消防设备", "消防改造", "消防维修", "消防设施维修"),
+        "exclude_terms": ("消防技术咨询",),
+    },
+)
 
 _ASCII_TOKEN_RE = re.compile(r"[a-z0-9]+")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
@@ -93,6 +114,13 @@ class RetrievedCandidate:
     retrieval_score: float
     source: str = "ngram"
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class FamilyMatch:
+    catalog_id: str
+    family: str
+    reason: str
 
 
 def normalize_retrieval_text(text: str) -> str:
@@ -145,6 +173,50 @@ def _allows_generic_elevator_candidate(normalized_text: str) -> bool:
     return has_generic and not has_specific
 
 
+def detect_family_matches(project_name: str | NormalizedProjectText) -> tuple[FamilyMatch, ...]:
+    normalized = (
+        project_name
+        if isinstance(project_name, NormalizedProjectText)
+        else normalize_project_text(str(project_name or ""))
+    )
+    matches: list[FamilyMatch] = []
+    for family_candidate in FAMILY_FORCED_CANDIDATES:
+        exclude_terms = family_candidate["exclude_terms"]
+        if any(term in normalized.normalized_text for term in exclude_terms):
+            continue
+        terms = family_candidate["terms"]
+        if not any(term in normalized.normalized_text for term in terms):
+            continue
+        matches.append(
+            FamilyMatch(
+                catalog_id=str(family_candidate["catalog_id"]),
+                family=str(family_candidate["family"]),
+                reason=f"family_forced: {family_candidate['family']}，一级明确但二级未明确",
+            )
+        )
+    return tuple(matches)
+
+
+def _alias_score_bonus(alias_hit) -> float:
+    if alias_hit.catalog_id in FAMILY_FALLBACK_IDS:
+        if alias_hit.priority >= 75:
+            return 110.0
+        if alias_hit.priority >= 65:
+            return 70.0
+        return 30.0
+    if alias_hit.priority >= 75:
+        return 120.0
+    if alias_hit.priority >= 65:
+        return 80.0
+    return 30.0
+
+
+def _is_forced_alias_hit(alias_hit) -> bool:
+    if alias_hit.catalog_id in FAMILY_FALLBACK_IDS:
+        return True
+    return alias_hit.priority >= 75
+
+
 def candidate_label(item: StandardCatalogItem) -> str:
     return f"{item.id} | {item.category} | {item.item}"
 
@@ -188,12 +260,13 @@ def retrieve_candidates(project_name: str, top_k: int | None = None) -> list[Ret
     query_tokens = tokenize_for_retrieval(normalized.retrieval_text)
     alias_result = match_aliases(normalized)
     alias_hits_by_id = {hit.catalog_id: hit for hit in alias_result.catalog_hits}
+    family_matches_by_id = {match.catalog_id: match for match in detect_family_matches(normalized)}
 
     scored: list[tuple[float, StandardCatalogItem, str, str]] = []
     for item, search_text, item_tokens in _indexed_catalog():
         if _is_termite_catalog_item(item) and not _allows_termite_candidate(normalized.normalized_text):
             continue
-        if item.id == "CF-017-00" and not _allows_generic_elevator_candidate(normalized.normalized_text):
+        if item.id in FAMILY_FALLBACK_IDS and item.id not in family_matches_by_id:
             continue
         overlap = query_tokens & item_tokens
         score = float(len(overlap))
@@ -204,18 +277,29 @@ def retrieve_candidates(project_name: str, top_k: int | None = None) -> list[Ret
         reason = ""
         alias_hit = alias_hits_by_id.get(item.id)
         if alias_hit:
-            score += 1000.0 + alias_hit.weight
-            source = "alias+ngram" if score > 1000.0 + alias_hit.weight else "alias"
+            score += _alias_score_bonus(alias_hit)
+            source = "alias+ngram"
             reason = alias_hit.reason
+        family_match = family_matches_by_id.get(item.id)
+        if family_match:
+            score += 5.0
+            source = "family+alias+ngram" if alias_hit else "family+ngram"
+            reason = "；".join(part for part in (reason, family_match.reason) if part)
         if score > 0:
             scored.append((score, item, source, reason))
 
     scored.sort(key=lambda entry: (entry[0], entry[1].id), reverse=True)
     internal = scored[:INTERNAL_TOP_K]
-    forced_alias_ids = set(alias_hits_by_id)
+    forced_alias_ids = {
+        hit.catalog_id
+        for hit in alias_result.catalog_hits
+        if _is_forced_alias_hit(hit)
+    }
+    forced_family_ids = set(family_matches_by_id)
+    forced_ids = forced_alias_ids | forced_family_ids
     selected: list[tuple[float, StandardCatalogItem, str, str]] = []
     for entry in internal:
-        if entry[1].id in forced_alias_ids:
+        if entry[1].id in forced_ids:
             selected.append(entry)
     for entry in internal:
         if entry in selected:

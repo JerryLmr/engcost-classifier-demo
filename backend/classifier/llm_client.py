@@ -17,7 +17,7 @@ from classifier.settings import (
     OLLAMA_BASE_URL,
     OLLAMA_MODEL,
 )
-from classifier.standard_catalog_loader import OUT_OF_SCOPE_ID, StandardCatalogItem
+from classifier.standard_catalog_loader import OUT_OF_SCOPE_ID, StandardCatalogItem, get_standard_catalog_by_id
 
 
 @dataclass(frozen=True)
@@ -251,9 +251,11 @@ JSON 字段固定为：repair_status, needs_review, reason。
 
 def _validate_item_selection(content: Dict[str, Any], candidates: Sequence[StandardCatalogItem]) -> ItemSelection:
     candidate_ids = {item.id for item in candidates}
+    catalog_by_id = get_standard_catalog_by_id()
     catalog_id = str(content.get("catalog_id", "")).strip()
     if catalog_id not in candidate_ids and catalog_id != OUT_OF_SCOPE_ID:
-        raise ValueError(f"LLM returned invalid catalog_id: {catalog_id}")
+        if catalog_id not in catalog_by_id:
+            raise ValueError(f"LLM returned invalid catalog_id: {catalog_id}")
 
     raw_secondary_ids = content.get("secondary_catalog_ids")
     if not isinstance(raw_secondary_ids, list):
@@ -275,6 +277,8 @@ def _validate_item_selection(content: Dict[str, Any], candidates: Sequence[Stand
         raise ValueError("LLM returned invalid needs_review")
     if not isinstance(reason, str):
         raise ValueError("LLM returned invalid reason")
+    if catalog_id not in candidate_ids and catalog_id != OUT_OF_SCOPE_ID:
+        needs_review = True
 
     return ItemSelection(
         catalog_id=catalog_id,

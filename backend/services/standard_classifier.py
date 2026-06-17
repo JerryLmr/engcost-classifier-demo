@@ -2,7 +2,13 @@ from typing import Any
 
 from classifier import llm_client
 from classifier.alias_matcher import AliasMatchResult, match_aliases
-from classifier.candidate_retriever import candidate_label, retrieve_candidates
+from classifier.candidate_retriever import (
+    FAMILY_FALLBACK_IDS,
+    FamilyMatch,
+    candidate_label,
+    detect_family_matches,
+    retrieve_candidates,
+)
 from classifier.review_policy import decide_review, fallback_result, selected_result
 from classifier.standard_catalog_loader import (
     OUT_OF_SCOPE_ID,
@@ -35,6 +41,14 @@ LLM_SERVICE_ERROR_TERMS = (
     "Max retries exceeded",
     "Connection aborted",
     "HTTPConnectionPool",
+)
+FAMILY_FALLBACK_REASON = (
+    "LLM returned OUT_OF_SCOPE, but text contains strong in-scope family term; "
+    "using family fallback."
+)
+FAMILY_OUTSIDE_CANDIDATE_REASON = (
+    "LLM selected catalog_id exists in catalog but was not in retrieved candidates; "
+    "accepted because it matches forced family category."
 )
 
 
@@ -74,6 +88,24 @@ def _context_hints(
     return hints
 
 
+def _matches_forced_family(selected_item, family_matches: tuple[FamilyMatch, ...]) -> bool:
+    if selected_item.id in FAMILY_FALLBACK_IDS:
+        return True
+    for match in family_matches:
+        if selected_item.id == match.catalog_id:
+            return True
+        if match.family and match.family in selected_item.category:
+            return True
+    return False
+
+
+def _family_fallback_item(family_matches: tuple[FamilyMatch, ...]):
+    if not family_matches:
+        return None
+    catalog_by_id = get_standard_catalog_by_id()
+    return catalog_by_id.get(family_matches[0].catalog_id)
+
+
 def classify_project_standard(project_name: str) -> dict[str, Any]:
     candidates = []
     candidate_labels: list[str] = []
@@ -85,7 +117,33 @@ def classify_project_standard(project_name: str) -> dict[str, Any]:
         candidate_labels = [candidate_label(item) for item in candidate_items]
         candidate_reasons = [candidate.reason for candidate in candidates if candidate.reason]
         context_hints = _context_hints(normalized, alias_result, candidate_reasons)
+        family_matches = detect_family_matches(normalized)
         if not candidate_items:
+            fallback_item = _family_fallback_item(family_matches)
+            if fallback_item is not None:
+                item_selection = llm_client.ItemSelection(
+                    catalog_id=fallback_item.id,
+                    secondary_catalog_ids=(),
+                    is_composite=False,
+                    needs_review=True,
+                    reason=FAMILY_FALLBACK_REASON,
+                )
+                status_selection = llm_client.StatusSelection(
+                    repair_status=UNCERTAIN_STATUS,
+                    needs_review=True,
+                    reason="一级明确但二级未明确，维修状态待复核",
+                )
+                decision = decide_review(normalized, alias_result, item_selection, status_selection)
+                return selected_result(
+                    project_name,
+                    fallback_item,
+                    item_selection,
+                    status_selection,
+                    candidate_labels,
+                    decision,
+                    is_emergency=is_emergency_project(project_name),
+                    termite_related=is_termite_related(project_name, fallback_item.id),
+                )
             return fallback_result(
                 project_name,
                 "未召回候选目录",
@@ -97,6 +155,32 @@ def classify_project_standard(project_name: str) -> dict[str, Any]:
 
         item_selection = llm_client.llm_select_catalog_item(project_name, candidate_items, context_hints)
         if item_selection.catalog_id == OUT_OF_SCOPE_ID:
+            fallback_item = _family_fallback_item(family_matches)
+            if fallback_item is not None:
+                item_selection = llm_client.ItemSelection(
+                    catalog_id=fallback_item.id,
+                    secondary_catalog_ids=(),
+                    is_composite=item_selection.is_composite,
+                    needs_review=True,
+                    reason="；".join([item_selection.reason, FAMILY_FALLBACK_REASON]),
+                    invalid_after_retry=item_selection.invalid_after_retry,
+                )
+                status_selection = llm_client.StatusSelection(
+                    repair_status=UNCERTAIN_STATUS,
+                    needs_review=True,
+                    reason="一级明确但二级未明确，维修状态待复核",
+                )
+                decision = decide_review(normalized, alias_result, item_selection, status_selection)
+                return selected_result(
+                    project_name,
+                    fallback_item,
+                    item_selection,
+                    status_selection,
+                    candidate_labels,
+                    decision,
+                    is_emergency=is_emergency_project(project_name),
+                    termite_related=is_termite_related(project_name, fallback_item.id),
+                )
             decision = decide_review(normalized, alias_result, item_selection, None)
             return fallback_result(
                 project_name,
@@ -109,7 +193,27 @@ def classify_project_standard(project_name: str) -> dict[str, Any]:
             )
 
         catalog_by_id = get_standard_catalog_by_id()
+        candidate_ids = {item.id for item in candidate_items}
         selected_item = catalog_by_id[item_selection.catalog_id]
+        if item_selection.catalog_id not in candidate_ids:
+            if not _matches_forced_family(selected_item, family_matches):
+                return fallback_result(
+                    project_name,
+                    f"LLM returned catalog_id outside retrieved candidates: {item_selection.catalog_id}",
+                    candidate_labels,
+                    is_composite=item_selection.is_composite,
+                    secondary_catalog_ids=list(item_selection.secondary_catalog_ids),
+                    is_emergency=is_emergency_project(project_name),
+                    termite_related=is_termite_related(project_name, OUT_OF_SCOPE_ID),
+                )
+            item_selection = llm_client.ItemSelection(
+                catalog_id=item_selection.catalog_id,
+                secondary_catalog_ids=item_selection.secondary_catalog_ids,
+                is_composite=item_selection.is_composite,
+                needs_review=True,
+                reason="；".join([item_selection.reason, FAMILY_OUTSIDE_CANDIDATE_REASON]),
+                invalid_after_retry=item_selection.invalid_after_retry,
+            )
         status_selection = llm_client.llm_select_repair_status(project_name, selected_item)
         decision = decide_review(normalized, alias_result, item_selection, status_selection)
         return selected_result(
