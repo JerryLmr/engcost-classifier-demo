@@ -1,28 +1,31 @@
 # PROJECT STATE
 
 ## Current Milestone
-- Demo 已完成从“物业工程名称输入”到目录分类输出的稳定闭环；CP/CF 标准目录管线正在收敛为 `LLM-primary / rule-as-hints`，优先提升 OUT41 样本的候选召回与回归评估能力。
+- Demo 已完成从“物业工程名称输入”到 CP/CF 标准目录输出的稳定闭环；当前标准目录管线已切到默认完整 compact 目录交给 LLM 判断，一二级目录由 LLM 直接在标准目录内选择。
 
 ## System Capabilities
 - 支持单条工程名称分类，返回一级分类、二级分类、分类方式、分类依据、结构类型、复合工程相关字段。
 - 支持 Excel 批量分类，自动追加分类结果、复合工程标记和复核相关列并下载结果文件。
-- CP/CF 标准目录管线采用 `LLM-primary / rule-as-hints`：normalizer、alias、候选召回和复核提示只提供上下文与约束，最终 catalog_id 由 LLM 选择并经 postprocessor/review policy 规范化。
+- CP/CF 标准目录管线默认采用完整 compact 标准目录 LLM 选择：normalizer、alias、动作词和复核提示只提供上下文，最终 catalog_id 经标准目录 id 校验后进入维修状态判断。
+- 保留旧 n-gram 候选召回链路，可通过 `CLASSIFIER_USE_FULL_CATALOG=false` 显式启用用于对比。
 - 支持复合结构识别，区分 `single_project`、`multi_system_same_domain`、`composite_project`。
 - 支持基于目录的批量回归处理、结果对比和结果分析，并可导出 Excel 汇总报表。
 - 支持 OUT41 gold 回归评估，输出 OUT_OF_SCOPE、建议复核、无候选、复合工程和 gold 目录通过率等指标。
 - 前端支持上传已分类结果文件并展示摘要统计、分类分布、异常/复杂样本。
 
 ## Recent Changes
+- 已新增 `CLASSIFIER_USE_FULL_CATALOG` 开关，默认使用完整目录 LLM 链路；旧候选召回链路仅显式关闭开关时启用。
+- 已新增完整 compact 标准目录选择 prompt 和 LLM 客户端函数，第一轮不再传完整 JSON 或 status_basis。
+- 已修复旧链路候选外但标准内 id 被硬拦成 OUT 的问题，改为接受并建议复核。
+- 已弱化 family fallback 的 `specific_terms` / `negative_context_terms`，这些词只作为辅助诊断，不再单独阻止 fallback。
+- 已补充楼道、门厅、道路、球场、弱电、供水、电梯钢带等中性 alias，仍不绑定 catalog_id。
 - 已新增结果分析服务与 `/api/analyze-excel` 接口，前端可直接分析已分类结果 Excel。
-- 已优化前端结果说明，统一展示文案，并补充结构类型、复合原因、候选分类、异常样本筛选和排序能力。
-- 已统一“建议复核”口径：体系外默认分类、同域多系统、复合工程样本默认建议人工复核，分析接口对历史结果文件也按新口径重算。
-- 已新增 CP/CF 标准目录、标准目录批量分类脚本和标准目录测试，开始从旧三位数字目录向标准目录输出收敛。
-- 已新增 alias 词典召回、OUT41 gold 测试集和评估脚本，自动测试覆盖候选召回与指标计算。
 
 ## Decisions
-- 当前阶段以“标准目录候选召回稳定、LLM 选择可约束、回归指标可重复”为优先目标，不引入训练集或数据库。
+- 当前阶段以“LLM 直接理解完整标准目录、规则只作提示、回归指标可重复”为优先目标，不引入训练集或数据库。
 - CP/CF 标准目录不再维护“规则优先、LLM 兜底”语义；旧正则最终分类路径已从标准目录主路径移除。
-- alias 和规则词只作为候选增强、动作状态 hint、复核/OUT hint，不直接决定最终 catalog_id，也不早期直接输出 OUT_OF_SCOPE。
+- alias、n-gram、family fallback 和规则词只作为文本理解、旧链路对比或诊断信息，不直接决定最终 catalog_id，也不早期直接输出 OUT_OF_SCOPE。
+- 完整目录链路中，只有 LLM 返回标准目录外 id 或明确 OUT_OF_SCOPE 时才进入体系外 fallback；标准目录内 id 直接接受并继续判断维修状态。
 - 复合工程、建议复核、结构类型继续保留为解释字段；其中“建议复核”统一按 `体系外默认分类 / 同域多系统 / 复合工程` 三类触发，不再区分复合工程主次是否明显。
 - 剩余业务边界问题暂不继续细调，待后续与领导沟通后再决定是否调整分类体系。
 

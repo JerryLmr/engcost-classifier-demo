@@ -15,7 +15,14 @@ import openpyxl
 
 from classifier.alias_matcher import load_text_aliases, match_aliases
 from classifier.candidate_retriever import candidate_label, retrieve_candidates
-from classifier.llm_client import ItemSelection, StatusSelection, llm_select_catalog_item, llm_select_repair_status
+from classifier.llm_client import (
+    ItemSelection,
+    StatusSelection,
+    build_full_catalog_item_selection_prompt,
+    llm_select_catalog_item,
+    llm_select_catalog_item_from_full_catalog,
+    llm_select_repair_status,
+)
 from classifier.standard_catalog_loader import (
     OUT_OF_SCOPE_ID,
     get_standard_catalog_by_id,
@@ -158,13 +165,14 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             "reason": "消防一级兜底",
         },
     )
-    def test_llm_item_selection_rejects_catalog_id_outside_candidates(self, mock_request):
+    def test_llm_item_selection_accepts_standard_id_outside_candidates(self, mock_request):
         candidates = [get_standard_catalog_by_id()["CF-022-01"]]
         result = llm_select_catalog_item("消防泵维修", candidates)
-        self.assertEqual(result.catalog_id, OUT_OF_SCOPE_ID)
+        self.assertEqual(result.catalog_id, "CF-028-00")
         self.assertTrue(result.needs_review)
-        self.assertTrue(result.invalid_after_retry)
-        self.assertEqual(mock_request.call_count, 2)
+        self.assertFalse(result.invalid_after_retry)
+        self.assertIn("候选召回遗漏", result.reason)
+        self.assertEqual(mock_request.call_count, 1)
 
     @patch("classifier.llm_client.request_llm_json", side_effect=ValueError("not json"))
     def test_llm_item_selection_falls_back_after_non_json_retry(self, mock_request):
@@ -208,6 +216,49 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertEqual(result.secondary_catalog_ids, ("CP-003-01",))
         self.assertTrue(result.is_composite)
 
+    def test_full_catalog_prompt_uses_compact_lines_without_status_basis(self):
+        catalog = [get_standard_catalog_by_id()["CF-015-05"]]
+        prompt = build_full_catalog_item_selection_prompt("减压阀更换", catalog, ["alias辅助扩展词（不能直接决定分类）：阀门"])
+        self.assertIn("catalog_id | 标准对象 | 一级分类 | 二级分类 | 可选状态", prompt)
+        self.assertIn("CF-015-05 | 共用设施设备 | 给排水系统", prompt)
+        self.assertIn("alias辅助扩展词", prompt)
+        self.assertNotIn("状态依据", prompt)
+
+    @patch(
+        "classifier.llm_client.request_llm_json",
+        return_value={
+            "catalog_id": "CF-015-05",
+            "secondary_catalog_ids": ["BAD-ID", "CF-015-04"],
+            "is_composite": True,
+            "needs_review": False,
+            "reason": "对象为减压阀和管道",
+        },
+    )
+    def test_full_catalog_selection_filters_invalid_secondary_ids(self, _mock_request):
+        result = llm_select_catalog_item_from_full_catalog("减压阀及管道维修", load_standard_catalog())
+        self.assertEqual(result.catalog_id, "CF-015-05")
+        self.assertEqual(result.secondary_catalog_ids, ("CF-015-04",))
+        self.assertTrue(result.needs_review)
+        self.assertIn("已丢弃标准外 secondary id", result.reason)
+
+    @patch(
+        "classifier.llm_client.request_llm_json",
+        return_value={
+            "catalog_id": "BAD-ID",
+            "secondary_catalog_ids": [],
+            "is_composite": False,
+            "needs_review": False,
+            "reason": "bad",
+        },
+    )
+    def test_full_catalog_selection_falls_back_after_invalid_primary_id(self, mock_request):
+        result = llm_select_catalog_item_from_full_catalog("未知项目", load_standard_catalog())
+        self.assertEqual(result.catalog_id, OUT_OF_SCOPE_ID)
+        self.assertTrue(result.needs_review)
+        self.assertTrue(result.invalid_after_retry)
+        self.assertIn("LLM returned invalid catalog_id: BAD-ID", result.reason)
+        self.assertEqual(mock_request.call_count, 2)
+
     @patch(
         "classifier.llm_client.request_llm_json",
         return_value={
@@ -225,7 +276,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertEqual(mock_request.call_count, 2)
 
     @patch(
-        "classifier.llm_client.llm_select_catalog_item",
+        "classifier.llm_client.llm_select_catalog_item_from_full_catalog",
         return_value=type(
             "Selection",
             (),
@@ -256,9 +307,30 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         result = classify_project_standard("减压阀更换")
         self.assertEqual(result["catalog_id"], "CF-015-05")
         self.assertEqual(result["repair_status"], "更新")
-        self.assertIn(candidate_label(get_standard_catalog_by_id()["CF-015-05"]), result["candidate_labels"])
+        self.assertEqual(result["candidate_labels"], [])
         self.assertFalse(result["needs_review"])
 
+    @patch("services.standard_classifier.CLASSIFIER_USE_FULL_CATALOG", False)
+    @patch(
+        "classifier.llm_client.llm_select_repair_status",
+        return_value=StatusSelection(repair_status="更新", needs_review=False, reason="更换对应更新"),
+    )
+    @patch(
+        "classifier.llm_client.llm_select_catalog_item",
+        return_value=ItemSelection(
+            catalog_id="CF-015-05",
+            secondary_catalog_ids=(),
+            is_composite=False,
+            needs_review=False,
+            reason="对象为减压阀",
+        ),
+    )
+    def test_standard_classifier_can_use_legacy_candidate_chain(self, _mock_item, _mock_status):
+        result = classify_project_standard("减压阀更换")
+        self.assertEqual(result["catalog_id"], "CF-015-05")
+        self.assertIn(candidate_label(get_standard_catalog_by_id()["CF-015-05"]), result["candidate_labels"])
+
+    @patch("services.standard_classifier.CLASSIFIER_USE_FULL_CATALOG", False)
     @patch(
         "classifier.llm_client.llm_select_repair_status",
         return_value=StatusSelection(repair_status="维修", needs_review=False, reason="按工程名称判断为维修"),
@@ -295,6 +367,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                     self.assertNotIn(forbidden, result["reason"])
         self.assertEqual(mock_item.call_count, len(samples))
 
+    @patch("services.standard_classifier.CLASSIFIER_USE_FULL_CATALOG", False)
     @patch(
         "classifier.llm_client.llm_select_repair_status",
         return_value=StatusSelection(repair_status="维修", needs_review=False, reason="按工程名称判断为维修"),
@@ -336,6 +409,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                 for forbidden in ("保护规则", "forced_catalog_id", "domain_guard", "内部扩展项"):
                     self.assertNotIn(forbidden, result["reason"])
 
+    @patch("services.standard_classifier.CLASSIFIER_USE_FULL_CATALOG", False)
     @patch(
         "classifier.llm_client.llm_select_repair_status",
         return_value=StatusSelection(repair_status="维修", needs_review=False, reason="按工程名称判断为维修"),
@@ -366,11 +440,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             candidate_ids = {item.id for item in candidates}
             self.assertIn(catalog_id, candidate_ids)
             self.assertTrue(set(secondary_ids).issubset(candidate_ids))
-            if project_name.startswith("电梯监控"):
-                self.assertFalse(any(item.category == "电梯" for item in candidates))
-                self.assertNotIn(OUT_OF_SCOPE_ID, candidate_ids)
-            else:
-                self.assertNotIn("CF-017-00", candidate_ids)
+            self.assertNotIn(OUT_OF_SCOPE_ID, candidate_ids)
             return ItemSelection(
                 catalog_id=catalog_id,
                 secondary_catalog_ids=secondary_ids,
@@ -389,6 +459,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                 self.assertEqual(result["needs_review"], expected_review or bool(secondary_ids))
                 self.assertNotIn("一级明确但二级未明确", result["reason"])
 
+    @patch("services.standard_classifier.CLASSIFIER_USE_FULL_CATALOG", False)
     @patch(
         "classifier.llm_client.llm_select_repair_status",
         return_value=StatusSelection(repair_status="维修", needs_review=False, reason="按工程名称判断为维修"),
@@ -428,9 +499,9 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                 candidates = retrieve_candidates(text)
                 ids = [candidate.item.id for candidate in candidates]
                 self.assertIn(expected_id, ids)
-                self.assertNotIn("CF-017-00", ids)
+                self.assertLess(ids.index(expected_id), ids.index("CF-017-00") if "CF-017-00" in ids else len(ids))
 
-    def test_specific_elevator_terms_do_not_recall_generic_elevator_fallback(self):
+    def test_specific_elevator_terms_keep_specific_candidates_available(self):
         samples = {
             "更换限速器、限速器钢丝绳": {"CF-017-06", "CF-017-05"},
             "更换钢丝绳、制动器、电磁铁、导向轮、变频器主板": {
@@ -448,16 +519,16 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         for text, expected_ids in samples.items():
             with self.subTest(text=text):
                 ids = {candidate.item.id for candidate in retrieve_candidates(text)}
-                self.assertNotIn("CF-017-00", ids)
                 self.assertTrue(expected_ids.issubset(ids))
 
     def test_elevator_monitoring_recalls_weak_current_not_elevator(self):
         candidates = retrieve_candidates("电梯监控、部分共用光收发器维修更新")
         ids = {candidate.item.id for candidate in candidates}
-        categories = {candidate.item.category for candidate in candidates}
         self.assertIn("CF-018-02", ids)
         self.assertIn("CF-018-12", ids)
-        self.assertNotIn("电梯", categories)
+        if "CF-017-00" in ids:
+            fallback = next(candidate for candidate in candidates if candidate.item.id == "CF-017-00")
+            self.assertEqual(fallback.source, "family_recall")
 
     def test_wall_aliases_recall_expected_candidates_without_alias_scoring(self):
         alias_result = match_aliases("外立面翻新")
@@ -473,6 +544,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertIn("CP-004-02", interior_by_id)
         self.assertFalse(any("alias" in candidate.source for candidate in interior))
 
+    @patch("services.standard_classifier.CLASSIFIER_USE_FULL_CATALOG", False)
     @patch("classifier.llm_client.llm_select_catalog_item")
     def test_family_out_of_scope_is_converted_to_fallback_catalog(self, mock_item):
         samples = {
@@ -504,6 +576,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                 self.assertEqual(result["repair_status"], "不确定")
                 self.assertIn("LLM returned OUT_OF_SCOPE", result["reason"])
 
+    @patch("services.standard_classifier.CLASSIFIER_USE_FULL_CATALOG", False)
     @patch(
         "classifier.llm_client.llm_select_repair_status",
         return_value=StatusSelection(repair_status="维修", needs_review=False, reason="按工程名称判断为维修"),
@@ -518,11 +591,11 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             reason="消防报警系统",
         ),
     )
-    def test_catalog_id_outside_candidates_is_rejected_even_when_family_related(self, _mock_item, _mock_status):
+    def test_catalog_id_outside_candidates_is_accepted_when_standard_id(self, _mock_item, _mock_status):
         result = classify_project_standard("消防泵维修")
-        self.assertEqual(result["catalog_id"], OUT_OF_SCOPE_ID)
+        self.assertEqual(result["catalog_id"], "CF-021-01")
         self.assertTrue(result["needs_review"])
-        self.assertIn("outside retrieved candidates", result["reason"])
+        self.assertIn("候选召回遗漏", result["reason"])
 
     def test_specific_fire_catalog_recalled_without_alias_source(self):
         candidates = retrieve_candidates("消防喷淋泵维修")
@@ -548,8 +621,10 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         samples = ["电梯厅吊顶维修", "电梯厅墙面粉刷", "电梯监控维修", "梯控系统改造"]
         for text in samples:
             with self.subTest(text=text):
-                ids = [candidate.item.id for candidate in retrieve_candidates(text)]
-                self.assertNotIn("CF-017-00", ids)
+                candidates = retrieve_candidates(text)
+                if any(candidate.item.id == "CF-017-00" for candidate in candidates):
+                    fallback = next(candidate for candidate in candidates if candidate.item.id == "CF-017-00")
+                    self.assertEqual(fallback.source, "family_recall")
 
     def test_water_supply_aliases_recall_expected_candidates(self):
         samples = {

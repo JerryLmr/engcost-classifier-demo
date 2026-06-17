@@ -229,6 +229,57 @@ JSON 字段固定为：catalog_id, secondary_catalog_ids, is_composite, needs_re
 """.strip()
 
 
+def compact_catalog_prompt_label(item: StandardCatalogItem) -> str:
+    return (
+        f"{item.id} | {item.standard_group} | {item.category} | {item.item} | "
+        f"{'/'.join(item.allowed_statuses)}"
+    )
+
+
+def build_full_catalog_item_selection_prompt(
+    project_name: str,
+    catalog_items: Sequence[StandardCatalogItem],
+    context_hints: Sequence[str] | None = None,
+) -> str:
+    catalog_lines = "\n".join(compact_catalog_prompt_label(item) for item in catalog_items)
+    hint_lines = "\n".join(f"- {hint}" for hint in context_hints or [] if hint)
+    hint_section = f"\n辅助提示（只作理解文本，不得替代标准目录判断）：\n{hint_lines}\n" if hint_lines else ""
+    return f"""
+你是物业工程标准目录分类助手。请读取完整 compact 标准目录，判断工程名称对应的标准目录。
+
+工程名称：{project_name}
+{hint_section}
+
+完整 compact 标准目录：
+catalog_id | 标准对象 | 一级分类 | 二级分类 | 可选状态
+{catalog_lines}
+
+输出要求：
+1. 只能从完整标准目录中选择一个 catalog_id，或者 OUT_OF_SCOPE。
+2. 如果工程名称能对应到标准目录中的共用部位、共用设施设备维修对象，不要返回 OUT_OF_SCOPE。
+3. 如果有具体对象，优先选择具体二级目录。
+4. 如果多个对象并列，主对象放 catalog_id，其它对象放 secondary_catalog_ids，并设置 is_composite=true 或 needs_review=true。
+5. 如果只能判断一级系统，且标准目录里存在“未明确具体子项”，可以选择该项，并设置 needs_review=true。
+6. 如果文本包含咨询、设计、检测、维保、审计等服务词，但同时有明确维修对象，应选择该对象并设置 needs_review=true，不要直接 OUT。
+7. 只有完全没有共用部位/共用设施设备维修对象时，才返回 OUT_OF_SCOPE。
+8. alias、动作词、复核提示只作为辅助理解，不能直接决定 catalog_id。
+9. 不要输出思考过程。
+10. 不要输出 <think>。
+11. 不要输出 markdown。
+12. reason 不超过 40 个汉字。
+13. 只输出 JSON，不要自然语言段落。
+
+JSON 字段固定为：
+{{
+  "catalog_id": "...",
+  "secondary_catalog_ids": [],
+  "is_composite": false,
+  "needs_review": false,
+  "reason": "..."
+}}
+""".strip()
+
+
 def build_status_selection_prompt(project_name: str, selected_item: StandardCatalogItem) -> str:
     basis_lines = "\n".join(
         f"{status}：{basis}" for status, basis in selected_item.status_basis.items()
@@ -256,25 +307,11 @@ JSON 字段固定为：repair_status, needs_review, reason。
 """.strip()
 
 
-def _validate_item_selection(content: Dict[str, Any], candidates: Sequence[StandardCatalogItem]) -> ItemSelection:
-    candidate_ids = {item.id for item in candidates}
-    catalog_by_id = get_standard_catalog_by_id()
+def _validate_selection_fields(content: Dict[str, Any]) -> tuple[str, list[Any], bool, bool, str]:
     catalog_id = str(content.get("catalog_id", "")).strip()
-    if catalog_id not in candidate_ids and catalog_id != OUT_OF_SCOPE_ID:
-        if catalog_id in catalog_by_id:
-            raise ValueError(f"LLM returned catalog_id outside candidates: {catalog_id}")
-        raise ValueError(f"LLM returned invalid catalog_id: {catalog_id}")
-
     raw_secondary_ids = content.get("secondary_catalog_ids")
     if not isinstance(raw_secondary_ids, list):
         raise ValueError("LLM returned invalid secondary_catalog_ids")
-    secondary_ids: list[str] = []
-    for value in raw_secondary_ids:
-        item_id = str(value).strip()
-        if item_id not in candidate_ids:
-            raise ValueError(f"LLM returned invalid secondary catalog_id: {item_id}")
-        if item_id != catalog_id and item_id not in secondary_ids:
-            secondary_ids.append(item_id)
 
     is_composite = content.get("is_composite")
     needs_review = content.get("needs_review")
@@ -285,6 +322,73 @@ def _validate_item_selection(content: Dict[str, Any], candidates: Sequence[Stand
         raise ValueError("LLM returned invalid needs_review")
     if not isinstance(reason, str):
         raise ValueError("LLM returned invalid reason")
+    return catalog_id, raw_secondary_ids, is_composite, needs_review, reason
+
+
+def _validate_item_selection(content: Dict[str, Any], candidates: Sequence[StandardCatalogItem]) -> ItemSelection:
+    candidate_ids = {item.id for item in candidates}
+    catalog_by_id = get_standard_catalog_by_id()
+    catalog_id, raw_secondary_ids, is_composite, needs_review, reason = _validate_selection_fields(content)
+    if catalog_id not in candidate_ids and catalog_id != OUT_OF_SCOPE_ID:
+        if catalog_id not in catalog_by_id:
+            raise ValueError(f"LLM returned invalid catalog_id: {catalog_id}")
+        needs_review = True
+        reason = "；".join(
+            part
+            for part in (
+                reason.strip(),
+                "候选召回遗漏，LLM选择标准内候选外目录",
+            )
+            if part
+        )
+
+    secondary_ids: list[str] = []
+    for value in raw_secondary_ids:
+        item_id = str(value).strip()
+        if item_id not in catalog_by_id:
+            raise ValueError(f"LLM returned invalid secondary catalog_id: {item_id}")
+        if item_id != catalog_id and item_id not in secondary_ids:
+            secondary_ids.append(item_id)
+
+    return ItemSelection(
+        catalog_id=catalog_id,
+        secondary_catalog_ids=tuple(secondary_ids),
+        is_composite=is_composite,
+        needs_review=needs_review,
+        reason=reason.strip() or "模型未提供目录选择依据",
+    )
+
+
+def _validate_full_catalog_item_selection(content: Dict[str, Any]) -> ItemSelection:
+    catalog_by_id = get_standard_catalog_by_id()
+    catalog_id, raw_secondary_ids, is_composite, needs_review, reason = _validate_selection_fields(content)
+    if catalog_id not in catalog_by_id and catalog_id != OUT_OF_SCOPE_ID:
+        raise ValueError(f"LLM returned invalid catalog_id: {catalog_id}")
+
+    secondary_ids: list[str] = []
+    dropped_secondary_ids: list[str] = []
+    for value in raw_secondary_ids:
+        item_id = str(value).strip()
+        if item_id not in catalog_by_id:
+            if item_id:
+                dropped_secondary_ids.append(item_id)
+            continue
+        if item_id != catalog_id and item_id not in secondary_ids:
+            secondary_ids.append(item_id)
+
+    if secondary_ids:
+        needs_review = True
+    if dropped_secondary_ids:
+        needs_review = True
+        reason = "；".join(
+            part
+            for part in (
+                reason.strip(),
+                f"已丢弃标准外 secondary id: {','.join(dropped_secondary_ids)}",
+            )
+            if part
+        )
+
     return ItemSelection(
         catalog_id=catalog_id,
         secondary_catalog_ids=tuple(secondary_ids),
@@ -329,6 +433,31 @@ def llm_select_catalog_item(
         except Exception as exc:  # noqa: BLE001
             last_error = exc
     reason = "LLM item selection invalid after retry"
+    if last_error:
+        reason = f"{reason}: {last_error}"
+    return ItemSelection(
+        catalog_id=OUT_OF_SCOPE_ID,
+        secondary_catalog_ids=(),
+        is_composite=False,
+        needs_review=True,
+        reason=reason,
+        invalid_after_retry=True,
+    )
+
+
+def llm_select_catalog_item_from_full_catalog(
+    project_name: str,
+    catalog_items: Sequence[StandardCatalogItem],
+    context_hints: Sequence[str] | None = None,
+) -> ItemSelection:
+    prompt = build_full_catalog_item_selection_prompt(project_name, catalog_items, context_hints)
+    last_error: Exception | None = None
+    for _attempt in range(2):
+        try:
+            return _validate_full_catalog_item_selection(request_llm_json(prompt))
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+    reason = "LLM full catalog item selection invalid after retry"
     if last_error:
         reason = f"{reason}: {last_error}"
     return ItemSelection(

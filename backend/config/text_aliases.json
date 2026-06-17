@@ -22,9 +22,24 @@
     "patterns": ["墙砖", "墙面砖", "墙面瓷砖", "瓷砖墙面"]
   },
   {
+    "canonical_term": "室内门厅、楼梯间、走廊通道",
+    "match_type": "contains",
+    "patterns": ["楼道", "过道", "走廊", "楼梯间", "大堂", "大厅", "门厅"]
+  },
+  {
+    "canonical_term": "道路、停车场",
+    "match_type": "contains",
+    "patterns": ["人行道", "路面", "沥青路面"]
+  },
+  {
+    "canonical_term": "运动场所",
+    "match_type": "contains",
+    "patterns": ["篮球场", "网球场", "球场", "运动场"]
+  },
+  {
     "canonical_term": "给排水系统",
     "match_type": "contains",
-    "patterns": ["给水排水", "给排水", "上下水", "上下水系统"]
+    "patterns": ["给水排水", "给排水", "上下水", "上下水系统", "二次供水", "直供水", "生活泵房"]
   },
   {
     "canonical_term": "给排水管道及附件",
@@ -107,8 +122,18 @@
     ]
   },
   {
+    "canonical_term": "弱电系统",
+    "match_type": "contains",
+    "patterns": ["安防", "智能化", "人脸识别", "车牌识别", "道闸"]
+  },
+  {
     "canonical_term": "弱电线缆",
     "match_type": "contains",
     "patterns": ["光收发器", "光纤收发器", "光缆", "网线", "弱电线缆"]
+  },
+  {
+    "canonical_term": "电梯",
+    "match_type": "contains",
+    "patterns": ["钢带", "曳引带"]
   }
 ]

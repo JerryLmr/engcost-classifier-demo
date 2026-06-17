@@ -223,15 +223,17 @@ def detect_family_matches(project_name: str | NormalizedProjectText) -> tuple[Fa
     for rule in load_family_fallback_rules():
         if not any(term in normalized.normalized_text for term in rule.family_terms):
             continue
+        diagnostics: list[str] = []
         if any(_term_matches_text(term, normalized.normalized_text) for term in rule.specific_terms):
-            continue
+            diagnostics.append("含具体对象词")
         if any(_term_matches_text(term, normalized.normalized_text) for term in rule.negative_context_terms):
-            continue
+            diagnostics.append("含可能为修饰语的位置/服务词")
+        diagnostic_suffix = f"（{'、'.join(diagnostics)}，仅作辅助提示）" if diagnostics else ""
         matches.append(
             FamilyMatch(
                 catalog_id=rule.catalog_id,
                 family=rule.category,
-                reason=f"family_fallback: {rule.category}，一级明确但二级未明确",
+                reason=f"family_fallback: {rule.category}，一级相关{diagnostic_suffix}",
             )
         )
     return tuple(matches)
@@ -297,6 +299,9 @@ def _append_recall_candidate(
         selected.append(entry)
         selected_ids.add(item_id)
         return
+    removed_item_id = selected[-1][1].id
+    selected.pop()
+    selected_ids.discard(removed_item_id)
     selected.append(entry)
     selected_ids.add(item_id)
 
