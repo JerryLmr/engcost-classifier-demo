@@ -31,8 +31,10 @@ GENERIC_ELEVATOR_TERMS = (
     "老旧电梯",
 )
 SPECIFIC_ELEVATOR_TERMS = (
+    "限速器钢丝绳",
     "曳引机",
     "制动器",
+    "电磁铁",
     "电动机",
     "导向轮",
     "曳引轮",
@@ -45,6 +47,9 @@ SPECIFIC_ELEVATOR_TERMS = (
     "轿门",
     "轿厢门",
     "门机板",
+    "门挂轮",
+    "门挂板",
+    "门锁",
     "导靴",
     "吊门轮",
     "缓冲器",
@@ -181,6 +186,9 @@ def detect_family_matches(project_name: str | NormalizedProjectText) -> tuple[Fa
     )
     matches: list[FamilyMatch] = []
     for family_candidate in FAMILY_FORCED_CANDIDATES:
+        catalog_id = str(family_candidate["catalog_id"])
+        if catalog_id == "CF-017-00" and not _allows_generic_elevator_candidate(normalized.normalized_text):
+            continue
         exclude_terms = family_candidate["exclude_terms"]
         if any(term in normalized.normalized_text for term in exclude_terms):
             continue
@@ -189,32 +197,12 @@ def detect_family_matches(project_name: str | NormalizedProjectText) -> tuple[Fa
             continue
         matches.append(
             FamilyMatch(
-                catalog_id=str(family_candidate["catalog_id"]),
+                catalog_id=catalog_id,
                 family=str(family_candidate["family"]),
                 reason=f"family_forced: {family_candidate['family']}，一级明确但二级未明确",
             )
         )
     return tuple(matches)
-
-
-def _alias_score_bonus(alias_hit) -> float:
-    if alias_hit.catalog_id in FAMILY_FALLBACK_IDS:
-        if alias_hit.priority >= 75:
-            return 110.0
-        if alias_hit.priority >= 65:
-            return 70.0
-        return 30.0
-    if alias_hit.priority >= 75:
-        return 120.0
-    if alias_hit.priority >= 65:
-        return 80.0
-    return 30.0
-
-
-def _is_forced_alias_hit(alias_hit) -> bool:
-    if alias_hit.catalog_id in FAMILY_FALLBACK_IDS:
-        return True
-    return alias_hit.priority >= 75
 
 
 def candidate_label(item: StandardCatalogItem) -> str:
@@ -253,6 +241,32 @@ def _phrase_bonus(query_text: str, item: StandardCatalogItem, search_text: str) 
     return score
 
 
+def _catalog_by_id() -> dict[str, StandardCatalogItem]:
+    return {item.id: item for item in load_standard_catalog()}
+
+
+def _append_recall_candidate(
+    selected: list[tuple[float, StandardCatalogItem, str, str]],
+    selected_ids: set[str],
+    entry: tuple[float, StandardCatalogItem, str, str],
+    limit: int,
+) -> None:
+    item_id = entry[1].id
+    if item_id in selected_ids:
+        return
+    if len(selected) < limit:
+        selected.append(entry)
+        selected_ids.add(item_id)
+        return
+    for index in range(len(selected) - 1, -1, -1):
+        if selected[index][2] in {"ngram", "alias_hint+ngram"}:
+            removed_id = selected.pop(index)[1].id
+            selected_ids.discard(removed_id)
+            selected.append(entry)
+            selected_ids.add(item_id)
+            return
+
+
 def retrieve_candidates(project_name: str, top_k: int | None = None) -> list[RetrievedCandidate]:
     limit = min(max(top_k if top_k is not None else TOP_K, 3), 8)
     normalized = normalize_project_text(project_name)
@@ -261,12 +275,15 @@ def retrieve_candidates(project_name: str, top_k: int | None = None) -> list[Ret
     alias_result = match_aliases(normalized)
     alias_hits_by_id = {hit.catalog_id: hit for hit in alias_result.catalog_hits}
     family_matches_by_id = {match.catalog_id: match for match in detect_family_matches(normalized)}
+    elevator_as_context = any(term in normalized.normalized_text for term in NON_ELEVATOR_OBJECT_CONTEXT_TERMS)
 
     scored: list[tuple[float, StandardCatalogItem, str, str]] = []
     for item, search_text, item_tokens in _indexed_catalog():
         if _is_termite_catalog_item(item) and not _allows_termite_candidate(normalized.normalized_text):
             continue
-        if item.id in FAMILY_FALLBACK_IDS and item.id not in family_matches_by_id:
+        if elevator_as_context and item.category == "电梯":
+            continue
+        if item.id in FAMILY_FALLBACK_IDS:
             continue
         overlap = query_tokens & item_tokens
         score = float(len(overlap))
@@ -277,37 +294,40 @@ def retrieve_candidates(project_name: str, top_k: int | None = None) -> list[Ret
         reason = ""
         alias_hit = alias_hits_by_id.get(item.id)
         if alias_hit:
-            score += _alias_score_bonus(alias_hit)
-            source = "alias+ngram"
+            source = "alias_hint+ngram"
             reason = alias_hit.reason
         family_match = family_matches_by_id.get(item.id)
         if family_match:
-            score += 5.0
-            source = "family+alias+ngram" if alias_hit else "family+ngram"
+            source = "family+alias_hint+ngram" if alias_hit else "family+ngram"
             reason = "；".join(part for part in (reason, family_match.reason) if part)
         if score > 0:
             scored.append((score, item, source, reason))
 
     scored.sort(key=lambda entry: (entry[0], entry[1].id), reverse=True)
     internal = scored[:INTERNAL_TOP_K]
-    forced_alias_ids = {
-        hit.catalog_id
-        for hit in alias_result.catalog_hits
-        if _is_forced_alias_hit(hit)
-    }
-    forced_family_ids = set(family_matches_by_id)
-    forced_ids = forced_alias_ids | forced_family_ids
     selected: list[tuple[float, StandardCatalogItem, str, str]] = []
+    selected_ids: set[str] = set()
     for entry in internal:
-        if entry[1].id in forced_ids:
-            selected.append(entry)
-    for entry in internal:
-        if entry in selected:
-            continue
         if len(selected) >= limit:
             break
         selected.append(entry)
-    selected.sort(key=lambda entry: (entry[0], entry[1].id), reverse=True)
+        selected_ids.add(entry[1].id)
+
+    catalog_by_id = _catalog_by_id()
+    for hit in alias_result.catalog_hits:
+        if hit.catalog_id in selected_ids or hit.catalog_id in FAMILY_FALLBACK_IDS:
+            continue
+        item = catalog_by_id.get(hit.catalog_id)
+        if item is None:
+            continue
+        _append_recall_candidate(selected, selected_ids, (0.0, item, "alias_recall", hit.reason), limit)
+
+    for match in family_matches_by_id.values():
+        item = catalog_by_id.get(match.catalog_id)
+        if item is None:
+            continue
+        _append_recall_candidate(selected, selected_ids, (0.0, item, "family_recall", match.reason), limit)
+
     return [
         RetrievedCandidate(item=item, rank=index + 1, retrieval_score=score, source=source, reason=reason)
         for index, (score, item, source, reason) in enumerate(selected)

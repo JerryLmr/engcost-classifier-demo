@@ -1,1393 +1,1087 @@
 [
   {
-    "alias_pattern": "咨询服务",
-    "object_group": "",
-    "target_catalog_id": "OUT_OF_SCOPE",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "contains",
-    "action_hint": "",
-    "status_hint": "",
-    "review_hint": "强制复核",
-    "priority": 90,
-    "notes": "服务类，不是维修/更新/改造对象"
-  },
-  {
-    "alias_pattern": "技术咨询",
-    "object_group": "",
-    "target_catalog_id": "OUT_OF_SCOPE",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "contains",
-    "action_hint": "",
-    "status_hint": "",
-    "review_hint": "强制复核",
-    "priority": 90,
-    "notes": "咨询服务类保持 OUT_OF_SCOPE"
-  },
-  {
-    "alias_pattern": "设计服务",
-    "object_group": "",
-    "target_catalog_id": "OUT_OF_SCOPE",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "contains",
-    "action_hint": "",
-    "status_hint": "",
-    "review_hint": "强制复核",
-    "priority": 90,
-    "notes": "设计服务类保持 OUT_OF_SCOPE"
-  },
-  {
-    "alias_pattern": "消防技术咨询",
-    "object_group": "",
-    "target_catalog_id": "OUT_OF_SCOPE",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "contains",
-    "action_hint": "",
-    "status_hint": "",
-    "review_hint": "强制复核",
-    "priority": 90,
-    "notes": "消防咨询服务，不等同消防设施维修"
-  },
-  {
-    "alias_pattern": "维保服务",
-    "object_group": "",
-    "target_catalog_id": "OUT_OF_SCOPE",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "contains",
-    "action_hint": "",
-    "status_hint": "",
-    "review_hint": "强制复核",
-    "priority": 80,
-    "notes": "纯维保服务通常不是本目录维修项目，需复核"
-  },
-  {
-    "alias_pattern": "综合品质改造",
-    "object_group": "",
-    "target_catalog_id": "OUT_OF_SCOPE",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "contains",
-    "action_hint": "",
-    "status_hint": "",
-    "review_hint": "强制复核",
-    "priority": 80,
-    "notes": "没有具体维修对象时不直接归类"
-  },
-  {
-    "alias_pattern": "品质改造",
-    "object_group": "",
-    "target_catalog_id": "OUT_OF_SCOPE",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "contains",
-    "action_hint": "",
-    "status_hint": "",
-    "review_hint": "强制复核",
-    "priority": 80,
-    "notes": "没有具体维修对象时不直接归类"
-  },
-  {
-    "alias_pattern": "外立面|立面修缮|外墙修缮|外墙维修|外墙渗水|外墙防水|外墙翻新|外墙涂料|外墙砖|外墙面砖|幕墙|玻璃幕墙|女儿墙外侧",
-    "object_group": "",
+    "alias_pattern": "外立面",
     "target_catalog_id": "CP-003-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 70,
-    "notes": "同义词归一：外立面/幕墙等归外墙面面层；作为候选增强，不应硬判最终结果"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "同义词清洗：外立面按标准目录理解为外墙面面层"
   },
   {
-    "alias_pattern": "外保温|保温层",
-    "object_group": "",
+    "alias_pattern": "外墙立面",
+    "target_catalog_id": "CP-003-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "同义词清洗：外立面按标准目录理解为外墙面面层"
+  },
+  {
+    "alias_pattern": "建筑外立面",
+    "target_catalog_id": "CP-003-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "同义词清洗：外立面按标准目录理解为外墙面面层"
+  },
+  {
+    "alias_pattern": "楼栋外立面",
+    "target_catalog_id": "CP-003-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "同义词清洗：外立面按标准目录理解为外墙面面层"
+  },
+  {
+    "alias_pattern": "外墙涂料",
+    "target_catalog_id": "CP-003-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面面层/块料/涂料/幕墙相关口语词"
+  },
+  {
+    "alias_pattern": "外墙粉刷",
+    "target_catalog_id": "CP-003-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面面层/块料/涂料/幕墙相关口语词"
+  },
+  {
+    "alias_pattern": "外墙翻新",
+    "target_catalog_id": "CP-003-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面面层/块料/涂料/幕墙相关口语词"
+  },
+  {
+    "alias_pattern": "外墙砖",
+    "target_catalog_id": "CP-003-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面面层/块料/涂料/幕墙相关口语词"
+  },
+  {
+    "alias_pattern": "外墙瓷砖",
+    "target_catalog_id": "CP-003-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面面层/块料/涂料/幕墙相关口语词"
+  },
+  {
+    "alias_pattern": "外墙石材",
+    "target_catalog_id": "CP-003-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面面层/块料/涂料/幕墙相关口语词"
+  },
+  {
+    "alias_pattern": "玻璃幕墙",
+    "target_catalog_id": "CP-003-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面面层/块料/涂料/幕墙相关口语词"
+  },
+  {
+    "alias_pattern": "幕墙",
+    "target_catalog_id": "CP-003-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面面层/块料/涂料/幕墙相关口语词"
+  },
+  {
+    "alias_pattern": "外墙密封胶",
+    "target_catalog_id": "CP-003-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面面层/块料/涂料/幕墙相关口语词"
+  },
+  {
+    "alias_pattern": "外保温",
     "target_catalog_id": "CP-003-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "位置不明时复核",
-    "priority": 60,
-    "notes": "外墙外保温层明确时召回"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面外保温层口语词"
   },
   {
-    "alias_pattern": "屋顶|屋面|瓦屋面|屋脊|檐口|雨棚",
-    "object_group": "",
+    "alias_pattern": "外墙保温",
+    "target_catalog_id": "CP-003-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面外保温层口语词"
+  },
+  {
+    "alias_pattern": "外墙保温层",
+    "target_catalog_id": "CP-003-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面外保温层口语词"
+  },
+  {
+    "alias_pattern": "外立面保温",
+    "target_catalog_id": "CP-003-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "外墙面外保温层口语词"
+  },
+  {
+    "alias_pattern": "楼顶",
     "target_catalog_id": "CP-002-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "渗漏/防水语义更强时优先防水层",
-    "priority": 60,
-    "notes": "屋顶归一为屋面"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "屋面口语词"
   },
   {
-    "alias_pattern": "屋顶防水|屋面防水|屋面渗水|屋顶渗水|房屋渗水|漏水维修|渗水维修",
-    "object_group": "",
+    "alias_pattern": "屋顶",
+    "target_catalog_id": "CP-002-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "屋面口语词"
+  },
+  {
+    "alias_pattern": "楼面屋顶",
+    "target_catalog_id": "CP-002-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "屋面口语词"
+  },
+  {
+    "alias_pattern": "楼顶防水",
     "target_catalog_id": "CP-002-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "位置不明时强制复核",
-    "priority": 70,
-    "notes": "渗漏常见候选：屋面防水；还需候选逻辑同时给外墙/地下室等可能项"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "屋面防水层口语词"
   },
   {
-    "alias_pattern": "楼道|楼梯间|走廊|过街楼|进户通道|单元门厅|大堂|大厅",
-    "object_group": "",
+    "alias_pattern": "屋顶防水",
+    "target_catalog_id": "CP-002-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "屋面防水层口语词"
+  },
+  {
+    "alias_pattern": "屋面防水",
+    "target_catalog_id": "CP-002-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "屋面防水层口语词"
+  },
+  {
+    "alias_pattern": "楼面防水",
+    "target_catalog_id": "CP-002-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "屋面防水层口语词"
+  },
+  {
+    "alias_pattern": "楼道墙面",
     "target_catalog_id": "CP-004-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "涉及地面/天棚时可能复合",
-    "priority": 50,
-    "notes": "公共室内空间词，只召回内墙面候选，不应排除地面/天棚候选"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道内墙面或块材"
   },
   {
-    "alias_pattern": "内墙粉刷|墙面粉刷|白化|涂料翻新",
-    "object_group": "",
+    "alias_pattern": "楼梯间墙面",
     "target_catalog_id": "CP-004-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "需要结合楼道/门厅/地下室等位置复核",
-    "priority": 50,
-    "notes": "墙面装饰动作词，低权重"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道内墙面或块材"
   },
   {
-    "alias_pattern": "吊顶|天棚",
-    "object_group": "",
+    "alias_pattern": "走廊墙面",
+    "target_catalog_id": "CP-004-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道内墙面或块材"
+  },
+  {
+    "alias_pattern": "门厅墙面",
+    "target_catalog_id": "CP-004-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道内墙面或块材"
+  },
+  {
+    "alias_pattern": "公共走廊墙面",
+    "target_catalog_id": "CP-004-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道内墙面或块材"
+  },
+  {
+    "alias_pattern": "墙砖",
+    "target_catalog_id": "CP-004-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "位置不明的墙砖优先召回室内公共通道内墙面块材；最终需结合上下文复核"
+  },
+  {
+    "alias_pattern": "楼道墙砖",
+    "target_catalog_id": "CP-004-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道内墙面或块材"
+  },
+  {
+    "alias_pattern": "楼梯间墙砖",
+    "target_catalog_id": "CP-004-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道内墙面或块材"
+  },
+  {
+    "alias_pattern": "走廊墙砖",
+    "target_catalog_id": "CP-004-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道内墙面或块材"
+  },
+  {
+    "alias_pattern": "楼道吊顶",
     "target_catalog_id": "CP-004-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 60,
-    "notes": "明确天棚吊顶"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道天棚/吊顶"
   },
   {
-    "alias_pattern": "扶手|栏板",
-    "object_group": "",
+    "alias_pattern": "楼梯间吊顶",
+    "target_catalog_id": "CP-004-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道天棚/吊顶"
+  },
+  {
+    "alias_pattern": "走廊吊顶",
+    "target_catalog_id": "CP-004-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道天棚/吊顶"
+  },
+  {
+    "alias_pattern": "门厅吊顶",
+    "target_catalog_id": "CP-004-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道天棚/吊顶"
+  },
+  {
+    "alias_pattern": "公共走廊吊顶",
+    "target_catalog_id": "CP-004-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道天棚/吊顶"
+  },
+  {
+    "alias_pattern": "楼道扶手",
     "target_catalog_id": "CP-004-04",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "可能属于室内共用部位，也可能属于室外其它共用设施",
-    "priority": 50,
-    "notes": "扶手/栏板位置不明时需复核"
-  },
-  {
-    "alias_pattern": "地下室地面|地下室墙面|车库地坪|地下车库地坪|地坪",
-    "object_group": "",
-    "target_catalog_id": "CP-005-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "地坪可属于地下室或道路/停车场，需结合上下文",
-    "priority": 50,
-    "notes": "地坪低权重召回"
-  },
-  {
-    "alias_pattern": "地下室天棚|车库天棚",
-    "object_group": "",
-    "target_catalog_id": "CP-005-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 60,
-    "notes": "地下室天棚明确时召回"
-  },
-  {
-    "alias_pattern": "地下室防水|地下室渗漏|地下室渗水",
-    "object_group": "",
-    "target_catalog_id": "CP-005-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 70,
-    "notes": "地下室防水层明确"
-  },
-  {
-    "alias_pattern": "防盗门|单元门|门窗|自动门|地弹簧",
-    "object_group": "",
-    "target_catalog_id": "CP-006-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "若为小区大门/电动大门则应转围墙、大门",
-    "priority": 50,
-    "notes": "门窗候选，避免单字“门”alias"
-  },
-  {
-    "alias_pattern": "人行道|道边石|侧石|路面|路面垫层|道路翻修|道路维修|停车场地面",
-    "object_group": "",
-    "target_catalog_id": "CF-007-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "基础和面层可能复合",
-    "priority": 55,
-    "notes": "道路/停车场面层候选"
-  },
-  {
-    "alias_pattern": "道路基础|基层沉降",
-    "object_group": "",
-    "target_catalog_id": "CF-007-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 60,
-    "notes": "道路基础明确"
-  },
-  {
-    "alias_pattern": "交通标识|道路划线|停车位划线",
-    "object_group": "",
-    "target_catalog_id": "CF-007-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造/新增",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 60,
-    "notes": "交通标识/画线明确"
-  },
-  {
-    "alias_pattern": "路灯|草坪灯|灯杆",
-    "object_group": "",
-    "target_catalog_id": "CF-014-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "若为道路附属灯饰也可能 CF-007-04",
-    "priority": 55,
-    "notes": "灯具类低权重，不能只凭“灯”"
-  },
-  {
-    "alias_pattern": "广场面层|广场地面|广场铺装",
-    "object_group": "",
-    "target_catalog_id": "CF-008-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 55,
-    "notes": "广场面层明确"
-  },
-  {
-    "alias_pattern": "沟渠侧壁|河道护墙|河岸护墙|水池侧壁",
-    "object_group": "",
-    "target_catalog_id": "CF-009-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 60,
-    "notes": "沟渠/水池基础及侧壁"
-  },
-  {
-    "alias_pattern": "水景|中央水池|水池防水|泳池防水|游泳池防水",
-    "object_group": "",
-    "target_catalog_id": "CF-009-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "喷泉可能涉及给排水/电气复合",
-    "priority": 55,
-    "notes": "水池防水层候选"
-  },
-  {
-    "alias_pattern": "喷泉|亲水平台|水景泵",
-    "object_group": "",
-    "target_catalog_id": "CF-009-04",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "可能涉及电气复合",
-    "priority": 55,
-    "notes": "沟渠水池给排水设施设备"
-  },
-  {
-    "alias_pattern": "景观木制品|木制葡萄架|木座椅|木构件|花架|塑料座椅|金属座椅",
-    "object_group": "",
-    "target_catalog_id": "CF-010-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 60,
-    "notes": "环境小品景观原木/竹/座椅类"
-  },
-  {
-    "alias_pattern": "景观亭|景观廊|亭廊",
-    "object_group": "",
-    "target_catalog_id": "CF-010-04",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 60,
-    "notes": "景观亭廊明确"
-  },
-  {
-    "alias_pattern": "儿童乐园|游乐设施|文体设施|健身器材",
-    "object_group": "",
-    "target_catalog_id": "CF-011-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "若是景观木制品则转环境小品景观",
-    "priority": 60,
-    "notes": "文体设施明确"
-  },
-  {
-    "alias_pattern": "羽毛球场|篮球场|球场|运动场",
-    "object_group": "",
-    "target_catalog_id": "CF-011-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "基础复合时加 CF-011-01",
-    "priority": 60,
-    "notes": "运动场所面层候选"
-  },
-  {
-    "alias_pattern": "围墙|围栏",
-    "object_group": "",
-    "target_catalog_id": "CF-012-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "围栏也可能 CF-014-01",
-    "priority": 55,
-    "notes": "围墙/围栏位置需复核"
-  },
-  {
-    "alias_pattern": "小区大门|铁质大门|木质大门",
-    "object_group": "",
-    "target_catalog_id": "CF-012-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 60,
-    "notes": "围墙大门明确"
-  },
-  {
-    "alias_pattern": "电动大门|伸缩门|道闸门",
-    "object_group": "",
-    "target_catalog_id": "CF-012-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "道闸也可能弱电停车场系统",
-    "priority": 60,
-    "notes": "电动大门明确"
-  },
-  {
-    "alias_pattern": "花台|花坛|树池",
-    "object_group": "",
-    "target_catalog_id": "CF-013-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 55,
-    "notes": "绿化设施花台花坛"
-  },
-  {
-    "alias_pattern": "喷灌|灌溉系统",
-    "object_group": "",
-    "target_catalog_id": "CF-013-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 60,
-    "notes": "绿化喷灌设施"
-  },
-  {
-    "alias_pattern": "栏杆|护栏|扶栏",
-    "object_group": "",
-    "target_catalog_id": "CF-014-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "室内楼梯扶手可能是 CP-004-04",
-    "priority": 50,
-    "notes": "其它共用设施栏杆候选"
-  },
-  {
-    "alias_pattern": "标识牌|信息栏|公告栏",
-    "object_group": "",
-    "target_catalog_id": "CF-014-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造/新增",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 55,
-    "notes": "标识牌/信息栏明确"
-  },
-  {
-    "alias_pattern": "车棚|非机动车棚|自行车棚",
-    "object_group": "",
-    "target_catalog_id": "CF-014-04",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 60,
-    "notes": "车棚明确"
-  },
-  {
-    "alias_pattern": "配电房|门卫室|垃圾房",
-    "object_group": "",
-    "target_catalog_id": "CF-014-05",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "参照共用部位，需复核",
-    "priority": 50,
-    "notes": "其它共用设施设备房屋"
-  },
-  {
-    "alias_pattern": "公共厕所|厕所|卫生间",
-    "object_group": "",
-    "target_catalog_id": "CF-014-06",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "需确认是否共用厕所",
-    "priority": 50,
-    "notes": "厕所/卫生间低权重候选"
-  },
-  {
-    "alias_pattern": "窨井|检查井|检测井|雨水井|污水井|水表井|给排水井",
-    "object_group": "",
-    "target_catalog_id": "CF-015-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 70,
-    "notes": "给排水井道明确"
-  },
-  {
-    "alias_pattern": "二次供水|直供水|生活泵|供水泵|地下泵房|泵房设备|变频供水|给水泵",
-    "object_group": "",
-    "target_catalog_id": "CF-015-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "泵房可能涉及供配电/消防，需看上下文",
-    "priority": 65,
-    "notes": "给排水机电设备"
-  },
-  {
-    "alias_pattern": "生化池|化粪池|隔油池|调节池|污水池",
-    "object_group": "",
-    "target_catalog_id": "CF-015-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 70,
-    "notes": "处理池基础及侧壁"
-  },
-  {
-    "alias_pattern": "落水管|雨水管|污水管|污水总管|排水总管|给水总管|下水管|排污管|给排水管",
-    "object_group": "",
-    "target_catalog_id": "CF-015-04",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 70,
-    "notes": "给排水管道及附件；避免单独“管道”"
-  },
-  {
-    "alias_pattern": "闸阀|截止阀|蝶阀|减压阀|止回阀|水表|水泵接合器|泵接器",
-    "object_group": "",
-    "target_catalog_id": "CF-015-05",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "消防上下文中可能属于消防系统",
-    "priority": 60,
-    "notes": "给排水阀门/仪表候选"
-  },
-  {
-    "alias_pattern": "生活水箱|生活水池|蓄水池",
-    "object_group": "",
-    "target_catalog_id": "CF-015-06",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "消防水箱/水池应归消防",
-    "priority": 60,
-    "notes": "给排水水箱水池"
-  },
-  {
-    "alias_pattern": "强电井|电井",
-    "object_group": "",
-    "target_catalog_id": "CF-016-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "弱电井/消防电源上下文需复核",
-    "priority": 55,
-    "notes": "供配电强电井"
-  },
-  {
-    "alias_pattern": "高压柜|低压柜|配电柜|配电箱|环网柜",
-    "object_group": "",
-    "target_catalog_id": "CF-016-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "消防电源控制柜另归消防电源",
-    "priority": 60,
-    "notes": "高低压电器"
-  },
-  {
-    "alias_pattern": "变压器",
-    "object_group": "",
-    "target_catalog_id": "CF-016-03",
-    "target_level1": "",
-    "target_level2": "",
     "match_type": "contains",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 70,
-    "notes": "变压器明确"
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道扶手栏板"
   },
   {
-    "alias_pattern": "发电机",
-    "object_group": "",
-    "target_catalog_id": "CF-016-05",
-    "target_level1": "",
-    "target_level2": "",
+    "alias_pattern": "楼梯扶手",
+    "target_catalog_id": "CP-004-04",
     "match_type": "contains",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "消防备用电源上下文需复核",
-    "priority": 60,
-    "notes": "发电机及附属系统"
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道扶手栏板"
   },
   {
-    "alias_pattern": "母线",
-    "object_group": "",
-    "target_catalog_id": "CF-016-06",
-    "target_level1": "",
-    "target_level2": "",
+    "alias_pattern": "走廊扶手",
+    "target_catalog_id": "CP-004-04",
     "match_type": "contains",
-    "action_hint": "维修/更新",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 60,
-    "notes": "母线明确"
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道扶手栏板"
   },
   {
-    "alias_pattern": "电缆铺设|电缆维修|强电电缆|供电电缆|电力电缆",
-    "object_group": "",
-    "target_catalog_id": "CF-016-07",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/新增/改建",
-    "status_hint": "",
-    "review_hint": "弱电/消防上下文需复核",
-    "priority": 60,
-    "notes": "供配电线缆；避免单独“线路”"
+    "alias_pattern": "公共栏杆",
+    "target_catalog_id": "CP-004-04",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室内门厅/楼梯间/走廊通道扶手栏板"
   },
   {
-    "alias_pattern": "强电桥架|电缆桥架|供电桥架",
-    "object_group": "",
-    "target_catalog_id": "CF-016-08",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/新增/改建",
-    "status_hint": "",
-    "review_hint": "弱电桥架/消防桥架另需复核",
-    "priority": 60,
-    "notes": "供配电线缆支吊架桥架"
-  },
-  {
-    "alias_pattern": "电梯|货梯|客梯|乘客电梯|住宅电梯|老旧电梯|垂直电梯",
-    "object_group": "",
-    "target_catalog_id": "CF-017-00",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "强制复核：一级明确但二级未明确",
-    "priority": 75,
-    "notes": "family alias：只召回电梯未明确具体子项，不直接猜部件"
-  },
-  {
-    "alias_pattern": "曳引机|蜗轮|蜗杆",
-    "object_group": "",
+    "alias_pattern": "曳引机",
     "target_catalog_id": "CF-017-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "电梯曳引机明确"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯曳引机"
   },
   {
-    "alias_pattern": "制动器|抱闸",
-    "object_group": "",
+    "alias_pattern": "电梯曳引机",
+    "target_catalog_id": "CF-017-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯曳引机"
+  },
+  {
+    "alias_pattern": "制动器",
     "target_catalog_id": "CF-017-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "电梯制动器明确"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯制动器"
   },
   {
-    "alias_pattern": "电梯电动机|电梯电机",
-    "object_group": "",
+    "alias_pattern": "抱闸",
+    "target_catalog_id": "CF-017-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯制动器"
+  },
+  {
+    "alias_pattern": "电梯抱闸",
+    "target_catalog_id": "CF-017-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯制动器"
+  },
+  {
+    "alias_pattern": "电磁制动器",
+    "target_catalog_id": "CF-017-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯制动器"
+  },
+  {
+    "alias_pattern": "电梯电动机",
     "target_catalog_id": "CF-017-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "限定电梯上下文"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯电动机"
   },
   {
-    "alias_pattern": "导向轮|曳引轮",
-    "object_group": "",
+    "alias_pattern": "电梯电机",
+    "target_catalog_id": "CF-017-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯电动机"
+  },
+  {
+    "alias_pattern": "导向轮",
     "target_catalog_id": "CF-017-04",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "电梯轮组明确"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯导向轮/曳引轮"
   },
   {
-    "alias_pattern": "电梯钢丝绳|电梯钢带|曳引带|绳头组合",
-    "object_group": "",
+    "alias_pattern": "曳引轮",
+    "target_catalog_id": "CF-017-04",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯导向轮/曳引轮"
+  },
+  {
+    "alias_pattern": "电梯导向轮",
+    "target_catalog_id": "CF-017-04",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯导向轮/曳引轮"
+  },
+  {
+    "alias_pattern": "电梯曳引轮",
+    "target_catalog_id": "CF-017-04",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯导向轮/曳引轮"
+  },
+  {
+    "alias_pattern": "钢丝绳",
     "target_catalog_id": "CF-017-05",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "钢带/曳引带按钢丝绳近似，需复核",
-    "priority": 75,
-    "notes": "限定电梯上下文"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯钢丝绳/曳引带；不应回退到未明确具体子项"
   },
   {
-    "alias_pattern": "限速器|限速系统|安全钳|上行超速保护",
-    "object_group": "",
+    "alias_pattern": "曳引钢丝绳",
+    "target_catalog_id": "CF-017-05",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯钢丝绳/曳引带；不应回退到未明确具体子项"
+  },
+  {
+    "alias_pattern": "曳引绳",
+    "target_catalog_id": "CF-017-05",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯钢丝绳/曳引带；不应回退到未明确具体子项"
+  },
+  {
+    "alias_pattern": "主钢索",
+    "target_catalog_id": "CF-017-05",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯钢丝绳/曳引带；不应回退到未明确具体子项"
+  },
+  {
+    "alias_pattern": "电梯钢丝绳",
+    "target_catalog_id": "CF-017-05",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯钢丝绳/曳引带；不应回退到未明确具体子项"
+  },
+  {
+    "alias_pattern": "限速器钢丝绳",
+    "target_catalog_id": "CF-017-05",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯钢丝绳/曳引带；不应回退到未明确具体子项"
+  },
+  {
+    "alias_pattern": "钢带",
+    "target_catalog_id": "CF-017-05",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯钢丝绳/曳引带；不应回退到未明确具体子项"
+  },
+  {
+    "alias_pattern": "曳引带",
+    "target_catalog_id": "CF-017-05",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯钢丝绳/曳引带；不应回退到未明确具体子项"
+  },
+  {
+    "alias_pattern": "限速器",
     "target_catalog_id": "CF-017-06",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "限速系统明确"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯限速系统"
   },
   {
-    "alias_pattern": "电梯控制柜|励磁柜|电梯主板|电梯主控板|电梯电路板|电梯控制面板|电梯通讯板",
-    "object_group": "",
+    "alias_pattern": "限速系统",
+    "target_catalog_id": "CF-017-06",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯限速系统"
+  },
+  {
+    "alias_pattern": "安全钳",
+    "target_catalog_id": "CF-017-06",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯限速系统"
+  },
+  {
+    "alias_pattern": "张紧轮",
+    "target_catalog_id": "CF-017-06",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯限速系统"
+  },
+  {
+    "alias_pattern": "上行超速保护",
+    "target_catalog_id": "CF-017-06",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯限速系统"
+  },
+  {
+    "alias_pattern": "限速器张紧轮",
+    "target_catalog_id": "CF-017-06",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯限速系统"
+  },
+  {
+    "alias_pattern": "控制柜",
     "target_catalog_id": "CF-017-07",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "限定电梯上下文"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯控制柜/控制板类"
   },
   {
-    "alias_pattern": "层门|轿门|轿厢门|门机板|导靴|吊门轮|防火层门|玻璃轿壁",
-    "object_group": "",
+    "alias_pattern": "励磁柜",
+    "target_catalog_id": "CF-017-07",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯控制柜/控制板类"
+  },
+  {
+    "alias_pattern": "电梯控制柜",
+    "target_catalog_id": "CF-017-07",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯控制柜/控制板类"
+  },
+  {
+    "alias_pattern": "主电路板",
+    "target_catalog_id": "CF-017-07",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯控制柜/控制板类"
+  },
+  {
+    "alias_pattern": "通讯板",
+    "target_catalog_id": "CF-017-07",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯控制柜/控制板类"
+  },
+  {
+    "alias_pattern": "通信板",
+    "target_catalog_id": "CF-017-07",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯控制柜/控制板类"
+  },
+  {
+    "alias_pattern": "主板",
+    "target_catalog_id": "CF-017-07",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯控制柜/控制板类"
+  },
+  {
+    "alias_pattern": "主控板",
+    "target_catalog_id": "CF-017-07",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯控制柜/控制板类"
+  },
+  {
+    "alias_pattern": "电路板",
+    "target_catalog_id": "CF-017-07",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯控制柜/控制板类"
+  },
+  {
+    "alias_pattern": "变频器主板",
+    "target_catalog_id": "CF-017-07",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯控制柜/控制板类"
+  },
+  {
+    "alias_pattern": "控制面板",
+    "target_catalog_id": "CF-017-07",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯控制柜/控制板类"
+  },
+  {
+    "alias_pattern": "层门",
     "target_catalog_id": "CF-017-08",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "电梯层轿门系统"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯层、轿门系统"
+  },
+  {
+    "alias_pattern": "轿门",
+    "target_catalog_id": "CF-017-08",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯层、轿门系统"
+  },
+  {
+    "alias_pattern": "轿厢门",
+    "target_catalog_id": "CF-017-08",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯层、轿门系统"
+  },
+  {
+    "alias_pattern": "门机板",
+    "target_catalog_id": "CF-017-08",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯层、轿门系统"
+  },
+  {
+    "alias_pattern": "门挂板",
+    "target_catalog_id": "CF-017-08",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯层、轿门系统"
+  },
+  {
+    "alias_pattern": "门锁",
+    "target_catalog_id": "CF-017-08",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯层、轿门系统"
+  },
+  {
+    "alias_pattern": "导靴",
+    "target_catalog_id": "CF-017-08",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯层、轿门系统"
+  },
+  {
+    "alias_pattern": "吊门轮",
+    "target_catalog_id": "CF-017-08",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯层、轿门系统"
+  },
+  {
+    "alias_pattern": "玻璃轿壁",
+    "target_catalog_id": "CF-017-08",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯层、轿门系统"
+  },
+  {
+    "alias_pattern": "防火层门",
+    "target_catalog_id": "CF-017-08",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯层、轿门系统"
   },
   {
     "alias_pattern": "缓冲器",
-    "object_group": "",
     "target_catalog_id": "CF-017-09",
-    "target_level1": "",
-    "target_level2": "",
     "match_type": "contains",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "电梯缓冲器明确"
+    "priority": 10,
+    "notes": "明确电梯缓冲器；缓存器为常见误写"
   },
   {
-    "alias_pattern": "电梯紧急报警|呼叫电话|三方通话|五方通话|紧急通话|轿厢对讲|电梯对讲",
-    "object_group": "",
+    "alias_pattern": "缓存器",
+    "target_catalog_id": "CF-017-09",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯缓冲器；缓存器为常见误写"
+  },
+  {
+    "alias_pattern": "三方通话",
     "target_catalog_id": "CF-017-10",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "三方/五方通话按紧急报警系统近似",
-    "priority": 75,
-    "notes": "限定电梯上下文"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯紧急报警系统"
   },
   {
-    "alias_pattern": "呼梯|电梯按钮|外呼按钮|召唤按钮",
-    "object_group": "",
+    "alias_pattern": "五方通话",
+    "target_catalog_id": "CF-017-10",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯紧急报警系统"
+  },
+  {
+    "alias_pattern": "紧急通话",
+    "target_catalog_id": "CF-017-10",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯紧急报警系统"
+  },
+  {
+    "alias_pattern": "呼叫电话",
+    "target_catalog_id": "CF-017-10",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯紧急报警系统"
+  },
+  {
+    "alias_pattern": "电梯对讲",
+    "target_catalog_id": "CF-017-10",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯紧急报警系统"
+  },
+  {
+    "alias_pattern": "轿厢对讲",
+    "target_catalog_id": "CF-017-10",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯紧急报警系统"
+  },
+  {
+    "alias_pattern": "电梯紧急报警",
+    "target_catalog_id": "CF-017-10",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯紧急报警系统"
+  },
+  {
+    "alias_pattern": "呼梯",
     "target_catalog_id": "CF-017-11",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "呼梯系统明确"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯呼梯系统"
   },
   {
-    "alias_pattern": "液压梯|液压泵站|电动单向阀|手动下降阀|限速切断阀",
-    "object_group": "",
+    "alias_pattern": "呼梯按钮",
+    "target_catalog_id": "CF-017-11",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯呼梯系统"
+  },
+  {
+    "alias_pattern": "外呼按钮",
+    "target_catalog_id": "CF-017-11",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯呼梯系统"
+  },
+  {
+    "alias_pattern": "电梯按钮",
+    "target_catalog_id": "CF-017-11",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯呼梯系统"
+  },
+  {
+    "alias_pattern": "召唤按钮",
+    "target_catalog_id": "CF-017-11",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确电梯呼梯系统"
+  },
+  {
+    "alias_pattern": "液压梯",
     "target_catalog_id": "CF-017-12",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "液压梯明确"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确液压梯"
   },
   {
-    "alias_pattern": "自动扶梯|自动人行道|扶手带|梯级链|梯级|踏板|扶梯滚轮",
-    "object_group": "",
+    "alias_pattern": "液压泵站",
+    "target_catalog_id": "CF-017-12",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确液压梯"
+  },
+  {
+    "alias_pattern": "电动单向阀",
+    "target_catalog_id": "CF-017-12",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确液压梯"
+  },
+  {
+    "alias_pattern": "手动下降阀",
+    "target_catalog_id": "CF-017-12",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确液压梯"
+  },
+  {
+    "alias_pattern": "自动扶梯",
     "target_catalog_id": "CF-017-13",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 80,
-    "notes": "自动扶梯及自动人行道明确"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确自动扶梯及自动人行道"
   },
   {
-    "alias_pattern": "弱电|智能化|弱电智能化|安防系统|安保系统",
-    "object_group": "",
-    "target_catalog_id": "CF-018-00",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "强制复核：一级明确但二级未明确",
-    "priority": 75,
-    "notes": "family alias：需先新增 CF-018-00"
+    "alias_pattern": "自动人行道",
+    "target_catalog_id": "CF-017-13",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确自动扶梯及自动人行道"
   },
   {
-    "alias_pattern": "楼宇自控|楼控|BA系统|传感器|执行器",
-    "object_group": "",
-    "target_catalog_id": "CF-018-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "传感器/执行器可能属于其它系统，需结合弱电上下文",
-    "priority": 65,
-    "notes": "楼宇自动控制前端设备"
+    "alias_pattern": "扶手带",
+    "target_catalog_id": "CF-017-13",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确自动扶梯及自动人行道"
   },
   {
-    "alias_pattern": "视频监控|监控摄像机|摄像机|拾音器|高清监控",
-    "object_group": "",
+    "alias_pattern": "梯级",
+    "target_catalog_id": "CF-017-13",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确自动扶梯及自动人行道"
+  },
+  {
+    "alias_pattern": "踏板",
+    "target_catalog_id": "CF-017-13",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确自动扶梯及自动人行道"
+  },
+  {
+    "alias_pattern": "梯级链",
+    "target_catalog_id": "CF-017-13",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确自动扶梯及自动人行道"
+  },
+  {
+    "alias_pattern": "扶梯滚轮",
+    "target_catalog_id": "CF-017-13",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确自动扶梯及自动人行道"
+  },
+  {
+    "alias_pattern": "滚轮",
+    "target_catalog_id": "CF-017-13",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "明确自动扶梯及自动人行道"
+  },
+  {
+    "alias_pattern": "电梯监控",
     "target_catalog_id": "CF-018-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 70,
-    "notes": "视频监控前端设备；单独“监控”不设置为强alias"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控前端设备；电梯只是位置时不应归电梯"
   },
   {
-    "alias_pattern": "门禁|读卡器|电锁|出门开关",
-    "object_group": "",
+    "alias_pattern": "轿厢监控",
+    "target_catalog_id": "CF-018-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控前端设备；电梯只是位置时不应归电梯"
+  },
+  {
+    "alias_pattern": "电梯摄像头",
+    "target_catalog_id": "CF-018-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控前端设备；电梯只是位置时不应归电梯"
+  },
+  {
+    "alias_pattern": "轿厢摄像头",
+    "target_catalog_id": "CF-018-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控前端设备；电梯只是位置时不应归电梯"
+  },
+  {
+    "alias_pattern": "监控摄像头",
+    "target_catalog_id": "CF-018-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控前端设备；电梯只是位置时不应归电梯"
+  },
+  {
+    "alias_pattern": "摄像机",
+    "target_catalog_id": "CF-018-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控前端设备；电梯只是位置时不应归电梯"
+  },
+  {
+    "alias_pattern": "球机",
+    "target_catalog_id": "CF-018-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控前端设备；电梯只是位置时不应归电梯"
+  },
+  {
+    "alias_pattern": "拾音器",
+    "target_catalog_id": "CF-018-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控前端设备；电梯只是位置时不应归电梯"
+  },
+  {
+    "alias_pattern": "光收发器",
+    "target_catalog_id": "CF-018-12",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控中央处理单元/传输相关设备"
+  },
+  {
+    "alias_pattern": "收发器",
+    "target_catalog_id": "CF-018-12",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控中央处理单元/传输相关设备"
+  },
+  {
+    "alias_pattern": "交换机",
+    "target_catalog_id": "CF-018-12",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控中央处理单元/传输相关设备"
+  },
+  {
+    "alias_pattern": "录像机",
+    "target_catalog_id": "CF-018-12",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控中央处理单元/传输相关设备"
+  },
+  {
+    "alias_pattern": "硬盘录像机",
+    "target_catalog_id": "CF-018-12",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控中央处理单元/传输相关设备"
+  },
+  {
+    "alias_pattern": "NVR",
+    "target_catalog_id": "CF-018-12",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控中央处理单元/传输相关设备"
+  },
+  {
+    "alias_pattern": "监控服务器",
+    "target_catalog_id": "CF-018-12",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控中央处理单元/传输相关设备"
+  },
+  {
+    "alias_pattern": "存储器",
+    "target_catalog_id": "CF-018-12",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控中央处理单元/传输相关设备"
+  },
+  {
+    "alias_pattern": "监视器",
+    "target_catalog_id": "CF-018-12",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "视频监控中央处理单元/传输相关设备"
+  },
+  {
+    "alias_pattern": "门禁",
     "target_catalog_id": "CF-018-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 70,
-    "notes": "门禁前端设备"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "门禁前端设备；电梯只是位置/联动修饰时不应归电梯"
   },
   {
-    "alias_pattern": "对讲系统|户内机|门口机|可视对讲|楼宇对讲",
-    "object_group": "",
+    "alias_pattern": "梯控",
+    "target_catalog_id": "CF-018-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "门禁前端设备；电梯只是位置/联动修饰时不应归电梯"
+  },
+  {
+    "alias_pattern": "电梯门禁",
+    "target_catalog_id": "CF-018-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "门禁前端设备；电梯只是位置/联动修饰时不应归电梯"
+  },
+  {
+    "alias_pattern": "门禁读卡器",
+    "target_catalog_id": "CF-018-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "门禁前端设备；电梯只是位置/联动修饰时不应归电梯"
+  },
+  {
+    "alias_pattern": "电锁",
+    "target_catalog_id": "CF-018-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "门禁前端设备；电梯只是位置/联动修饰时不应归电梯"
+  },
+  {
+    "alias_pattern": "出门开关",
+    "target_catalog_id": "CF-018-03",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "门禁前端设备；电梯只是位置/联动修饰时不应归电梯"
+  },
+  {
+    "alias_pattern": "可视对讲",
     "target_catalog_id": "CF-018-04",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "若为电梯三方/五方通话，则电梯紧急报警优先",
-    "priority": 70,
-    "notes": "对讲前端设备"
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "对讲系统前端设备"
   },
   {
-    "alias_pattern": "周界防范|红外对射|电子围栏|地址模块",
-    "object_group": "",
-    "target_catalog_id": "CF-018-05",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 70,
-    "notes": "周界防范前端设备"
+    "alias_pattern": "楼宇对讲",
+    "target_catalog_id": "CF-018-04",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "对讲系统前端设备"
   },
   {
-    "alias_pattern": "公共广播|广播系统|扬声器",
-    "object_group": "",
-    "target_catalog_id": "CF-018-06",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 70,
-    "notes": "公共广播前端设备"
+    "alias_pattern": "对讲系统",
+    "target_catalog_id": "CF-018-04",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "对讲系统前端设备"
   },
   {
-    "alias_pattern": "停车场系统|车牌识别|车辆识别|车辆检测|停车场道闸",
-    "object_group": "",
+    "alias_pattern": "户内机",
+    "target_catalog_id": "CF-018-04",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "对讲系统前端设备"
+  },
+  {
+    "alias_pattern": "门口机",
+    "target_catalog_id": "CF-018-04",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "对讲系统前端设备"
+  },
+  {
+    "alias_pattern": "车牌识别系统",
     "target_catalog_id": "CF-018-07",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "电动大门/道闸门可能归围墙大门",
-    "priority": 70,
-    "notes": "停车场系统前端设备"
-  },
-  {
-    "alias_pattern": "信息发布|发布屏|显示屏|信息发布屏",
-    "object_group": "",
-    "target_catalog_id": "CF-018-08",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 70,
-    "notes": "信息发布前端设备"
-  },
-  {
-    "alias_pattern": "弱电线缆|监控线路|门禁线路|对讲线路|弱电线路",
-    "object_group": "",
-    "target_catalog_id": "CF-018-09",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/新增",
-    "status_hint": "",
-    "review_hint": "不要把单独“线路”作为alias",
-    "priority": 65,
-    "notes": "弱电线缆明确"
-  },
-  {
-    "alias_pattern": "弱电桥架|弱电线管|弱电线槽",
-    "object_group": "",
-    "target_catalog_id": "CF-018-10",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/新增/扩建",
-    "status_hint": "",
-    "review_hint": "不要把单独“桥架/线管”作为alias",
-    "priority": 65,
-    "notes": "弱电传输系统线管桥架"
-  },
-  {
-    "alias_pattern": "中央空调|空调主机|冷水机组|压缩机|冷凝器|蒸发器",
-    "object_group": "",
-    "target_catalog_id": "CF-019-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 65,
-    "notes": "空调主机明确"
-  },
-  {
-    "alias_pattern": "空调控制柜|空调控制器|空调主控板|变频器",
-    "object_group": "",
-    "target_catalog_id": "CF-019-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "变频器也可能属给排水/弱电，需结合上下文",
-    "priority": 60,
-    "notes": "空调控制系统"
-  },
-  {
-    "alias_pattern": "风道保温|空调风道|空调风管",
-    "object_group": "",
-    "target_catalog_id": "CF-019-04",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "消防防排烟上下文另归消防",
-    "priority": 65,
-    "notes": "空调风道"
-  },
-  {
-    "alias_pattern": "风机盘管|换热器|集水器|分水器|分集水器",
-    "object_group": "",
-    "target_catalog_id": "CF-019-06",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "热源系统上下文需复核",
-    "priority": 60,
-    "notes": "空调交换设备"
-  },
-  {
-    "alias_pattern": "冷却塔",
-    "object_group": "",
-    "target_catalog_id": "CF-019-07",
-    "target_level1": "",
-    "target_level2": "",
     "match_type": "contains",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 65,
-    "notes": "冷却塔设备明确"
+    "priority": 10,
+    "notes": "停车场管理系统入口/识别设备口语词"
   },
   {
-    "alias_pattern": "锅炉|热源系统",
-    "object_group": "",
-    "target_catalog_id": "CF-020-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 65,
-    "notes": "热源锅炉本体及系统"
+    "alias_pattern": "车牌识别",
+    "target_catalog_id": "CF-018-07",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "停车场管理系统入口/识别设备口语词"
   },
   {
-    "alias_pattern": "热源控制柜|锅炉控制柜",
-    "object_group": "",
-    "target_catalog_id": "CF-020-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 60,
-    "notes": "热源中央控制/电气系统"
+    "alias_pattern": "道闸",
+    "target_catalog_id": "CF-018-07",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "停车场管理系统入口/出口设备口语词"
   },
   {
-    "alias_pattern": "消防|消防系统|消防设施|消防设备|消防改造|消防维修|消防设施维修|消防设施设备",
-    "object_group": "",
-    "target_catalog_id": "CF-028-00",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "强制复核：一级明确但二级未明确",
-    "priority": 75,
-    "notes": "family alias：需先新增 CF-028-00，不直接猜喷淋/报警/电源"
-  },
-  {
-    "alias_pattern": "火灾自动报警|自动报警|烟感|感烟|温感|感温|手动报警按钮|手报|声光报警|报警主机|联动控制主机|应急电源箱",
-    "object_group": "",
-    "target_catalog_id": "CF-021-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "火灾自动报警系统明确"
-  },
-  {
-    "alias_pattern": "消防泵|喷淋泵|消火栓泵|稳压泵|气压罐",
-    "object_group": "",
+    "alias_pattern": "消防泵",
     "target_catalog_id": "CF-022-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "喷淋及消火栓泵组明确"
-  },
-  {
-    "alias_pattern": "消防管道|消防栓立管|消火栓立管|喷淋管道|消防立管",
-    "object_group": "",
-    "target_catalog_id": "CF-022-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "消防管道及附件明确"
-  },
-  {
-    "alias_pattern": "湿式报警阀|压力开关|水流指示器|水力警铃",
-    "object_group": "",
-    "target_catalog_id": "CF-022-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "喷淋报警阀/控制线路明确"
-  },
-  {
-    "alias_pattern": "喷头|消火栓|消防栓|消防泵接器|消防阀门",
-    "object_group": "",
-    "target_catalog_id": "CF-022-04",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "喷头/消火栓/泵接器/阀门明确"
-  },
-  {
-    "alias_pattern": "消防线缆|消防线路",
-    "object_group": "",
-    "target_catalog_id": "CF-022-05",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/新增",
-    "status_hint": "",
-    "review_hint": "火灾报警线路/消防电源线路也可能复合",
-    "priority": 70,
-    "notes": "消防线缆，不要使用单独“线路”"
-  },
-  {
-    "alias_pattern": "消防水箱|消防水池",
-    "object_group": "",
-    "target_catalog_id": "CF-022-07",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "消防水箱水池明确"
-  },
-  {
-    "alias_pattern": "防排烟|排烟风机|防排烟风机|排烟系统",
-    "object_group": "",
-    "target_catalog_id": "CF-023-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "普通通风/排风需复核",
-    "priority": 75,
-    "notes": "防排烟风机及联动装置"
-  },
-  {
-    "alias_pattern": "防排烟风道|排烟风道|消防风阀|消防风口|排烟风阀|排烟风口",
-    "object_group": "",
-    "target_catalog_id": "CF-023-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "普通通风/排风需复核",
-    "priority": 75,
-    "notes": "防排烟风道及附件"
-  },
-  {
-    "alias_pattern": "防火卷帘门电机|防火卷帘电机",
-    "object_group": "",
-    "target_catalog_id": "CF-024-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "防火卷帘门电机及联动装置"
-  },
-  {
-    "alias_pattern": "防火卷帘门|防火卷帘",
-    "object_group": "",
-    "target_catalog_id": "CF-024-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "防火卷帘门及联动装置"
-  },
-  {
-    "alias_pattern": "防火门|闭门器",
-    "object_group": "",
-    "target_catalog_id": "CF-024-03",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "防火门明确"
-  },
-  {
-    "alias_pattern": "灭火器|气体灭火|泡沫灭火|干粉灭火|消防球|灭火系统",
-    "object_group": "",
-    "target_catalog_id": "CF-025-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "消防球按其它灭火系统近似，需复核",
-    "priority": 70,
-    "notes": "其它灭火系统及灭火器"
-  },
-  {
-    "alias_pattern": "消防电源|消防电源系统|消防电源柜|消防配电柜|消防控制柜|蓄电池",
-    "object_group": "",
-    "target_catalog_id": "CF-026-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "消防电源系统明确"
-  },
-  {
-    "alias_pattern": "应急照明|疏散指示|疏散指示标志|安全出口灯",
-    "object_group": "",
-    "target_catalog_id": "CF-026-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/改造/新增",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "应急照明和疏散指示标志"
-  },
-  {
-    "alias_pattern": "接闪器|避雷针|避雷带",
-    "object_group": "",
-    "target_catalog_id": "CF-027-01",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 65,
-    "notes": "防雷接闪器"
-  },
-  {
-    "alias_pattern": "引下线|接地装置|接地电阻",
-    "object_group": "",
-    "target_catalog_id": "CF-027-02",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 65,
-    "notes": "防雷引下线/接地装置"
-  },
-  {
-    "alias_pattern": "避雷器",
-    "object_group": "",
-    "target_catalog_id": "CF-027-03",
-    "target_level1": "",
-    "target_level2": "",
     "match_type": "contains",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 65,
-    "notes": "防雷避雷器"
+    "priority": 10,
+    "notes": "消防给水系统水泵口语词"
   },
   {
-    "alias_pattern": "浪涌保护器|防雷器|SPD",
-    "object_group": "",
-    "target_catalog_id": "CF-027-04",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 65,
-    "notes": "浪涌保护器"
+    "alias_pattern": "喷淋泵",
+    "target_catalog_id": "CF-022-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "消防给水系统水泵口语词"
   },
   {
-    "alias_pattern": "白蚁|蚁害|灭蚁|防蚁|白蚁防治|白蚁预防|白蚁灭治",
-    "object_group": "",
-    "target_catalog_id": "TERMITE-001",
-    "target_level1": "",
-    "target_level2": "",
-    "match_type": "regex",
-    "action_hint": "预防/灭治",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 75,
-    "notes": "白蚁防治明确"
+    "alias_pattern": "空调主机",
+    "target_catalog_id": "CF-019-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "空调系统主机"
+  },
+  {
+    "alias_pattern": "中央空调主机",
+    "target_catalog_id": "CF-019-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "空调系统主机"
+  },
+  {
+    "alias_pattern": "散水坡",
+    "target_catalog_id": "CF-007-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室外路面/装饰层相关；具体仍由候选和LLM判断"
+  },
+  {
+    "alias_pattern": "散水",
+    "target_catalog_id": "CF-007-02",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "室外路面/装饰层相关；具体仍由候选和LLM判断"
+  },
+  {
+    "alias_pattern": "门头",
+    "target_catalog_id": "CP-006-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "倾向按门窗/共用部位处理；边界项需复核"
+  },
+  {
+    "alias_pattern": "门头维修",
+    "target_catalog_id": "CP-006-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "倾向按门窗/共用部位处理；边界项需复核"
+  },
+  {
+    "alias_pattern": "门头更新",
+    "target_catalog_id": "CP-006-01",
+    "match_type": "contains",
+    "priority": 10,
+    "notes": "倾向按门窗/共用部位处理；边界项需复核"
   }
 ]

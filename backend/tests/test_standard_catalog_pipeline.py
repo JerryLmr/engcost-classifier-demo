@@ -107,11 +107,12 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertIn("消防技术咨询", result.negative_hints)
         self.assertIn("CF-022-01", [hit.catalog_id for hit in result.catalog_hits])
 
-    def test_alias_positive_hit_is_forced_into_candidates(self):
+    def test_alias_positive_hit_is_recalled_without_forcing_order(self):
         candidates = retrieve_candidates("车牌识别系统改造")
         by_id = {candidate.item.id: candidate for candidate in candidates}
         self.assertIn("CF-018-07", by_id)
-        self.assertIn("alias", by_id["CF-018-07"].source)
+        self.assertEqual(by_id["CF-018-07"].source, "alias_recall")
+        self.assertEqual(candidates[-1].item.id, "CF-018-07")
 
     @patch(
         "classifier.llm_client.request_llm_json",
@@ -334,6 +335,86 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                 for forbidden in ("保护规则", "forced_catalog_id", "domain_guard", "内部扩展项"):
                     self.assertNotIn(forbidden, result["reason"])
 
+    @patch(
+        "classifier.llm_client.llm_select_repair_status",
+        return_value=StatusSelection(repair_status="维修", needs_review=False, reason="按工程名称判断为维修"),
+    )
+    @patch("classifier.llm_client.llm_select_catalog_item")
+    def test_elevator_regression_final_selection_uses_specific_items(self, mock_item, _mock_status):
+        expected_by_text = {
+            "更换限速器、限速器钢丝绳": ("CF-017-06", ("CF-017-05",), False),
+            "更换钢丝绳、制动器、电磁铁、导向轮、变频器主板": (
+                "CF-017-05",
+                ("CF-017-02", "CF-017-04", "CF-017-07"),
+                False,
+            ),
+            "制动器、安全钳、门挂轮、导向轮等更换": (
+                "CF-017-02",
+                ("CF-017-06", "CF-017-04"),
+                False,
+            ),
+            "电梯三方通话": ("CF-017-10", (), False),
+            "电梯监控、部分共用光收发器维修更新": ("CF-018-02", ("CF-018-12",), False),
+            "电梯钢丝绳更换": ("CF-017-05", (), False),
+            "外立面翻新": ("CP-003-01", (), False),
+            "墙砖翻新": ("CP-004-02", (), True),
+        }
+
+        def select_item(project_name, candidates, _context_hints=None):
+            catalog_id, secondary_ids, needs_review = expected_by_text[project_name]
+            candidate_ids = {item.id for item in candidates}
+            self.assertIn(catalog_id, candidate_ids)
+            self.assertTrue(set(secondary_ids).issubset(candidate_ids))
+            if project_name.startswith("电梯监控"):
+                self.assertFalse(any(item.category == "电梯" for item in candidates))
+                self.assertNotIn(OUT_OF_SCOPE_ID, candidate_ids)
+            else:
+                self.assertNotIn("CF-017-00", candidate_ids)
+            return ItemSelection(
+                catalog_id=catalog_id,
+                secondary_catalog_ids=secondary_ids,
+                is_composite=bool(secondary_ids),
+                needs_review=needs_review,
+                reason="测试固定具体目录",
+            )
+
+        mock_item.side_effect = select_item
+
+        for text, (expected_id, secondary_ids, expected_review) in expected_by_text.items():
+            with self.subTest(text=text):
+                result = classify_project_standard(text)
+                self.assertEqual(result["catalog_id"], expected_id)
+                self.assertEqual(result["secondary_catalog_ids"], list(secondary_ids))
+                self.assertEqual(result["needs_review"], expected_review or bool(secondary_ids))
+                self.assertNotIn("一级明确但二级未明确", result["reason"])
+
+    @patch(
+        "classifier.llm_client.llm_select_repair_status",
+        return_value=StatusSelection(repair_status="维修", needs_review=False, reason="按工程名称判断为维修"),
+    )
+    @patch("classifier.llm_client.llm_select_catalog_item")
+    def test_generic_elevator_final_selection_can_use_reviewed_fallback(self, mock_item, _mock_status):
+        samples = ("普通电梯维修", "电梯更新")
+
+        def select_item(_project_name, candidates, _context_hints=None):
+            candidate_ids = {item.id for item in candidates}
+            self.assertIn("CF-017-00", candidate_ids)
+            return ItemSelection(
+                catalog_id="CF-017-00",
+                secondary_catalog_ids=(),
+                is_composite=False,
+                needs_review=True,
+                reason="普通电梯未明确具体子项",
+            )
+
+        mock_item.side_effect = select_item
+
+        for text in samples:
+            with self.subTest(text=text):
+                result = classify_project_standard(text)
+                self.assertEqual(result["catalog_id"], "CF-017-00")
+                self.assertTrue(result["needs_review"])
+
     def test_specific_elevator_parts_rank_before_generic_elevator_fallback(self):
         samples = {
             "电梯钢丝绳更换": "CF-017-05",
@@ -346,8 +427,49 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                 candidates = retrieve_candidates(text)
                 ids = [candidate.item.id for candidate in candidates]
                 self.assertIn(expected_id, ids)
-                if "CF-017-00" in ids:
-                    self.assertLess(ids.index(expected_id), ids.index("CF-017-00"))
+                self.assertNotIn("CF-017-00", ids)
+
+    def test_specific_elevator_terms_do_not_recall_generic_elevator_fallback(self):
+        samples = {
+            "更换限速器、限速器钢丝绳": {"CF-017-06", "CF-017-05"},
+            "更换钢丝绳、制动器、电磁铁、导向轮、变频器主板": {
+                "CF-017-05",
+                "CF-017-02",
+                "CF-017-04",
+                "CF-017-07",
+            },
+            "制动器、安全钳、门挂轮、导向轮等更换": {
+                "CF-017-02",
+                "CF-017-06",
+                "CF-017-04",
+            },
+            "电梯三方通话": {"CF-017-10"},
+        }
+        for text, expected_ids in samples.items():
+            with self.subTest(text=text):
+                ids = {candidate.item.id for candidate in retrieve_candidates(text)}
+                self.assertNotIn("CF-017-00", ids)
+                self.assertTrue(expected_ids.issubset(ids))
+
+    def test_elevator_monitoring_recalls_weak_current_not_elevator(self):
+        candidates = retrieve_candidates("电梯监控、部分共用光收发器维修更新")
+        ids = {candidate.item.id for candidate in candidates}
+        categories = {candidate.item.category for candidate in candidates}
+        self.assertIn("CF-018-02", ids)
+        self.assertIn("CF-018-12", ids)
+        self.assertNotIn("电梯", categories)
+
+    def test_wall_aliases_recall_expected_candidates_without_alias_scoring(self):
+        exterior = retrieve_candidates("外立面翻新")
+        exterior_by_id = {candidate.item.id: candidate for candidate in exterior}
+        self.assertIn("CP-003-01", exterior_by_id)
+        self.assertEqual(exterior_by_id["CP-003-01"].source, "alias_recall")
+        self.assertEqual(exterior[-1].item.id, "CP-003-01")
+
+        interior = retrieve_candidates("墙砖翻新")
+        interior_by_id = {candidate.item.id: candidate for candidate in interior}
+        self.assertIn("CP-004-02", interior_by_id)
+        self.assertEqual(interior_by_id["CP-004-02"].source, "alias_recall")
 
     @patch("classifier.llm_client.llm_select_catalog_item")
     def test_family_out_of_scope_is_converted_to_fallback_catalog(self, mock_item):
@@ -407,8 +529,10 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertIn("CF-028-00", by_id)
         ids = [candidate.item.id for candidate in candidates]
         self.assertLess(ids.index("CF-022-01"), ids.index("CF-028-00"))
-        self.assertLess(by_id["CF-022-01"].retrieval_score, 300.0)
-        self.assertLess(by_id["CF-028-00"].retrieval_score, 300.0)
+        self.assertEqual(by_id["CF-022-01"].source, "alias_recall")
+        self.assertEqual(by_id["CF-028-00"].source, "family_recall")
+        self.assertEqual(by_id["CF-022-01"].retrieval_score, 0.0)
+        self.assertEqual(by_id["CF-028-00"].retrieval_score, 0.0)
 
     def test_generic_terms_are_not_forced_to_specific_catalog_items(self):
         for text in ("线路维修", "设备改造", "门维修"):

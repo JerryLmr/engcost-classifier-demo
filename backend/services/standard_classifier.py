@@ -89,8 +89,9 @@ def _context_hints(
 
 
 def _matches_forced_family(selected_item, family_matches: tuple[FamilyMatch, ...]) -> bool:
+    matched_fallback_ids = {match.catalog_id for match in family_matches}
     if selected_item.id in FAMILY_FALLBACK_IDS:
-        return True
+        return selected_item.id in matched_fallback_ids
     for match in family_matches:
         if selected_item.id == match.catalog_id:
             return True
