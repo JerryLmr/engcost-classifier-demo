@@ -2,11 +2,11 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from classifier.alias_matcher import TextAliasResult
-from classifier.candidate_retriever import candidate_label
 from classifier.llm_client import ItemSelection, StatusSelection
 from classifier.standard_catalog_loader import (
     OUT_OF_SCOPE_ID,
     StandardCatalogItem,
+    catalog_label,
     get_standard_catalog_by_id,
     load_fallback_config,
 )
@@ -103,7 +103,6 @@ def selected_result(
     selected_item: StandardCatalogItem,
     item_selection: ItemSelection,
     status_selection: StatusSelection,
-    candidate_labels: Sequence[str],
     decision: ReviewDecision,
     *,
     is_emergency: bool,
@@ -111,7 +110,7 @@ def selected_result(
 ) -> dict[str, object]:
     catalog_by_id = get_standard_catalog_by_id()
     secondary_labels = [
-        candidate_label(catalog_by_id[item_id])
+        catalog_label(catalog_by_id[item_id])
         for item_id in decision.secondary_catalog_ids
         if item_id in catalog_by_id
     ]
@@ -129,7 +128,6 @@ def selected_result(
         "is_emergency": is_emergency,
         "termite_related": termite_related,
         "needs_review": decision.needs_review,
-        "candidate_labels": list(candidate_labels),
         "reason": "；".join(part for part in reason_parts if part),
         "pipeline_status": "ok",
     }
@@ -138,7 +136,6 @@ def selected_result(
 def fallback_result(
     project_name: str,
     reason: str,
-    candidate_labels: Sequence[str] | None = None,
     *,
     is_composite: bool = False,
     secondary_catalog_ids: Sequence[str] | None = None,
@@ -151,7 +148,7 @@ def fallback_result(
     catalog_by_id = get_standard_catalog_by_id()
     secondary_ids = list(secondary_catalog_ids or [])
     secondary_labels = [
-        candidate_label(catalog_by_id[item_id])
+        catalog_label(catalog_by_id[item_id])
         for item_id in secondary_ids
         if item_id in catalog_by_id
     ]
@@ -168,7 +165,6 @@ def fallback_result(
         "is_emergency": is_emergency,
         "termite_related": termite_related,
         "needs_review": True,
-        "candidate_labels": list(candidate_labels or []),
         "reason": reason,
         "pipeline_status": pipeline_status,
     }

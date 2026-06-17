@@ -15,11 +15,10 @@ REQUIRED_RESULT_COLUMNS = [
     "维修状态",
     "标准对象",
     "是否复合工程",
-    "复合候选目录",
+    "复合目录",
     "是否紧急维修",
     "是否白蚁相关",
     "是否建议复核",
-    "候选目录",
     "分类依据",
 ]
 
@@ -66,7 +65,7 @@ def _read_result_rows_from_workbook(workbook: openpyxl.Workbook, source_name: st
 
         catalog_id = row[index["catalog_id"]]
         is_composite = _is_yes(row[index["是否复合工程"]])
-        secondary_candidates = _split_pipe_text(row[index["复合候选目录"]])
+        secondary_candidates = _split_pipe_text(row[index["复合目录"]])
         method = _method_for(catalog_id)
         records.append(
             {
@@ -83,9 +82,6 @@ def _read_result_rows_from_workbook(workbook: openpyxl.Workbook, source_name: st
                 "match_type": "out_of_scope" if method == "体系外默认分类" else "standard_catalog",
                 "reason": row[index["分类依据"]],
                 "needs_review": _is_yes(row[index["是否建议复核"]]),
-                "candidate_ids": [],
-                "candidate_labels": _split_pipe_text(row[index["候选目录"]]),
-                "candidate_level3_items": [],
                 "is_composite": is_composite,
                 "structure_type": _structure_type(is_composite),
                 "composite_reason": "疑似复合工程" if is_composite else "",

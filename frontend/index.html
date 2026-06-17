@@ -11,7 +11,7 @@
     <div class="hero">
       <div class="hero-title-wrap">
         <h1>物业工程名称智能分类</h1>
-        <div class="hero-rule">✧ 规则优先 + LLM 辅助分类</div>
+        <div class="hero-rule">✧ 完整目录 + LLM 主分类</div>
       </div>
       <div class="sub hero-sub">
         输入一句工程描述，系统即可自动识别一级/二级工程类别，支持单条即时分类与 Excel 批量分析。
@@ -57,7 +57,7 @@
           <div class="kv"><strong>分类方式：</strong><span id="rMethod"></span></div>
           <div class="kv"><strong>结构类型：</strong><span id="rStructureType"></span></div>
           <div class="kv" id="rCompositeReasonWrap" hidden><strong>复合原因：</strong><span id="rCompositeReason"></span></div>
-          <div class="kv" id="rCandidatesWrap" hidden><strong>候选分类：</strong><span id="rCandidates"></span></div>
+          <div class="kv" id="rCandidatesWrap" hidden><strong>复合目录：</strong><span id="rCandidates"></span></div>
           <div class="kv"><strong>分类依据：</strong><span id="rReason"></span></div>
         </div>
         <div class="status" id="singleStatus"></div>
@@ -79,7 +79,7 @@
         </div>
         <input id="excelFile" type="file" accept=".xlsx,.xlsm" hidden />
         <div class="tip">
-          约定：<strong>第一列</strong>为工程名称，系统会在原表后追加“一级分类、二级分类、分类方式、分类依据”四列，随后自动下载结果文件。
+          约定：<strong>第一列</strong>为工程名称，系统会生成标准目录分类结果并自动下载结果文件。
         </div>
         <div class="btns">
           <button id="excelBtn">上传并处理 Excel</button>
@@ -115,7 +115,7 @@
           <button id="analyzeBtn">开始分析</button>
         </div>
       </div>
-      <div class="status" id="analysisStatus">请上传已经带“一级分类、二级分类、分类方式、分类依据”等结果列的 Excel 文件。</div>
+      <div class="status" id="analysisStatus">请上传已经带“一级分类、二级分类、分类依据”等结果列的 Excel 文件。</div>
 
       <div class="analysis-results" id="analysisResults" hidden>
         <div class="dashboard-grid" id="summaryMetrics"></div>
@@ -219,7 +219,7 @@
                   <th><button class="sort-trigger" type="button" data-sort-key="needs_review">建议复核</button></th>
                   <th><button class="sort-trigger" type="button" data-sort-key="structure_type">结构类型</button></th>
                   <th>复合原因</th>
-                  <th>候选分类</th>
+                  <th>复合目录</th>
                 </tr>
               </thead>
               <tbody id="focusTable"></tbody>

@@ -18,11 +18,9 @@ def _presentation_result(result: dict[str, object]) -> dict[str, object]:
     payload["level2"] = result.get("item") or ""
     payload["level3_item"] = result.get("item") or ""
     payload["matched_level3_items"] = []
-    payload["method"] = "体系外默认分类" if catalog_id == "OUT_OF_SCOPE" else "LLM 辅助分类"
+    payload["method"] = "体系外默认分类" if catalog_id == "OUT_OF_SCOPE" else "LLM主分类"
     payload["confidence"] = ""
     payload["match_type"] = "out_of_scope" if catalog_id == "OUT_OF_SCOPE" else "standard_catalog"
-    payload["candidate_ids"] = []
-    payload["candidate_level3_items"] = []
     payload["structure_type"] = "composite_project" if is_composite else "single_project"
     payload["composite_reason"] = "疑似复合工程" if is_composite else ""
     payload["secondary_candidates"] = result.get("secondary_catalog_labels") or []

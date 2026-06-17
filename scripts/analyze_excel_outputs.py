@@ -68,7 +68,7 @@ def build_summary_rows(records: List[Dict[str, object]]) -> List[List[object]]:
             ["文件数", len(files)],
             ["总记录数", len(records)],
             ["规则优先", summary["rule_method_count"]],
-            ["LLM兜底", summary["llm_method_count"]],
+            ["LLM主分类", summary["llm_method_count"]],
             ["默认兜底", summary["fallback_method_count"]],
             ["建议复核=是", summary["review_count"]],
             ["single", match_types["single"]],
@@ -95,9 +95,7 @@ def build_focus_rows(records: List[Dict[str, object]]) -> List[List[object]]:
         "置信度",
         "匹配类型",
         "是否建议复核",
-        "候选目录ID",
-        "候选目录",
-        "候选细项",
+        "复合目录",
         "分类依据",
     ]
     rows = [headers]
@@ -116,9 +114,7 @@ def build_focus_rows(records: List[Dict[str, object]]) -> List[List[object]]:
                 record["confidence"],
                 record["match_type"],
                 "是" if record["needs_review"] else "否",
-                " | ".join(record["candidate_ids"]),
-                " | ".join(record["candidate_labels"]),
-                " | ".join(record["candidate_level3_items"]),
+                " | ".join(record["secondary_candidates"]),
                 record["reason"],
             ]
         )
@@ -175,7 +171,7 @@ def main() -> int:
     print(
         "[DONE] 分类方式: "
         f"规则优先={summary['rule_method_count']}, "
-        f"LLM兜底={summary['llm_method_count']}, "
+        f"LLM主分类={summary['llm_method_count']}, "
         f"默认兜底={summary['fallback_method_count']}"
     )
     print(

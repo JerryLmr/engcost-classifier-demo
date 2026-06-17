@@ -21,11 +21,10 @@ RESULT_HEADERS = [
     "维修状态",
     "标准对象",
     "是否复合工程",
-    "复合候选目录",
+    "复合目录",
     "是否紧急维修",
     "是否白蚁相关",
     "是否建议复核",
-    "候选目录",
     "分类依据",
 ]
 
@@ -83,7 +82,6 @@ def _write_result_row(worksheet, row: int, result: dict[str, object], source_fil
         _bool_text(result["is_emergency"]),
         _bool_text(result["termite_related"]),
         _bool_text(result["needs_review"]),
-        " | ".join(result["candidate_labels"]),
         result["reason"],
     ]
     for column, value in enumerate(values, start=1):

@@ -1,15 +1,5 @@
 import os
 
-
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() not in {"0", "false", "no", "off"}
-
-
-CLASSIFIER_USE_FULL_CATALOG = _env_bool("CLASSIFIER_USE_FULL_CATALOG", True)
-
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
 

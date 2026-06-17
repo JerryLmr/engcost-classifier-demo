@@ -49,11 +49,14 @@ const focusSortState = {
 let excelProcessingTimer = null;
 
 function getMethodLabel(method) {
-  if (method === "LLM 辅助分类" || method === "体系外默认分类") {
+  if (method === "LLM主分类" || method === "体系外默认分类") {
     return method;
   }
+  if (method === "LLM 辅助分类") {
+    return "LLM主分类";
+  }
   if (method === "LLM 兜底") {
-    return "LLM 辅助分类";
+    return "LLM主分类";
   }
   if (method === "降级兜底") {
     return "体系外默认分类";
@@ -83,7 +86,7 @@ function buildFocusTitle(row) {
     details.push(`复合原因：${row.composite_reason}`);
   }
   if (Array.isArray(row.secondary_candidates) && row.secondary_candidates.length) {
-    details.push(`候选分类：${row.secondary_candidates.join("、")}`);
+    details.push(`复合目录：${row.secondary_candidates.join("、")}`);
   }
   return details.join("\n");
 }
@@ -92,7 +95,7 @@ function getMethodRank(method) {
   if (method === "体系外默认分类" || method === "降级兜底") {
     return 0;
   }
-  if (method === "LLM 辅助分类" || method === "LLM 兜底") {
+  if (method === "LLM主分类" || method === "LLM 辅助分类" || method === "LLM 兜底") {
     return 1;
   }
   return 2;
@@ -314,7 +317,7 @@ function renderSourceAnalysis(summary) {
       color: "#3b82f6",
     },
     {
-      label: "LLM辅助",
+      label: "LLM主分类",
       value: summary.llm_method_count,
       color: "#8b5cf6",
     },
@@ -437,7 +440,7 @@ function renderRiskMetrics(summary, counts) {
     {
       label: "默认分类",
       value: summary.fallback_method_count,
-      desc: "规则未覆盖项",
+      desc: "目录外或失败项",
       tone: "slate",
     },
   ];
@@ -651,7 +654,7 @@ async function handleExcelAnalyze() {
     renderMetrics(summaryMetrics, [
       { label: "总数据量", value: data.summary.total_records, icon: "▦", tone: "blue" },
       { label: "自动分类（规则）", value: data.summary.rule_method_count, icon: "✓", tone: "green" },
-      { label: "LLM 辅助分类", value: data.summary.llm_method_count, icon: "≋", tone: "violet" },
+      { label: "LLM主分类", value: data.summary.llm_method_count, icon: "≋", tone: "violet" },
       { label: "建议复核", value: data.summary.review_count, icon: "!", tone: "red" },
     ]);
     renderSourceAnalysis(data.summary);

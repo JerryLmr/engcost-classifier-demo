@@ -64,15 +64,15 @@ uvicorn app:app --reload
 ```text
 normalize_project_text
 → match_aliases
-→ retrieve_candidates
-→ llm_select_catalog_item
+→ llm_select_catalog_item_from_full_catalog
 → llm_select_repair_status
 → decide_review
 ```
 
 - CP/CF 标准目录来自 `backend/config/standard_catalog.json`
-- alias 规则来自 `backend/config/alias_dictionary.json`
-- normalizer、alias 和候选召回只作为上下文与约束
+- alias 规则来自 `backend/config/text_aliases.json`
+- normalizer、alias、动作词和复核提示只作为上下文；catalog_id 由完整 compact 标准目录 LLM 选择并经过标准目录校验
+- 旧 n-gram 候选召回链路和“候选目录”输出字段已删除
 - 最终 `OUT_OF_SCOPE`、复合工程和复核建议由标准目录后处理统一决定
 - 旧 `rule-first / llm-fallback` 三位数字演示链路已删除
 
@@ -88,11 +88,10 @@ catalog_id
 维修状态
 标准对象
 是否复合工程
-复合候选目录
+复合目录
 是否紧急维修
 是否白蚁相关
 是否建议复核
-候选目录
 分类依据
 ```
 

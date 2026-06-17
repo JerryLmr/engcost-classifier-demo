@@ -21,7 +21,7 @@ class StandardCatalogItem:
 
     @property
     def label(self) -> str:
-        return f"{self.id} | {self.category} | {self.item}"
+        return catalog_label(self)
 
     @property
     def allowed_statuses(self) -> tuple[str, ...]:
@@ -106,6 +106,10 @@ def load_standard_catalog() -> list[StandardCatalogItem]:
 
 def get_standard_catalog_by_id() -> dict[str, StandardCatalogItem]:
     return {item.id: item for item in load_standard_catalog()}
+
+
+def catalog_label(item: StandardCatalogItem) -> str:
+    return f"{item.id} | {item.category} | {item.item}"
 
 
 def load_emergency_triggers() -> list[str]:
