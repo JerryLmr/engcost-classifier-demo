@@ -1,9 +1,8 @@
 from typing import Any
 
 from classifier import llm_client
-from classifier.alias_matcher import AliasMatchResult, match_aliases
+from classifier.alias_matcher import TextAliasResult, match_aliases
 from classifier.candidate_retriever import (
-    FAMILY_FALLBACK_IDS,
     FamilyMatch,
     candidate_label,
     detect_family_matches,
@@ -46,12 +45,6 @@ FAMILY_FALLBACK_REASON = (
     "LLM returned OUT_OF_SCOPE, but text contains strong in-scope family term; "
     "using family fallback."
 )
-FAMILY_OUTSIDE_CANDIDATE_REASON = (
-    "LLM selected catalog_id exists in catalog but was not in retrieved candidates; "
-    "accepted because it matches forced family category."
-)
-
-
 def _contains_any(text: str, terms: list[str] | tuple[str, ...]) -> bool:
     compact_text = "".join(str(text or "").split())
     return any("".join(term.split()) in compact_text for term in terms if term)
@@ -72,32 +65,14 @@ def is_llm_service_error(reason: str) -> bool:
 
 def _context_hints(
     normalized: NormalizedProjectText,
-    alias_result: AliasMatchResult,
-    candidate_reasons: list[str],
+    alias_result: TextAliasResult,
 ) -> list[str]:
     hints: list[str] = []
     if normalized.action_hints:
         hints.append(f"动作/状态词：{'、'.join(normalized.action_hints)}")
     if normalized.review_hints:
         hints.append(f"复核提示词：{'、'.join(normalized.review_hints)}")
-    for hit in alias_result.catalog_hits:
-        hints.append(f"{hit.reason} -> {hit.catalog_id}")
-    if alias_result.negative_hints:
-        hints.append(f"负向提示词：{'、'.join(alias_result.negative_hints)}")
-    hints.extend(reason for reason in candidate_reasons if reason)
     return hints
-
-
-def _matches_forced_family(selected_item, family_matches: tuple[FamilyMatch, ...]) -> bool:
-    matched_fallback_ids = {match.catalog_id for match in family_matches}
-    if selected_item.id in FAMILY_FALLBACK_IDS:
-        return selected_item.id in matched_fallback_ids
-    for match in family_matches:
-        if selected_item.id == match.catalog_id:
-            return True
-        if match.family and match.family in selected_item.category:
-            return True
-    return False
 
 
 def _family_fallback_item(family_matches: tuple[FamilyMatch, ...]):
@@ -116,8 +91,7 @@ def classify_project_standard(project_name: str) -> dict[str, Any]:
         candidates = retrieve_candidates(project_name)
         candidate_items = [candidate.item for candidate in candidates]
         candidate_labels = [candidate_label(item) for item in candidate_items]
-        candidate_reasons = [candidate.reason for candidate in candidates if candidate.reason]
-        context_hints = _context_hints(normalized, alias_result, candidate_reasons)
+        context_hints = _context_hints(normalized, alias_result)
         family_matches = detect_family_matches(normalized)
         if not candidate_items:
             fallback_item = _family_fallback_item(family_matches)
@@ -197,23 +171,14 @@ def classify_project_standard(project_name: str) -> dict[str, Any]:
         candidate_ids = {item.id for item in candidate_items}
         selected_item = catalog_by_id[item_selection.catalog_id]
         if item_selection.catalog_id not in candidate_ids:
-            if not _matches_forced_family(selected_item, family_matches):
-                return fallback_result(
-                    project_name,
-                    f"LLM returned catalog_id outside retrieved candidates: {item_selection.catalog_id}",
-                    candidate_labels,
-                    is_composite=item_selection.is_composite,
-                    secondary_catalog_ids=list(item_selection.secondary_catalog_ids),
-                    is_emergency=is_emergency_project(project_name),
-                    termite_related=is_termite_related(project_name, OUT_OF_SCOPE_ID),
-                )
-            item_selection = llm_client.ItemSelection(
-                catalog_id=item_selection.catalog_id,
-                secondary_catalog_ids=item_selection.secondary_catalog_ids,
+            return fallback_result(
+                project_name,
+                f"LLM returned catalog_id outside retrieved candidates: {item_selection.catalog_id}",
+                candidate_labels,
                 is_composite=item_selection.is_composite,
-                needs_review=True,
-                reason="；".join([item_selection.reason, FAMILY_OUTSIDE_CANDIDATE_REASON]),
-                invalid_after_retry=item_selection.invalid_after_retry,
+                secondary_catalog_ids=list(item_selection.secondary_catalog_ids),
+                is_emergency=is_emergency_project(project_name),
+                termite_related=is_termite_related(project_name, OUT_OF_SCOPE_ID),
             )
         status_selection = llm_client.llm_select_repair_status(project_name, selected_item)
         decision = decide_review(normalized, alias_result, item_selection, status_selection)

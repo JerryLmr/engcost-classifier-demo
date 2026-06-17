@@ -1,8 +1,10 @@
+import json
 import os
 import re
 import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Iterable
 
 from classifier.alias_matcher import match_aliases
@@ -13,6 +15,7 @@ from classifier.standard_normalizer import NormalizedProjectText, normalize_proj
 TOP_K = min(max(int(os.getenv("CLASSIFIER_TOP_K", "5")), 3), 8)
 INTERNAL_TOP_K = min(max(int(os.getenv("CLASSIFIER_INTERNAL_TOP_K", "20")), 15), 50)
 FAMILY_FALLBACK_IDS = {"CF-017-00", "CF-018-00", "CF-028-00"}
+FAMILY_FALLBACK_RULES_PATH = Path(__file__).resolve().parents[1] / "config" / "family_fallback_rules.json"
 TERMITE_TERMS = (
     "白蚁",
     "蚁害",
@@ -78,35 +81,7 @@ SPECIFIC_ELEVATOR_TERMS = (
     "轿厢对讲",
     "电梯对讲",
 )
-NON_ELEVATOR_OBJECT_CONTEXT_TERMS = (
-    "电梯厅",
-    "电梯间",
-    "电梯前室",
-    "电梯监控",
-    "轿厢监控",
-    "梯控",
-    "电梯门禁",
-)
-FAMILY_FORCED_CANDIDATES = (
-    {
-        "catalog_id": "CF-017-00",
-        "family": "电梯",
-        "terms": ("电梯", "货梯", "客梯", "乘客电梯", "住宅电梯", "老旧电梯", "垂直电梯"),
-        "exclude_terms": NON_ELEVATOR_OBJECT_CONTEXT_TERMS,
-    },
-    {
-        "catalog_id": "CF-018-00",
-        "family": "弱电系统",
-        "terms": ("弱电", "智能化", "弱电智能化", "安防系统", "安保系统"),
-        "exclude_terms": (),
-    },
-    {
-        "catalog_id": "CF-028-00",
-        "family": "消防系统",
-        "terms": ("消防", "消防系统", "消防设施", "消防设备", "消防改造", "消防维修", "消防设施维修"),
-        "exclude_terms": ("消防技术咨询",),
-    },
-)
+NON_ELEVATOR_OBJECT_CONTEXT_TERMS = ("电梯厅", "电梯间", "电梯前室", "电梯监控", "轿厢监控", "梯控", "电梯门禁")
 
 _ASCII_TOKEN_RE = re.compile(r"[a-z0-9]+")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
@@ -126,6 +101,15 @@ class FamilyMatch:
     catalog_id: str
     family: str
     reason: str
+
+
+@dataclass(frozen=True)
+class FamilyFallbackRule:
+    catalog_id: str
+    category: str
+    family_terms: tuple[str, ...]
+    specific_terms: tuple[str, ...]
+    negative_context_terms: tuple[str, ...]
 
 
 def normalize_retrieval_text(text: str) -> str:
@@ -171,11 +155,62 @@ def _is_termite_catalog_item(item: StandardCatalogItem) -> bool:
 
 
 def _allows_generic_elevator_candidate(normalized_text: str) -> bool:
-    if any(term in normalized_text for term in NON_ELEVATOR_OBJECT_CONTEXT_TERMS):
+    if _has_non_elevator_object_context(normalized_text):
         return False
     has_generic = any(term in normalized_text for term in GENERIC_ELEVATOR_TERMS)
     has_specific = any(term in normalized_text for term in SPECIFIC_ELEVATOR_TERMS)
     return has_generic and not has_specific
+
+
+def _term_matches_text(term: str, normalized_text: str) -> bool:
+    if term == "梯控":
+        return re.search(r"梯控(?!制)", normalized_text) is not None
+    return term in normalized_text
+
+
+def _has_non_elevator_object_context(normalized_text: str) -> bool:
+    return any(_term_matches_text(term, normalized_text) for term in NON_ELEVATOR_OBJECT_CONTEXT_TERMS)
+
+
+def _clean_terms(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    terms: list[str] = []
+    for item in value:
+        term = str(item or "").strip()
+        if term and term not in terms:
+            terms.append(term)
+    return tuple(terms)
+
+
+@lru_cache(maxsize=1)
+def load_family_fallback_rules() -> tuple[FamilyFallbackRule, ...]:
+    with FAMILY_FALLBACK_RULES_PATH.open("r", encoding="utf-8") as fp:
+        payload = json.load(fp)
+    if not isinstance(payload, list):
+        raise ValueError("family_fallback_rules.json must contain a JSON array")
+
+    allowed_ids = {"CF-017-00", "CF-018-00", "CF-028-00"}
+    rules: list[FamilyFallbackRule] = []
+    for raw in payload:
+        if not isinstance(raw, dict):
+            raise ValueError("family fallback rule must be a JSON object")
+        catalog_id = str(raw.get("catalog_id") or "").strip()
+        if catalog_id not in allowed_ids:
+            raise ValueError(f"unsupported family fallback catalog_id: {catalog_id}")
+        family_terms = _clean_terms(raw.get("family_terms"))
+        if not family_terms:
+            raise ValueError(f"family fallback {catalog_id} missing family_terms")
+        rules.append(
+            FamilyFallbackRule(
+                catalog_id=catalog_id,
+                category=str(raw.get("category") or "").strip(),
+                family_terms=family_terms,
+                specific_terms=_clean_terms(raw.get("specific_terms")),
+                negative_context_terms=_clean_terms(raw.get("negative_context_terms")),
+            )
+        )
+    return tuple(rules)
 
 
 def detect_family_matches(project_name: str | NormalizedProjectText) -> tuple[FamilyMatch, ...]:
@@ -185,21 +220,18 @@ def detect_family_matches(project_name: str | NormalizedProjectText) -> tuple[Fa
         else normalize_project_text(str(project_name or ""))
     )
     matches: list[FamilyMatch] = []
-    for family_candidate in FAMILY_FORCED_CANDIDATES:
-        catalog_id = str(family_candidate["catalog_id"])
-        if catalog_id == "CF-017-00" and not _allows_generic_elevator_candidate(normalized.normalized_text):
+    for rule in load_family_fallback_rules():
+        if not any(term in normalized.normalized_text for term in rule.family_terms):
             continue
-        exclude_terms = family_candidate["exclude_terms"]
-        if any(term in normalized.normalized_text for term in exclude_terms):
+        if any(_term_matches_text(term, normalized.normalized_text) for term in rule.specific_terms):
             continue
-        terms = family_candidate["terms"]
-        if not any(term in normalized.normalized_text for term in terms):
+        if any(_term_matches_text(term, normalized.normalized_text) for term in rule.negative_context_terms):
             continue
         matches.append(
             FamilyMatch(
-                catalog_id=catalog_id,
-                family=str(family_candidate["family"]),
-                reason=f"family_forced: {family_candidate['family']}，一级明确但二级未明确",
+                catalog_id=rule.catalog_id,
+                family=rule.category,
+                reason=f"family_fallback: {rule.category}，一级明确但二级未明确",
             )
         )
     return tuple(matches)
@@ -224,6 +256,7 @@ def _indexed_catalog() -> tuple[tuple[StandardCatalogItem, str, frozenset[str]],
 
 def _phrase_bonus(query_text: str, item: StandardCatalogItem, search_text: str) -> float:
     score = 0.0
+    query_parts = tuple(part for part in query_text.split(" ") if len(part) >= 2)
     for field, weight in (
         (item.id, 12.0),
         (item.item, 10.0),
@@ -236,8 +269,14 @@ def _phrase_bonus(query_text: str, item: StandardCatalogItem, search_text: str) 
             score += weight
         if query_text and len(query_text) >= 2 and query_text in normalized:
             score += weight / 2
+        for part in query_parts:
+            if part != query_text and part in normalized:
+                score += weight
     if query_text and query_text in search_text:
         score += 6.0
+    for part in query_parts:
+        if part != query_text and part in search_text:
+            score += 3.0
     return score
 
 
@@ -258,30 +297,28 @@ def _append_recall_candidate(
         selected.append(entry)
         selected_ids.add(item_id)
         return
-    for index in range(len(selected) - 1, -1, -1):
-        if selected[index][2] in {"ngram", "alias_hint+ngram"}:
-            removed_id = selected.pop(index)[1].id
-            selected_ids.discard(removed_id)
-            selected.append(entry)
-            selected_ids.add(item_id)
-            return
+    selected.append(entry)
+    selected_ids.add(item_id)
 
 
 def retrieve_candidates(project_name: str, top_k: int | None = None) -> list[RetrievedCandidate]:
     limit = min(max(top_k if top_k is not None else TOP_K, 3), 8)
     normalized = normalize_project_text(project_name)
-    query_text = normalize_retrieval_text(normalized.retrieval_text)
-    query_tokens = tokenize_for_retrieval(normalized.retrieval_text)
     alias_result = match_aliases(normalized)
-    alias_hits_by_id = {hit.catalog_id: hit for hit in alias_result.catalog_hits}
+    retrieval_text = " ".join(part for part in (normalized.retrieval_text, *alias_result.expanded_terms) if part)
+    query_text = normalize_retrieval_text(retrieval_text)
+    query_tokens = tokenize_for_retrieval(retrieval_text)
     family_matches_by_id = {match.catalog_id: match for match in detect_family_matches(normalized)}
-    elevator_as_context = any(term in normalized.normalized_text for term in NON_ELEVATOR_OBJECT_CONTEXT_TERMS)
+    elevator_as_context = _has_non_elevator_object_context(normalized.normalized_text)
+    generic_elevator_only = _allows_generic_elevator_candidate(normalized.normalized_text)
 
     scored: list[tuple[float, StandardCatalogItem, str, str]] = []
     for item, search_text, item_tokens in _indexed_catalog():
         if _is_termite_catalog_item(item) and not _allows_termite_candidate(normalized.normalized_text):
             continue
         if elevator_as_context and item.category == "电梯":
+            continue
+        if generic_elevator_only and item.category == "电梯":
             continue
         if item.id in FAMILY_FALLBACK_IDS:
             continue
@@ -292,14 +329,6 @@ def retrieve_candidates(project_name: str, top_k: int | None = None) -> list[Ret
         score += _phrase_bonus(query_text, item, search_text)
         source = "ngram"
         reason = ""
-        alias_hit = alias_hits_by_id.get(item.id)
-        if alias_hit:
-            source = "alias_hint+ngram"
-            reason = alias_hit.reason
-        family_match = family_matches_by_id.get(item.id)
-        if family_match:
-            source = "family+alias_hint+ngram" if alias_hit else "family+ngram"
-            reason = "；".join(part for part in (reason, family_match.reason) if part)
         if score > 0:
             scored.append((score, item, source, reason))
 
@@ -314,14 +343,6 @@ def retrieve_candidates(project_name: str, top_k: int | None = None) -> list[Ret
         selected_ids.add(entry[1].id)
 
     catalog_by_id = _catalog_by_id()
-    for hit in alias_result.catalog_hits:
-        if hit.catalog_id in selected_ids or hit.catalog_id in FAMILY_FALLBACK_IDS:
-            continue
-        item = catalog_by_id.get(hit.catalog_id)
-        if item is None:
-            continue
-        _append_recall_candidate(selected, selected_ids, (0.0, item, "alias_recall", hit.reason), limit)
-
     for match in family_matches_by_id.values():
         item = catalog_by_id.get(match.catalog_id)
         if item is None:

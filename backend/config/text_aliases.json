@@ -1,0 +1,114 @@
+[
+  {
+    "canonical_term": "外墙面",
+    "match_type": "contains",
+    "patterns": [
+      "外立面",
+      "建筑立面",
+      "外墙立面",
+      "楼体立面",
+      "楼栋立面",
+      "女儿墙"
+    ]
+  },
+  {
+    "canonical_term": "屋面",
+    "match_type": "contains",
+    "patterns": ["楼顶", "屋顶", "顶楼屋面"]
+  },
+  {
+    "canonical_term": "墙面块材",
+    "match_type": "contains",
+    "patterns": ["墙砖", "墙面砖", "墙面瓷砖", "瓷砖墙面"]
+  },
+  {
+    "canonical_term": "给排水系统",
+    "match_type": "contains",
+    "patterns": ["给水排水", "给排水", "上下水", "上下水系统"]
+  },
+  {
+    "canonical_term": "给排水管道及附件",
+    "match_type": "contains",
+    "patterns": [
+      "污水管",
+      "污水主管",
+      "污水总管",
+      "污水立管",
+      "雨污水管",
+      "雨污水主管",
+      "下水管",
+      "下水主管",
+      "排污管",
+      "排水管",
+      "排水主管",
+      "给水管",
+      "给水主管",
+      "水管",
+      "总管",
+      "立管",
+      "落水管",
+      "雨水管",
+      "雨水主管",
+      "雨水立管"
+    ]
+  },
+  {
+    "canonical_term": "井道",
+    "match_type": "contains",
+    "patterns": [
+      "窨井",
+      "检测井",
+      "检查井",
+      "雨水井",
+      "污水井",
+      "给排水井",
+      "管井",
+      "水表井",
+      "窨井盖",
+      "井盖"
+    ]
+  },
+  {
+    "canonical_term": "处理池",
+    "match_type": "contains",
+    "patterns": ["生化池", "化粪池", "化粪井", "隔油池", "调节池", "污水池"]
+  },
+  {
+    "canonical_term": "给排水机电设备及控制部分",
+    "match_type": "contains",
+    "patterns": [
+      "地下泵房",
+      "生活泵",
+      "生活水泵",
+      "水泵",
+      "排污泵",
+      "污水泵",
+      "潜污泵",
+      "提升泵",
+      "增压泵"
+    ]
+  },
+  {
+    "canonical_term": "阀门配水装置及仪表",
+    "match_type": "contains",
+    "patterns": ["减压阀", "闸阀", "蝶阀", "截止阀", "止回阀", "泵接器", "阀门"]
+  },
+  {
+    "canonical_term": "视频监控系统",
+    "match_type": "contains",
+    "patterns": [
+      "电梯监控",
+      "轿厢监控",
+      "监控系统",
+      "监控摄像头",
+      "监控摄像机",
+      "摄像头",
+      "摄像机"
+    ]
+  },
+  {
+    "canonical_term": "弱电线缆",
+    "match_type": "contains",
+    "patterns": ["光收发器", "光纤收发器", "光缆", "网线", "弱电线缆"]
+  }
+]

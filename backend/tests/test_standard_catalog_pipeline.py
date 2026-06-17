@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 import openpyxl
 
-from classifier.alias_matcher import load_alias_dictionary, match_aliases
+from classifier.alias_matcher import load_text_aliases, match_aliases
 from classifier.candidate_retriever import candidate_label, retrieve_candidates
 from classifier.llm_client import ItemSelection, StatusSelection, llm_select_catalog_item, llm_select_repair_status
 from classifier.standard_catalog_loader import (
@@ -89,30 +89,30 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                 self.assertIn(expected_id, ids)
                 self.assertLessEqual(len(ids), 5)
 
-    def test_alias_dictionary_loads_and_matches_contains_alias(self):
-        entries = load_alias_dictionary()
+    def test_text_aliases_load_and_expand_terms(self):
+        entries = load_text_aliases()
         self.assertGreater(len(entries), 0)
         result = match_aliases("致远大厦外立面修缮工程")
-        self.assertIn("CP-003-01", [hit.catalog_id for hit in result.catalog_hits])
+        self.assertIn("外墙面", result.expanded_terms)
         self.assertTrue(
             any(
-                "外立面" in alias
-                for hit in result.catalog_hits
-                for alias in hit.matched_aliases
+                hit.canonical_term == "外墙面" and "外立面" in hit.matched_patterns
+                for hit in result.hits
             )
         )
 
-    def test_out_of_scope_alias_is_negative_hint_only(self):
+    def test_text_aliases_do_not_return_catalog_or_hint_fields(self):
         result = match_aliases("消防技术咨询服务合同 消防泵故障维修")
-        self.assertIn("消防技术咨询", result.negative_hints)
-        self.assertIn("CF-022-01", [hit.catalog_id for hit in result.catalog_hits])
+        self.assertFalse(hasattr(result, "catalog_hits"))
+        self.assertFalse(hasattr(result, "negative_hints"))
+        self.assertFalse(hasattr(result, "review_hints"))
 
-    def test_alias_positive_hit_is_recalled_without_forcing_order(self):
-        candidates = retrieve_candidates("车牌识别系统改造")
+    def test_text_alias_expansion_uses_natural_retrieval_without_alias_source(self):
+        candidates = retrieve_candidates("外立面翻新")
         by_id = {candidate.item.id: candidate for candidate in candidates}
-        self.assertIn("CF-018-07", by_id)
-        self.assertEqual(by_id["CF-018-07"].source, "alias_recall")
-        self.assertEqual(candidates[-1].item.id, "CF-018-07")
+        self.assertIn("CP-003-01", by_id)
+        self.assertFalse(any("alias" in candidate.source for candidate in candidates))
+        self.assertFalse(any("alias" in candidate.reason for candidate in candidates))
 
     @patch(
         "classifier.llm_client.request_llm_json",
@@ -158,11 +158,13 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             "reason": "消防一级兜底",
         },
     )
-    def test_llm_item_selection_allows_catalog_id_outside_candidates_when_catalog_exists(self, _mock_request):
+    def test_llm_item_selection_rejects_catalog_id_outside_candidates(self, mock_request):
         candidates = [get_standard_catalog_by_id()["CF-022-01"]]
         result = llm_select_catalog_item("消防泵维修", candidates)
-        self.assertEqual(result.catalog_id, "CF-028-00")
+        self.assertEqual(result.catalog_id, OUT_OF_SCOPE_ID)
         self.assertTrue(result.needs_review)
+        self.assertTrue(result.invalid_after_retry)
+        self.assertEqual(mock_request.call_count, 2)
 
     @patch("classifier.llm_client.request_llm_json", side_effect=ValueError("not json"))
     def test_llm_item_selection_falls_back_after_non_json_retry(self, mock_request):
@@ -302,8 +304,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         expected_by_text = {
             "商场自动扶梯扶手带更换": "CF-017-13",
             "自动人行道梯级链维修": "CF-017-13",
-            "电梯钢带维修": "CF-017-05",
-            "电梯控制面板更换": "CF-017-07",
+            "电梯控制柜维修": "CF-017-07",
             "电梯三方通话维修": "CF-017-10",
             "女儿墙外侧粉刷损坏修补": "CP-003-01",
             "楼道墙砖维修": "CP-004-02",
@@ -345,7 +346,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             "更换限速器、限速器钢丝绳": ("CF-017-06", ("CF-017-05",), False),
             "更换钢丝绳、制动器、电磁铁、导向轮、变频器主板": (
                 "CF-017-05",
-                ("CF-017-02", "CF-017-04", "CF-017-07"),
+                ("CF-017-02", "CF-017-04"),
                 False,
             ),
             "制动器、安全钳、门挂轮、导向轮等更换": (
@@ -436,7 +437,6 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                 "CF-017-05",
                 "CF-017-02",
                 "CF-017-04",
-                "CF-017-07",
             },
             "制动器、安全钳、门挂轮、导向轮等更换": {
                 "CF-017-02",
@@ -460,16 +460,18 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertNotIn("电梯", categories)
 
     def test_wall_aliases_recall_expected_candidates_without_alias_scoring(self):
+        alias_result = match_aliases("外立面翻新")
+        self.assertIn("外墙面", alias_result.expanded_terms)
+
         exterior = retrieve_candidates("外立面翻新")
         exterior_by_id = {candidate.item.id: candidate for candidate in exterior}
         self.assertIn("CP-003-01", exterior_by_id)
-        self.assertEqual(exterior_by_id["CP-003-01"].source, "alias_recall")
-        self.assertEqual(exterior[-1].item.id, "CP-003-01")
+        self.assertFalse(any("alias" in candidate.source for candidate in exterior))
 
         interior = retrieve_candidates("墙砖翻新")
         interior_by_id = {candidate.item.id: candidate for candidate in interior}
         self.assertIn("CP-004-02", interior_by_id)
-        self.assertEqual(interior_by_id["CP-004-02"].source, "alias_recall")
+        self.assertFalse(any("alias" in candidate.source for candidate in interior))
 
     @patch("classifier.llm_client.llm_select_catalog_item")
     def test_family_out_of_scope_is_converted_to_fallback_catalog(self, mock_item):
@@ -516,23 +518,25 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             reason="消防报警系统",
         ),
     )
-    def test_catalog_id_outside_candidates_is_accepted_when_it_matches_forced_family(self, _mock_item, _mock_status):
+    def test_catalog_id_outside_candidates_is_rejected_even_when_family_related(self, _mock_item, _mock_status):
         result = classify_project_standard("消防泵维修")
-        self.assertEqual(result["catalog_id"], "CF-021-01")
+        self.assertEqual(result["catalog_id"], OUT_OF_SCOPE_ID)
         self.assertTrue(result["needs_review"])
-        self.assertIn("accepted because it matches forced family category", result["reason"])
+        self.assertIn("outside retrieved candidates", result["reason"])
 
-    def test_alias_weight_is_small_and_specific_alias_can_outrank_family_fallback(self):
-        candidates = retrieve_candidates("消防泵维修")
+    def test_specific_fire_catalog_recalled_without_alias_source(self):
+        candidates = retrieve_candidates("消防喷淋泵维修")
         by_id = {candidate.item.id: candidate for candidate in candidates}
         self.assertIn("CF-022-01", by_id)
-        self.assertIn("CF-028-00", by_id)
+        self.assertNotIn("alias", by_id["CF-022-01"].source)
+
+    def test_family_fallback_appends_without_alias_source(self):
+        candidates = retrieve_candidates("消防改造")
         ids = [candidate.item.id for candidate in candidates]
-        self.assertLess(ids.index("CF-022-01"), ids.index("CF-028-00"))
-        self.assertEqual(by_id["CF-022-01"].source, "alias_recall")
-        self.assertEqual(by_id["CF-028-00"].source, "family_recall")
-        self.assertEqual(by_id["CF-022-01"].retrieval_score, 0.0)
-        self.assertEqual(by_id["CF-028-00"].retrieval_score, 0.0)
+        self.assertIn("CF-028-00", ids)
+        self.assertEqual(candidates[-1].item.id, "CF-028-00")
+        self.assertEqual(candidates[-1].source, "family_recall")
+        self.assertEqual(candidates[-1].retrieval_score, 0.0)
 
     def test_generic_terms_are_not_forced_to_specific_catalog_items(self):
         for text in ("线路维修", "设备改造", "门维修"):
@@ -552,7 +556,6 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             "污水总管改造": "CF-015-04",
             "落水管更换": "CF-015-04",
             "窨井维修": "CF-015-01",
-            "二次供水设备维修": "CF-015-02",
             "地下泵房水泵更换": "CF-015-02",
             "生化池维修": "CF-015-03",
         }
@@ -560,6 +563,27 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             with self.subTest(text=text):
                 ids = [candidate.item.id for candidate in retrieve_candidates(text)]
                 self.assertIn(expected_id, ids)
+                self.assertNotIn("CF-015-00", ids)
+
+    def test_water_supply_aliases_expand_multiple_specific_terms(self):
+        result = match_aliases("生化池出口总管更换、疏通、更换窨井")
+        self.assertTrue({"处理池", "给排水管道及附件", "井道"}.issubset(result.expanded_terms))
+        ids = {candidate.item.id for candidate in retrieve_candidates("生化池出口总管更换、疏通、更换窨井")}
+        self.assertTrue({"CF-015-01", "CF-015-03", "CF-015-04"}.issubset(ids))
+        self.assertNotIn("CF-015-00", ids)
+
+    def test_water_supply_aliases_expand_single_specific_terms(self):
+        pipe_result = match_aliases("污水总管改造")
+        self.assertIn("给排水管道及附件", pipe_result.expanded_terms)
+        pipe_ids = {candidate.item.id for candidate in retrieve_candidates("污水总管改造")}
+        self.assertIn("CF-015-04", pipe_ids)
+        self.assertNotIn("CF-015-00", pipe_ids)
+
+        pump_result = match_aliases("地下泵房水泵更换")
+        self.assertIn("给排水机电设备及控制部分", pump_result.expanded_terms)
+        pump_ids = {candidate.item.id for candidate in retrieve_candidates("地下泵房水泵更换")}
+        self.assertIn("CF-015-02", pump_ids)
+        self.assertNotIn("CF-015-00", pump_ids)
 
     def test_termite_candidate_is_limited_to_termite_text(self):
         for text in ["外墙防水维修", "电梯维修", "监控系统改造"]:

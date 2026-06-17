@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Sequence
 
-from classifier.alias_matcher import AliasMatchResult
+from classifier.alias_matcher import TextAliasResult
 from classifier.candidate_retriever import candidate_label
 from classifier.llm_client import ItemSelection, StatusSelection
 from classifier.standard_catalog_loader import (
@@ -42,17 +42,13 @@ def infer_is_composite(text: str) -> bool:
 
 def decide_review(
     normalized: NormalizedProjectText,
-    alias_result: AliasMatchResult,
+    alias_result: TextAliasResult,
     item_selection: ItemSelection,
     status_selection: StatusSelection | None,
 ) -> ReviewDecision:
     """Decide whether a row truly needs manual review.
 
-    The previous policy treated every secondary candidate and every alias review_hint as
-    a hard review trigger. That made normal weak-current / waterproofing rows flood the
-    review queue even when the selected catalog item was already clear. Secondary IDs are
-    now kept as useful context only; soft alias hints are written only when another hard
-    signal already requires review.
+    Alias expansion is retrieval-only and must not affect review decisions.
     """
     secondary_ids = list(item_selection.secondary_catalog_ids)
     is_composite = item_selection.is_composite or infer_is_composite(normalized.original_text)
@@ -75,16 +71,11 @@ def decide_review(
         or status_needs_review
         or is_composite
         or bool(normalized.review_hints)
-        or bool(alias_result.negative_hints)
     )
 
     reason_suffixes: list[str] = []
-    if alias_result.negative_hints:
-        reason_suffixes.append(f"负向提示：{'、'.join(alias_result.negative_hints)}")
     if normalized.review_hints:
         reason_suffixes.append(f"复核提示：{'、'.join(dict.fromkeys(normalized.review_hints))}")
-    if needs_review and alias_result.review_hints and (item_needs_review or status_needs_review):
-        reason_suffixes.append(f"复核提示：{'、'.join(dict.fromkeys(alias_result.review_hints))}")
     if is_composite:
         reason_suffixes.append("疑似复合工程")
 
