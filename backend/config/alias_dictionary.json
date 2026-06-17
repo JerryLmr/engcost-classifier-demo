@@ -130,17 +130,69 @@
     "notes": "上海工程常写外立面，四川目录用外墙面"
   },
   {
-    "alias_pattern": "落水管",
+    "alias_pattern": "女儿墙外侧|外墙砖|外墙面砖|幕墙|玻璃幕墙",
     "object_group": "外墙面",
     "target_catalog_id": "CP-003-01",
     "target_level1": "外墙面",
     "target_level2": "面层（如水刷石面、勒脚饰面、外墙防水层、涂料层、石材面层、块料面层、装饰板面层、玻璃幕墙、油漆层等）、密封胶条、支持构件等",
-    "match_type": "contains",
+    "match_type": "regex",
     "action_hint": "维修/更新/改造",
     "status_hint": "",
     "review_hint": "",
-    "priority": 80,
-    "notes": "上海工程常写外立面，四川目录用外墙面"
+    "priority": 90,
+    "notes": "外墙/幕墙/女儿墙外侧墙面位置明确，优先外墙面面层"
+  },
+  {
+    "alias_pattern": "窨井|检查井|检测井|雨水井|污水井|水表井|给排水井",
+    "object_group": "给排水系统",
+    "target_catalog_id": "CF-015-01",
+    "target_level1": "给排水系统",
+    "target_level2": "井道（如雨水、污水、水表、给排水井等）",
+    "match_type": "regex",
+    "action_hint": "维修/更新/改造",
+    "status_hint": "",
+    "review_hint": "",
+    "priority": 90,
+    "notes": "上海业务常写窨井/检查井，对应四川给排水系统井道"
+  },
+  {
+    "alias_pattern": "落水管|雨水管|污水管|污水总管|排水总管|给水总管|下水管|排污管",
+    "object_group": "给排水系统",
+    "target_catalog_id": "CF-015-04",
+    "target_level1": "给排水系统",
+    "target_level2": "给排水管道及附件",
+    "match_type": "regex",
+    "action_hint": "维修/更新/改造",
+    "status_hint": "",
+    "review_hint": "",
+    "priority": 90,
+    "notes": "给排水管道及附件"
+  },
+  {
+    "alias_pattern": "二次供水|直供水|生活泵|供水泵|地下泵房|泵房设备|变频供水",
+    "object_group": "给排水系统",
+    "target_catalog_id": "CF-015-02",
+    "target_level1": "给排水系统",
+    "target_level2": "给水系统、中水系统及排水系统的机电设备及其控制部分等",
+    "match_type": "regex",
+    "action_hint": "维修/更新/改造",
+    "status_hint": "",
+    "review_hint": "",
+    "priority": 85,
+    "notes": "给水/中水/排水系统的机电设备及控制部分"
+  },
+  {
+    "alias_pattern": "生化池|化粪池|隔油池|调节池|污水池",
+    "object_group": "给排水系统",
+    "target_catalog_id": "CF-015-03",
+    "target_level1": "给排水系统",
+    "target_level2": "处理池（如调节池、化粪池、隔油池等）基础及侧壁",
+    "match_type": "regex",
+    "action_hint": "维修/更新/改造",
+    "status_hint": "",
+    "review_hint": "",
+    "priority": 85,
+    "notes": "处理池基础及侧壁"
   },
   {
     "alias_pattern": "屋顶",
@@ -401,6 +453,19 @@
     "review_hint": "",
     "priority": 80,
     "notes": "动作词，需与楼道/过街楼/门厅等位置词组合"
+  },
+  {
+    "alias_pattern": "墙砖|墙面砖|墙面翻新",
+    "object_group": "墙面位置不明",
+    "target_catalog_id": "CP-004-02",
+    "target_level1": "室内门厅、楼梯间、走廊通道等",
+    "target_level2": "内墙面（如抹灰、涂料层等）、块材（如瓷砖、石材等）",
+    "match_type": "regex",
+    "action_hint": "维修/改造",
+    "status_hint": "",
+    "review_hint": "墙面位置不明时需在外墙、室内公共墙面、地下室墙面之间复核",
+    "priority": 75,
+    "notes": "位置不明墙砖/墙面仅用于召回候选，复核由 domain_guard 触发"
   },
   {
     "alias_pattern": "吊顶",
@@ -1038,6 +1103,58 @@
     "review_hint": "区分前端设备、传输系统和中央处理单元",
     "priority": 80,
     "notes": "弱电大类覆盖监控、门禁、对讲、停车场等"
+  },
+  {
+    "alias_pattern": "电梯.*(钢带|曳引带)|((钢带|曳引带).*电梯)",
+    "object_group": "电梯",
+    "target_catalog_id": "CF-017-05",
+    "target_level1": "电梯",
+    "target_level2": "钢丝绳",
+    "match_type": "regex",
+    "action_hint": "维修/更新/改造",
+    "status_hint": "",
+    "review_hint": "电梯钢带为业务表述，需确认是否对应四川目录钢丝绳",
+    "priority": 85,
+    "notes": "限定电梯上下文，避免普通钢带误命中"
+  },
+  {
+    "alias_pattern": "电梯.*(控制面板|主板|主控板|电路板)|((控制面板|主板|主控板|电路板).*电梯)",
+    "object_group": "电梯",
+    "target_catalog_id": "CF-017-07",
+    "target_level1": "电梯",
+    "target_level2": "控制柜",
+    "match_type": "regex",
+    "action_hint": "维修/更新/改造",
+    "status_hint": "",
+    "review_hint": "电梯主板/控制面板需确认是否属于控制柜相关元器件",
+    "priority": 85,
+    "notes": "只有电梯上下文中的主板/控制面板才归电梯控制柜"
+  },
+  {
+    "alias_pattern": "电梯.*(三方通话|五方通话|紧急通话|轿厢对讲|电梯对讲)|((三方通话|五方通话|紧急通话|轿厢对讲|电梯对讲).*电梯)",
+    "object_group": "电梯",
+    "target_catalog_id": "CF-017-10",
+    "target_level1": "电梯",
+    "target_level2": "紧急报警系统",
+    "match_type": "regex",
+    "action_hint": "维修/更新/改造",
+    "status_hint": "",
+    "review_hint": "四川目录未直接列三方/五方通话，暂按电梯紧急报警系统处理",
+    "priority": 85,
+    "notes": "电梯紧急通话类近似归紧急报警系统"
+  },
+  {
+    "alias_pattern": "自动扶梯|自动人行道|扶手带|梯级链",
+    "object_group": "电梯",
+    "target_catalog_id": "CF-017-13",
+    "target_level1": "电梯",
+    "target_level2": "自动扶梯及自动人行道",
+    "match_type": "regex",
+    "action_hint": "维修/更新/改造",
+    "status_hint": "",
+    "review_hint": "",
+    "priority": 95,
+    "notes": "只有明确自动扶梯/自动人行道相关部件时才归 CF-017-13"
   },
   {
     "alias_pattern": "三方通话",

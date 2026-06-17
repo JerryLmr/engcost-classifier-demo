@@ -15,7 +15,7 @@ import openpyxl
 
 from classifier.alias_matcher import load_alias_dictionary, match_aliases
 from classifier.candidate_retriever import candidate_label, retrieve_candidates
-from classifier.llm_client import llm_select_catalog_item, llm_select_repair_status
+from classifier.llm_client import ItemSelection, StatusSelection, llm_select_catalog_item, llm_select_repair_status
 from classifier.standard_catalog_loader import (
     OUT_OF_SCOPE_ID,
     get_standard_catalog_by_id,
@@ -108,6 +108,9 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         gold_path = ROOT / "backend/tests/gold/gold_regression_outofscope41.csv"
         import csv
 
+        if not gold_path.exists():
+            self.skipTest(f"missing regression gold file: {gold_path}")
+
         key_cases = {"G001", "G003", "G006", "G012", "G017", "G023", "G030", "G033"}
         with gold_path.open("r", encoding="utf-8-sig", newline="") as fp:
             rows = [row for row in csv.DictReader(fp) if row["case_id"] in key_cases]
@@ -124,6 +127,8 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
 
     def test_eval_regression_metrics_allow_acceptable_out_of_scope(self):
         script = ROOT / "scripts/eval_regression.py"
+        if not script.exists():
+            self.skipTest(f"missing regression script: {script}")
         spec = importlib.util.spec_from_file_location("eval_regression", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -298,6 +303,102 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertEqual(result["repair_status"], "更新")
         self.assertIn(candidate_label(get_standard_catalog_by_id()["CF-015-05"]), result["candidate_labels"])
         self.assertFalse(result["needs_review"])
+
+    @patch(
+        "classifier.llm_client.llm_select_repair_status",
+        return_value=StatusSelection(repair_status="维修", needs_review=False, reason="按工程名称判断为维修"),
+    )
+    @patch("classifier.llm_client.llm_select_catalog_item")
+    def test_generic_elevator_projects_use_internal_fallback_item(self, mock_item, _mock_status):
+        samples = [
+            "志成花苑46台电梯维修",
+            "电梯维修合同",
+            "凯托大厦4台电梯更新改造",
+            "长江路366弄老旧电梯更新工程",
+            "28、44号楼电梯大修",
+        ]
+        for text in samples:
+            with self.subTest(text=text):
+                result = classify_project_standard(text)
+                self.assertEqual(result["catalog_id"], "CF-017-00")
+                self.assertEqual(result["category"], "电梯")
+                self.assertEqual(result["item"], "未明确具体子项")
+                self.assertTrue(result["needs_review"])
+                self.assertNotEqual(result["catalog_id"], "CF-017-13")
+                self.assertTrue(all(not label.startswith("CF-017-13 |") for label in result["candidate_labels"]))
+        mock_item.assert_not_called()
+
+    @patch(
+        "classifier.llm_client.llm_select_repair_status",
+        return_value=StatusSelection(repair_status="维修", needs_review=False, reason="按工程名称判断为维修"),
+    )
+    @patch("classifier.llm_client.llm_select_catalog_item")
+    def test_specific_elevator_and_wall_guard_cases(self, mock_item, _mock_status):
+        expected_by_text = {
+            "商场自动扶梯扶手带更换": "CF-017-13",
+            "自动人行道梯级链维修": "CF-017-13",
+            "电梯钢带维修": "CF-017-05",
+            "电梯控制面板更换": "CF-017-07",
+            "电梯三方通话维修": "CF-017-10",
+            "女儿墙外侧粉刷损坏修补": "CP-003-01",
+            "楼道墙砖维修": "CP-004-02",
+            "地下车库墙面维修": "CP-005-01",
+            "墙砖翻新": "CP-004-02",
+            "视频监控系统改造": "CF-018-02",
+            "弱电智能化工程": "CF-018-16",
+            "安防监控全覆盖改造": "CF-018-02",
+        }
+
+        def select_item(project_name, candidates, _context_hints=None):
+            expected_id = expected_by_text[project_name]
+            candidate_ids = {item.id for item in candidates}
+            self.assertIn(expected_id, candidate_ids)
+            return ItemSelection(
+                catalog_id=expected_id,
+                secondary_catalog_ids=(),
+                is_composite=False,
+                needs_review=False,
+                reason="测试固定目录",
+            )
+
+        mock_item.side_effect = select_item
+
+        for text, expected_id in expected_by_text.items():
+            with self.subTest(text=text):
+                result = classify_project_standard(text)
+                self.assertEqual(result["catalog_id"], expected_id)
+                self.assertNotEqual(result["catalog_id"], OUT_OF_SCOPE_ID)
+                if text in {"电梯钢带维修", "电梯控制面板更换", "电梯三方通话维修"}:
+                    self.assertTrue(result["needs_review"])
+                    self.assertIn("电梯细部件", result["reason"])
+                if text == "墙砖翻新":
+                    self.assertTrue(result["needs_review"])
+                    self.assertIn("墙面/墙砖位置不明", result["reason"])
+                if text in {"视频监控系统改造", "弱电智能化工程", "安防监控全覆盖改造"}:
+                    self.assertTrue(result["needs_review"])
+                    self.assertIn("弱电系统级项目未明确前端设备、传输系统或中央处理单元", result["reason"])
+
+    def test_water_supply_aliases_recall_expected_candidates(self):
+        samples = {
+            "污水总管改造": "CF-015-04",
+            "落水管更换": "CF-015-04",
+            "窨井维修": "CF-015-01",
+            "二次供水设备维修": "CF-015-02",
+            "地下泵房水泵更换": "CF-015-02",
+            "生化池维修": "CF-015-03",
+        }
+        for text, expected_id in samples.items():
+            with self.subTest(text=text):
+                ids = [candidate.item.id for candidate in retrieve_candidates(text)]
+                self.assertIn(expected_id, ids)
+
+    def test_termite_candidate_is_limited_to_termite_text(self):
+        for text in ["外墙防水维修", "电梯维修", "监控系统改造"]:
+            with self.subTest(text=text):
+                ids = [candidate.item.id for candidate in retrieve_candidates(text)]
+                self.assertNotIn("TERMITE-001", ids)
+        termite_ids = [candidate.item.id for candidate in retrieve_candidates("白蚁防治工程")]
+        self.assertIn("TERMITE-001", termite_ids)
 
     def test_batch_script_outputs_new_headers_only(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"

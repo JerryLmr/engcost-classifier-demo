@@ -3,6 +3,7 @@ from typing import Sequence
 
 from classifier.alias_matcher import AliasMatchResult
 from classifier.candidate_retriever import candidate_label
+from classifier.domain_guard import GuardDecision
 from classifier.llm_client import ItemSelection, StatusSelection
 from classifier.standard_catalog_loader import (
     OUT_OF_SCOPE_ID,
@@ -45,6 +46,7 @@ def decide_review(
     alias_result: AliasMatchResult,
     item_selection: ItemSelection,
     status_selection: StatusSelection | None,
+    guard_decision: GuardDecision | None = None,
 ) -> ReviewDecision:
     """Decide whether a row truly needs manual review.
 
@@ -69,10 +71,12 @@ def decide_review(
             or status_selection.repair_status == UNCERTAIN_STATUS
             or status_selection.invalid_after_retry
         )
+    guard_needs_review = bool(guard_decision and guard_decision.needs_review)
 
     needs_review = (
         item_needs_review
         or status_needs_review
+        or guard_needs_review
         or is_composite
         or bool(normalized.review_hints)
         or bool(alias_result.negative_hints)
@@ -85,6 +89,8 @@ def decide_review(
         reason_suffixes.append(f"复核提示：{'、'.join(dict.fromkeys(normalized.review_hints))}")
     if needs_review and alias_result.review_hints and (item_needs_review or status_needs_review):
         reason_suffixes.append(f"复核提示：{'、'.join(dict.fromkeys(alias_result.review_hints))}")
+    if guard_decision and guard_decision.reason:
+        reason_suffixes.append(f"保护规则：{guard_decision.reason}")
     if is_composite:
         reason_suffixes.append("疑似复合工程")
 

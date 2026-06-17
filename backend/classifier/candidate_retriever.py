@@ -12,6 +12,15 @@ from classifier.standard_normalizer import normalize_project_text
 
 TOP_K = min(max(int(os.getenv("CLASSIFIER_TOP_K", "5")), 3), 8)
 INTERNAL_TOP_K = min(max(int(os.getenv("CLASSIFIER_INTERNAL_TOP_K", "20")), 15), 50)
+TERMITE_TERMS = (
+    "白蚁",
+    "蚁害",
+    "灭蚁",
+    "防蚁",
+    "白蚁防治",
+    "白蚁预防",
+    "白蚁灭治",
+)
 
 _ASCII_TOKEN_RE = re.compile(r"[a-z0-9]+")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
@@ -60,6 +69,14 @@ def _item_search_text(item: StandardCatalogItem) -> str:
     return " ".join(part for part in parts if part)
 
 
+def _allows_termite_candidate(normalized_text: str) -> bool:
+    return any(term in normalized_text for term in TERMITE_TERMS)
+
+
+def _is_termite_catalog_item(item: StandardCatalogItem) -> bool:
+    return item.id == "TERMITE-001" or item.category == "白蚁防治" or "白蚁" in item.item
+
+
 def candidate_label(item: StandardCatalogItem) -> str:
     return f"{item.id} | {item.category} | {item.item}"
 
@@ -106,6 +123,8 @@ def retrieve_candidates(project_name: str, top_k: int | None = None) -> list[Ret
 
     scored: list[tuple[float, StandardCatalogItem, str, str]] = []
     for item, search_text, item_tokens in _indexed_catalog():
+        if _is_termite_catalog_item(item) and not _allows_termite_candidate(normalized.normalized_text):
+            continue
         overlap = query_tokens & item_tokens
         score = float(len(overlap))
         if query_tokens:
