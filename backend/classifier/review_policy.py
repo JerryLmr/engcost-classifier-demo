@@ -3,7 +3,6 @@ from typing import Sequence
 
 from classifier.alias_matcher import AliasMatchResult
 from classifier.candidate_retriever import candidate_label
-from classifier.domain_guard import GuardDecision
 from classifier.llm_client import ItemSelection, StatusSelection
 from classifier.standard_catalog_loader import (
     OUT_OF_SCOPE_ID,
@@ -46,7 +45,6 @@ def decide_review(
     alias_result: AliasMatchResult,
     item_selection: ItemSelection,
     status_selection: StatusSelection | None,
-    guard_decision: GuardDecision | None = None,
 ) -> ReviewDecision:
     """Decide whether a row truly needs manual review.
 
@@ -71,12 +69,10 @@ def decide_review(
             or status_selection.repair_status == UNCERTAIN_STATUS
             or status_selection.invalid_after_retry
         )
-    guard_needs_review = bool(guard_decision and guard_decision.needs_review)
 
     needs_review = (
         item_needs_review
         or status_needs_review
-        or guard_needs_review
         or is_composite
         or bool(normalized.review_hints)
         or bool(alias_result.negative_hints)
@@ -89,8 +85,6 @@ def decide_review(
         reason_suffixes.append(f"复核提示：{'、'.join(dict.fromkeys(normalized.review_hints))}")
     if needs_review and alias_result.review_hints and (item_needs_review or status_needs_review):
         reason_suffixes.append(f"复核提示：{'、'.join(dict.fromkeys(alias_result.review_hints))}")
-    if guard_decision and guard_decision.reason:
-        reason_suffixes.append(f"保护规则：{guard_decision.reason}")
     if is_composite:
         reason_suffixes.append("疑似复合工程")
 
@@ -100,6 +94,17 @@ def decide_review(
         secondary_catalog_ids=tuple(secondary_ids),
         reason_suffixes=tuple(reason_suffixes),
     )
+
+
+def _dedupe_reason_parts(parts: Sequence[str]) -> list[str]:
+    deduped: list[str] = []
+    for part in parts:
+        text = str(part or "").strip("； ")
+        if not text:
+            continue
+        if text not in deduped:
+            deduped.append(text)
+    return deduped
 
 
 def selected_result(
@@ -119,7 +124,7 @@ def selected_result(
         for item_id in decision.secondary_catalog_ids
         if item_id in catalog_by_id
     ]
-    reason_parts = [item_selection.reason, status_selection.reason, *decision.reason_suffixes]
+    reason_parts = _dedupe_reason_parts([item_selection.reason, status_selection.reason, *decision.reason_suffixes])
     return {
         "project_name": project_name,
         "catalog_id": selected_item.id,

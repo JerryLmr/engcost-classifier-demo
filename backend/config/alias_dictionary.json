@@ -403,19 +403,6 @@
     "notes": "楼道粉刷、白化优先内墙面"
   },
   {
-    "alias_pattern": "粉刷",
-    "object_group": "墙面装饰维修动作",
-    "target_catalog_id": "CP-004-02",
-    "target_level1": "室内门厅、楼梯间、走廊通道等",
-    "target_level2": "内墙面（如抹灰、涂料层等）、块材（如瓷砖、石材等）",
-    "match_type": "contains",
-    "action_hint": "维修",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 80,
-    "notes": "动作词，需与楼道/过街楼/门厅等位置词组合"
-  },
-  {
     "alias_pattern": "白化",
     "object_group": "墙面装饰维修动作",
     "target_catalog_id": "CP-004-02",
@@ -440,32 +427,6 @@
     "review_hint": "",
     "priority": 80,
     "notes": "动作词，需与楼道/过街楼/门厅等位置词组合"
-  },
-  {
-    "alias_pattern": "墙面粉刷",
-    "object_group": "墙面装饰维修动作",
-    "target_catalog_id": "CP-004-02",
-    "target_level1": "室内门厅、楼梯间、走廊通道等",
-    "target_level2": "内墙面（如抹灰、涂料层等）、块材（如瓷砖、石材等）",
-    "match_type": "contains",
-    "action_hint": "维修",
-    "status_hint": "",
-    "review_hint": "",
-    "priority": 80,
-    "notes": "动作词，需与楼道/过街楼/门厅等位置词组合"
-  },
-  {
-    "alias_pattern": "墙砖|墙面砖|墙面翻新",
-    "object_group": "墙面位置不明",
-    "target_catalog_id": "CP-004-02",
-    "target_level1": "室内门厅、楼梯间、走廊通道等",
-    "target_level2": "内墙面（如抹灰、涂料层等）、块材（如瓷砖、石材等）",
-    "match_type": "regex",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "墙面位置不明时需在外墙、室内公共墙面、地下室墙面之间复核",
-    "priority": 75,
-    "notes": "位置不明墙砖/墙面仅用于召回候选，复核由 domain_guard 触发"
   },
   {
     "alias_pattern": "吊顶",
@@ -495,19 +456,6 @@
   },
   {
     "alias_pattern": "防盗门",
-    "object_group": "门窗",
-    "target_catalog_id": "CP-006-01",
-    "target_level1": "其它共用部位",
-    "target_level2": "门、窗",
-    "match_type": "contains",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "若为小区大门/电动门则改归围墙大门",
-    "priority": 80,
-    "notes": "防盗门/地弹簧优先视为共用部位门窗"
-  },
-  {
-    "alias_pattern": "地弹簧",
     "object_group": "门窗",
     "target_catalog_id": "CP-006-01",
     "target_level1": "其它共用部位",
@@ -557,32 +505,6 @@
     "review_hint": "若为小区大门/电动门则改归围墙大门",
     "priority": 80,
     "notes": "防盗门/地弹簧优先视为共用部位门窗"
-  },
-  {
-    "alias_pattern": "道路",
-    "object_group": "道路停车场",
-    "target_catalog_id": "CF-007-01",
-    "target_level1": "道路、停车场",
-    "target_level2": "道路基础",
-    "match_type": "contains",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "基础和面层可能复合",
-    "priority": 80,
-    "notes": ""
-  },
-  {
-    "alias_pattern": "主通道",
-    "object_group": "道路停车场",
-    "target_catalog_id": "CF-007-02",
-    "target_level1": "道路、停车场",
-    "target_level2": "路面及装饰层",
-    "match_type": "contains",
-    "action_hint": "维修/改造",
-    "status_hint": "",
-    "review_hint": "基础和面层可能复合",
-    "priority": 80,
-    "notes": ""
   },
   {
     "alias_pattern": "人行道",
@@ -676,19 +598,6 @@
     "notes": ""
   },
   {
-    "alias_pattern": "水池",
-    "object_group": "沟渠水池游泳池",
-    "target_catalog_id": "CF-009-03",
-    "target_level1": "沟渠、水池、游泳池",
-    "target_level2": "防水层",
-    "match_type": "contains",
-    "action_hint": "维修/更新/改造",
-    "status_hint": "",
-    "review_hint": "喷泉可能涉及给排水和电气复合",
-    "priority": 80,
-    "notes": ""
-  },
-  {
     "alias_pattern": "中央水池",
     "object_group": "沟渠水池游泳池",
     "target_catalog_id": "CF-009-03",
@@ -742,19 +651,6 @@
   },
   {
     "alias_pattern": "河岸护墙",
-    "object_group": "沟渠水池侧壁",
-    "target_catalog_id": "CF-009-01",
-    "target_level1": "沟渠、水池、游泳池",
-    "target_level2": "基础及侧壁",
-    "match_type": "contains",
-    "action_hint": "维修",
-    "status_hint": "",
-    "review_hint": "目录内推断项，需确认catalog存在",
-    "priority": 80,
-    "notes": "按沟渠/水池基础及侧壁处理"
-  },
-  {
-    "alias_pattern": "护墙",
     "object_group": "沟渠水池侧壁",
     "target_catalog_id": "CF-009-01",
     "target_level1": "沟渠、水池、游泳池",
@@ -1158,19 +1054,6 @@
   },
   {
     "alias_pattern": "三方通话",
-    "object_group": "弱电系统",
-    "target_catalog_id": "CF-018-04",
-    "target_level1": "弱电系统",
-    "target_level2": "对讲系统的户内机、电锁、闭门器、出门按钮等",
-    "match_type": "contains",
-    "action_hint": "维修/更新/改造/安装",
-    "status_hint": "",
-    "review_hint": "区分前端设备、传输系统和中央处理单元",
-    "priority": 80,
-    "notes": "弱电大类覆盖监控、门禁、对讲、停车场等"
-  },
-  {
-    "alias_pattern": "五方通话",
     "object_group": "弱电系统",
     "target_catalog_id": "CF-018-04",
     "target_level1": "弱电系统",

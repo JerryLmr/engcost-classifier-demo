@@ -21,6 +21,66 @@ TERMITE_TERMS = (
     "白蚁预防",
     "白蚁灭治",
 )
+GENERIC_ELEVATOR_TERMS = (
+    "电梯",
+    "客梯",
+    "乘客电梯",
+    "住宅电梯",
+    "垂直电梯",
+    "老旧电梯",
+)
+SPECIFIC_ELEVATOR_TERMS = (
+    "曳引机",
+    "制动器",
+    "电动机",
+    "导向轮",
+    "曳引轮",
+    "钢丝绳",
+    "限速器",
+    "限速系统",
+    "控制柜",
+    "励磁柜",
+    "层门",
+    "轿门",
+    "轿厢门",
+    "门机板",
+    "导靴",
+    "吊门轮",
+    "缓冲器",
+    "紧急报警",
+    "呼叫电话",
+    "呼梯",
+    "按钮",
+    "液压梯",
+    "液压泵站",
+    "自动扶梯",
+    "自动人行道",
+    "扶手带",
+    "梯级",
+    "踏板",
+    "梯级链",
+    "滚轮",
+    "钢带",
+    "曳引带",
+    "控制面板",
+    "主板",
+    "主控板",
+    "电路板",
+    "三方通话",
+    "五方通话",
+    "紧急通话",
+    "轿厢对讲",
+    "电梯对讲",
+)
+NON_ELEVATOR_OBJECT_CONTEXT_TERMS = (
+    "电梯厅",
+    "电梯间",
+    "电梯前室",
+    "电梯监控",
+    "轿厢监控",
+    "梯控",
+    "电梯门禁",
+)
 
 _ASCII_TOKEN_RE = re.compile(r"[a-z0-9]+")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
@@ -77,6 +137,14 @@ def _is_termite_catalog_item(item: StandardCatalogItem) -> bool:
     return item.id == "TERMITE-001" or item.category == "白蚁防治" or "白蚁" in item.item
 
 
+def _allows_generic_elevator_candidate(normalized_text: str) -> bool:
+    if any(term in normalized_text for term in NON_ELEVATOR_OBJECT_CONTEXT_TERMS):
+        return False
+    has_generic = any(term in normalized_text for term in GENERIC_ELEVATOR_TERMS)
+    has_specific = any(term in normalized_text for term in SPECIFIC_ELEVATOR_TERMS)
+    return has_generic and not has_specific
+
+
 def candidate_label(item: StandardCatalogItem) -> str:
     return f"{item.id} | {item.category} | {item.item}"
 
@@ -124,6 +192,8 @@ def retrieve_candidates(project_name: str, top_k: int | None = None) -> list[Ret
     scored: list[tuple[float, StandardCatalogItem, str, str]] = []
     for item, search_text, item_tokens in _indexed_catalog():
         if _is_termite_catalog_item(item) and not _allows_termite_candidate(normalized.normalized_text):
+            continue
+        if item.id == "CF-017-00" and not _allows_generic_elevator_candidate(normalized.normalized_text):
             continue
         overlap = query_tokens & item_tokens
         score = float(len(overlap))

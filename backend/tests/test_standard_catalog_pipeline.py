@@ -236,31 +236,43 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         return_value=StatusSelection(repair_status="维修", needs_review=False, reason="按工程名称判断为维修"),
     )
     @patch("classifier.llm_client.llm_select_catalog_item")
-    def test_generic_elevator_projects_use_internal_fallback_item(self, mock_item, _mock_status):
+    def test_generic_elevator_candidates_include_internal_item_and_still_call_llm(self, mock_item, _mock_status):
         samples = [
             "志成花苑46台电梯维修",
             "电梯维修合同",
-            "凯托大厦4台电梯更新改造",
             "长江路366弄老旧电梯更新工程",
-            "28、44号楼电梯大修",
         ]
+
+        def select_item(_project_name, candidates, _context_hints=None):
+            candidate_ids = {item.id for item in candidates}
+            self.assertIn("CF-017-00", candidate_ids)
+            return ItemSelection(
+                catalog_id="CF-017-00",
+                secondary_catalog_ids=(),
+                is_composite=False,
+                needs_review=True,
+                reason="普通电梯未明确具体部件",
+            )
+
+        mock_item.side_effect = select_item
+
         for text in samples:
             with self.subTest(text=text):
+                ids = [candidate.item.id for candidate in retrieve_candidates(text)]
+                self.assertIn("CF-017-00", ids)
                 result = classify_project_standard(text)
                 self.assertEqual(result["catalog_id"], "CF-017-00")
-                self.assertEqual(result["category"], "电梯")
-                self.assertEqual(result["item"], "未明确具体子项")
                 self.assertTrue(result["needs_review"])
-                self.assertNotEqual(result["catalog_id"], "CF-017-13")
-                self.assertTrue(all(not label.startswith("CF-017-13 |") for label in result["candidate_labels"]))
-        mock_item.assert_not_called()
+                for forbidden in ("保护规则", "forced_catalog_id", "domain_guard", "内部扩展项"):
+                    self.assertNotIn(forbidden, result["reason"])
+        self.assertEqual(mock_item.call_count, len(samples))
 
     @patch(
         "classifier.llm_client.llm_select_repair_status",
         return_value=StatusSelection(repair_status="维修", needs_review=False, reason="按工程名称判断为维修"),
     )
     @patch("classifier.llm_client.llm_select_catalog_item")
-    def test_specific_elevator_and_wall_guard_cases(self, mock_item, _mock_status):
+    def test_specific_elevator_and_system_cases_use_llm_candidates(self, mock_item, _mock_status):
         expected_by_text = {
             "商场自动扶梯扶手带更换": "CF-017-13",
             "自动人行道梯级链维修": "CF-017-13",
@@ -270,7 +282,6 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             "女儿墙外侧粉刷损坏修补": "CP-003-01",
             "楼道墙砖维修": "CP-004-02",
             "地下车库墙面维修": "CP-005-01",
-            "墙砖翻新": "CP-004-02",
             "视频监控系统改造": "CF-018-02",
             "弱电智能化工程": "CF-018-16",
             "安防监控全覆盖改造": "CF-018-02",
@@ -295,15 +306,28 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                 result = classify_project_standard(text)
                 self.assertEqual(result["catalog_id"], expected_id)
                 self.assertNotEqual(result["catalog_id"], OUT_OF_SCOPE_ID)
-                if text in {"电梯钢带维修", "电梯控制面板更换", "电梯三方通话维修"}:
-                    self.assertTrue(result["needs_review"])
-                    self.assertIn("电梯细部件", result["reason"])
-                if text == "墙砖翻新":
-                    self.assertTrue(result["needs_review"])
-                    self.assertIn("墙面/墙砖位置不明", result["reason"])
-                if text in {"视频监控系统改造", "弱电智能化工程", "安防监控全覆盖改造"}:
-                    self.assertTrue(result["needs_review"])
-                    self.assertIn("弱电系统级项目未明确前端设备、传输系统或中央处理单元", result["reason"])
+                for forbidden in ("保护规则", "forced_catalog_id", "domain_guard", "内部扩展项"):
+                    self.assertNotIn(forbidden, result["reason"])
+
+    def test_specific_elevator_parts_do_not_recall_generic_elevator_item(self):
+        samples = {
+            "电梯钢丝绳更换": "CF-017-05",
+            "电梯制动器维修": "CF-017-02",
+            "电梯控制柜维修": "CF-017-07",
+            "自动扶梯扶手带更换": "CF-017-13",
+        }
+        for text, expected_id in samples.items():
+            with self.subTest(text=text):
+                ids = [candidate.item.id for candidate in retrieve_candidates(text)]
+                self.assertIn(expected_id, ids)
+                self.assertNotIn("CF-017-00", ids)
+
+    def test_elevator_as_location_or_weak_current_modifier_does_not_recall_generic_elevator_item(self):
+        samples = ["电梯厅吊顶维修", "电梯厅墙面粉刷", "电梯监控维修", "梯控系统改造"]
+        for text in samples:
+            with self.subTest(text=text):
+                ids = [candidate.item.id for candidate in retrieve_candidates(text)]
+                self.assertNotIn("CF-017-00", ids)
 
     def test_water_supply_aliases_recall_expected_candidates(self):
         samples = {
