@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from classifier.alias_matcher import load_text_aliases, match_aliases
+from classifier.catalog_postprocess import postprocess_item_selection
 from classifier.llm_client import (
     ItemSelection,
     StatusSelection,
@@ -150,6 +151,63 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertIn("LLM returned invalid catalog_id: BAD-ID", result.reason)
         self.assertEqual(mock_request.call_count, 2)
 
+    def test_postprocess_promotes_weak_current_secondary_item(self):
+        result = postprocess_item_selection(
+            "弱电安防、监控、门禁",
+            ItemSelection(
+                catalog_id="CF-018-00",
+                secondary_catalog_ids=("CF-018-02", "CF-018-03"),
+                is_composite=False,
+                needs_review=False,
+                reason="测试固定目录",
+            ),
+            get_standard_catalog_by_id(),
+        )
+        self.assertEqual(result.catalog_id, "CF-018-02")
+        self.assertEqual(result.secondary_catalog_ids, ("CF-018-03",))
+        self.assertTrue(result.needs_review)
+        self.assertTrue(result.is_composite)
+        self.assertIn("已将具体子项提升为主分类", result.reason)
+
+    def test_postprocess_promotes_elevator_secondary_item(self):
+        result = postprocess_item_selection(
+            "电梯钢丝绳和曳引轮",
+            ItemSelection(
+                catalog_id="CF-017-00",
+                secondary_catalog_ids=("CF-017-05", "CF-017-04"),
+                is_composite=False,
+                needs_review=False,
+                reason="测试固定目录",
+            ),
+            get_standard_catalog_by_id(),
+        )
+        self.assertEqual(result.catalog_id, "CF-017-05")
+        self.assertEqual(result.secondary_catalog_ids, ("CF-017-04",))
+        self.assertTrue(result.needs_review)
+        self.assertTrue(result.is_composite)
+
+    def test_postprocess_keeps_unspecified_item_without_secondary(self):
+        selection = ItemSelection(
+            catalog_id="CF-018-00",
+            secondary_catalog_ids=(),
+            is_composite=False,
+            needs_review=True,
+            reason="仅明确弱电系统",
+        )
+        result = postprocess_item_selection("弱电系统维修", selection, get_standard_catalog_by_id())
+        self.assertEqual(result, selection)
+
+    def test_postprocess_keeps_specific_primary_item(self):
+        selection = ItemSelection(
+            catalog_id="CF-018-02",
+            secondary_catalog_ids=("CF-018-03",),
+            is_composite=True,
+            needs_review=True,
+            reason="测试固定目录",
+        )
+        result = postprocess_item_selection("监控和门禁", selection, get_standard_catalog_by_id())
+        self.assertEqual(result, selection)
+
     @patch(
         "classifier.llm_client.request_llm_json",
         return_value={
@@ -200,7 +258,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             "楼道粉刷": ("CP-004-02", (), False),
             "楼道整新": ("CP-004-02", (), False),
             "楼道整改": ("CP-004-02", (), False),
-            "安防、人脸识别、监控、门禁": ("CF-018-00", ("CF-018-02", "CF-018-03"), True),
+            "安防、人脸识别、监控、门禁": ("CF-018-02", ("CF-018-03",), True),
             "车牌识别系统更新": ("CF-018-07", (), False),
             "君临天下花园人行道维修": ("CF-007-02", (), False),
             "山鑫康城二次供水维修更新 二次供水改直供水": ("CF-015-02", ("CF-015-06",), True),

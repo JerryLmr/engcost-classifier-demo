@@ -2,6 +2,7 @@ from typing import Any
 
 from classifier import llm_client
 from classifier.alias_matcher import TextAliasResult, match_aliases
+from classifier.catalog_postprocess import postprocess_item_selection
 from classifier.review_policy import decide_review, fallback_result, selected_result
 from classifier.standard_catalog_loader import (
     OUT_OF_SCOPE_ID,
@@ -119,6 +120,7 @@ def _classify_project_full_catalog(
         catalog,
         context_hints,
     )
+    item_selection = postprocess_item_selection(project_name, item_selection, catalog_by_id)
     if item_selection.catalog_id == OUT_OF_SCOPE_ID:
         return _out_of_scope_result(project_name, normalized, alias_result, item_selection)
 
