@@ -208,6 +208,63 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         result = postprocess_item_selection("监控和门禁", selection, get_standard_catalog_by_id())
         self.assertEqual(result, selection)
 
+    def test_roof_leak_postprocess_prefers_waterproof_layer(self):
+        result = postprocess_item_selection(
+            "屋面渗漏水维修",
+            ItemSelection(
+                catalog_id="CP-002-01",
+                secondary_catalog_ids=(),
+                is_composite=False,
+                needs_review=False,
+                reason="测试固定目录",
+            ),
+            get_standard_catalog_by_id(),
+        )
+        self.assertEqual(result.catalog_id, "CP-002-03")
+        self.assertEqual(result.secondary_catalog_ids, ())
+        self.assertTrue(result.needs_review)
+        self.assertFalse(result.is_composite)
+        self.assertIn("屋面渗漏水优先归入防水层", result.reason)
+
+    def test_roof_leak_postprocess_adds_exterior_wall_secondary(self):
+        result = postprocess_item_selection(
+            "屋面防水补漏及外墙渗漏",
+            ItemSelection(
+                catalog_id="CP-002-01",
+                secondary_catalog_ids=(),
+                is_composite=False,
+                needs_review=False,
+                reason="测试固定目录",
+            ),
+            get_standard_catalog_by_id(),
+        )
+        self.assertEqual(result.catalog_id, "CP-002-03")
+        self.assertEqual(result.secondary_catalog_ids, ("CP-003-01",))
+        self.assertTrue(result.needs_review)
+        self.assertTrue(result.is_composite)
+
+    def test_roof_leak_postprocess_keeps_roof_structure_when_structure_terms_exist(self):
+        selection = ItemSelection(
+            catalog_id="CP-002-01",
+            secondary_catalog_ids=(),
+            is_composite=False,
+            needs_review=False,
+            reason="测试固定目录",
+        )
+        result = postprocess_item_selection("屋脊瓦面脱落维修", selection, get_standard_catalog_by_id())
+        self.assertEqual(result, selection)
+
+    def test_roof_leak_postprocess_ignores_non_roof_structure_primary(self):
+        selection = ItemSelection(
+            catalog_id="CP-002-03",
+            secondary_catalog_ids=(),
+            is_composite=False,
+            needs_review=False,
+            reason="测试固定目录",
+        )
+        result = postprocess_item_selection("屋面渗漏水维修", selection, get_standard_catalog_by_id())
+        self.assertEqual(result, selection)
+
     @patch(
         "classifier.llm_client.request_llm_json",
         return_value={
