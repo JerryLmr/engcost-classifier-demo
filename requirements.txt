@@ -1,5 +1,9 @@
 fastapi
 uvicorn[standard]
 openpyxl
+pandas
+numpy
+sentence-transformers
+pyarrow
 requests
 python-multipart

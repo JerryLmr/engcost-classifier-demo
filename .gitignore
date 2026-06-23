@@ -56,3 +56,9 @@ node_modules/
 
 *.bin
 *.gguf
+
+outputs/
+excel_outputs/
+*.npy
+*.parquet
+*.xlsx
