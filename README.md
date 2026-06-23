@@ -72,9 +72,7 @@ normalize_project_text
 - CP/CF 标准目录来自 `backend/config/standard_catalog.json`
 - alias 规则来自 `backend/config/text_aliases.json`
 - normalizer、alias、动作词和复核提示只作为上下文；catalog_id 由完整 compact 标准目录 LLM 选择并经过标准目录校验
-- 旧 n-gram 候选召回链路和“候选目录”输出字段已删除
 - 最终 `OUT_OF_SCOPE`、复合工程和复核建议由标准目录后处理统一决定
-- 旧 `rule-first / llm-fallback` 三位数字演示链路已删除
 
 ## 6. Excel 批量处理
 
@@ -157,4 +155,3 @@ python -m unittest discover -s tests -p "test_*.py"
 ## 10. 可继续扩展
 
 - 增加“人工修正后回写训练集”功能
-- 接入你现有的 demo 首页或系统菜单
