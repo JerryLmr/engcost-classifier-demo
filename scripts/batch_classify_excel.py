@@ -170,7 +170,12 @@ def _write_result_row(
         worksheet.cell(row=row, column=column, value=value)
 
 
-def classify_workbook(path: Path, output_path: Path, classify_project_func) -> tuple[int, int]:
+def classify_workbook(
+    path: Path,
+    output_path: Path,
+    classify_project_func,
+    classification_cache: dict[str, dict[str, object]],
+) -> tuple[int, int, int, int]:
     workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
     source_sheet = workbook.active
 
@@ -185,7 +190,10 @@ def classify_workbook(path: Path, output_path: Path, classify_project_func) -> t
         output_sheet.cell(row=1, column=column, value=header)
 
     processed = 0
+    classify_call_count = 0
+    cache_hit_count = 0
     empty_project_name_rows = 0
+    output_rows = 0
     output_row = 2
     consecutive_llm_service_errors = 0
     max_consecutive_llm_service_errors = 3
@@ -205,22 +213,31 @@ def classify_workbook(path: Path, output_path: Path, classify_project_func) -> t
             print(f"[WARN] {path.name}:{source_row} 工程名称为空，保留原始行但跳过分类", flush=True)
             _write_result_row(output_sheet, output_row, {"project_name": ""}, ocr_values)
             output_row += 1
+            output_rows += 1
             continue
 
-        print(f"[ROW ] {path.name}:{source_row} {project_text[:80]}", flush=True)
+        if project_text in classification_cache:
+            result = classification_cache[project_text]
+            cache_hit_count += 1
+            print(f"[CACHE] {path.name}:{source_row} {project_text[:80]}", flush=True)
+        else:
+            print(f"[ROW ] {path.name}:{source_row} {project_text[:80]}", flush=True)
 
-        result = classify_project_func(project_text)
+            result = classify_project_func(project_text)
+            classification_cache[project_text] = result
+            classify_call_count += 1
 
-        print(
-            f"[DONE] {path.name}:{source_row} "
-            f"{result.get('catalog_id')} "
-            f"{result.get('category')} / {result.get('item')} "
-            f"status={result.get('pipeline_status')}",
-            flush=True,
-        )
+            print(
+                f"[DONE] {path.name}:{source_row} "
+                f"{result.get('catalog_id')} "
+                f"{result.get('category')} / {result.get('item')} "
+                f"status={result.get('pipeline_status')}",
+                flush=True,
+            )
 
         _write_result_row(output_sheet, output_row, result, ocr_values)
         output_row += 1
+        output_rows += 1
         processed += 1
 
         if result.get("pipeline_status") == "llm_service_error":
@@ -244,7 +261,7 @@ def classify_workbook(path: Path, output_path: Path, classify_project_func) -> t
     output_workbook.save(output)
     output_path.write_bytes(output.getvalue())
     workbook.close()
-    return processed, empty_project_name_rows
+    return classify_call_count, cache_hit_count, output_rows, empty_project_name_rows
 
 
 def _is_directory_output(raw_output: str, output_path: Path) -> bool:
@@ -324,8 +341,12 @@ def main() -> int:
 
     total_files = 0
     total_processed = 0
+    total_classify_calls = 0
+    total_cache_hits = 0
+    total_output_rows = 0
     total_skipped = 0
     failed_files: list[tuple[str, str]] = []
+    classification_cache: dict[str, dict[str, object]] = {}
 
     print(f"[INFO] 待处理文件数: {len(jobs)}")
     for path, output_path in jobs:
@@ -334,9 +355,18 @@ def main() -> int:
     for path, output_path in jobs:
         print(f"[RUN ] {path.name}")
         try:
-            processed, empty_project_name_rows = classify_workbook(path, output_path, classify_project_standard)
+            (
+                classify_call_count,
+                cache_hit_count,
+                output_rows,
+                empty_project_name_rows,
+            ) = classify_workbook(path, output_path, classify_project_standard, classification_cache)
             total_files += 1
+            processed = classify_call_count + cache_hit_count
             total_processed += processed
+            total_classify_calls += classify_call_count
+            total_cache_hits += cache_hit_count
+            total_output_rows += output_rows
             total_skipped += empty_project_name_rows
             print(
                 f"[ OK ] {path.name} -> {output_path.name} "
@@ -349,6 +379,9 @@ def main() -> int:
     print()
     print(f"[DONE] 成功文件: {total_files}, 失败文件: {len(failed_files)}")
     print(f"[DONE] 总分类行数: {total_processed}, 空工程名保留行数: {total_skipped}")
+    print(f"[DONE] 实际分类调用次数: {total_classify_calls}")
+    print(f"[DONE] 缓存命中次数: {total_cache_hits}")
+    print(f"[DONE] 输出行数: {total_output_rows}")
     if failed_files:
         print("[DONE] 失败明细:")
         for name, error in failed_files:

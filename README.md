@@ -1,82 +1,50 @@
-# 物业工程名称智能分类 Demo
+## 已审定清单样本库与初案估价流程
 
-这个 Demo 包含两部分：
+本流程用于将 OCR 识别出的已审定维修项目资料转为清单级样本库，并基于相似清单检索给新维修初案提供参考价格区间。
 
-- `frontend/`：静态前端页面，已拆分为 `index.html + styles.css + app.js`
-- `backend/`：FastAPI 后端，统一走 CP/CF 标准目录分类链路
+当前流程不用于判断“异常 / 违规 / 不合理”，只输出相似样本和参考区间。
 
-## 1. 安装依赖
+### 1. 输入文件
 
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r ../requirements.txt
-```
-
-## 2. 确认 LLM 服务已运行
-
-默认使用 Ollama：
+OCR 原始结果放在：
 
 ```bash
-ollama list
-ollama run qwen3:8b
+excel_inputs/audit_ocr_export.xlsx
 ```
 
-只要本地 `http://127.0.0.1:11434` 可访问即可。
-
-如需使用 LM Studio，可以手动设置环境变量：
-
-```bash
-export LLM_PROVIDER=lmstudio
-export LMSTUDIO_BASE_URL=http://172.18.0.1:1234/v1
-export LMSTUDIO_MODEL=qwen/qwen3.6-35b-a3b
-export LMSTUDIO_API_KEY=lm-studio
-export LLM_TIMEOUT_SECONDS=60
-```
-
-## 3. 启动后端
-
-```bash
-cd backend
-source .venv/bin/activate
-uvicorn app:app --reload
-```
-
-默认地址：`http://127.0.0.1:8000`
-
-## 4. 打开前端
-
-直接双击 `frontend/index.html`，或在 VS Code 里用 Live Server 打开。
-
-如果需要改前端请求地址，可在 `frontend/index.html` 中调整：
-
-```html
-<script>
-  window.API_BASE = "http://127.0.0.1:8000";
-</script>
-```
-
-## 5. 分类链路
-
-当前只保留一条主链路：
+输入 Excel 需要包含 4 列：
 
 ```text
-normalize_project_text
-→ match_aliases
-→ llm_select_catalog_item_from_full_catalog
-→ llm_select_repair_status
-→ decide_review
+file_name
+consultation_project_name
+renovation_content
+sub_item_project_rows
 ```
 
-- CP/CF 标准目录来自 `backend/config/standard_catalog.json`
-- alias 规则来自 `backend/config/text_aliases.json`
-- normalizer、alias、动作词和复核提示只作为上下文；catalog_id 由完整 compact 标准目录 LLM 选择并经过标准目录校验
-- 最终 `OUT_OF_SCOPE`、复合工程和复核建议由标准目录后处理统一决定
+其中系统会自动生成：
 
-## 6. Excel 批量处理
+```text
+工程名称 = consultation_project_name + " " + renovation_content
+```
 
-第一列为工程名称。输出列统一为：
+不需要人工复制粘贴分类结果和 OCR 字段。
+
+### 2. 工程项目级分类
+
+```bash
+backend/.venv/bin/python scripts/batch_classify_excel.py \
+  excel_inputs/audit_ocr_export.xlsx \
+  -o excel_outputs/classified_projects.xlsx \
+  --overwrite
+```
+
+输出文件：
+
+```bash
+excel_outputs/classified_projects.xlsx
+```
+
+输出字段顺序为：
 
 ```text
 工程名称
@@ -91,67 +59,123 @@ catalog_id
 是否白蚁相关
 是否建议复核
 分类依据
+file_name
+consultation_project_name
+renovation_content
+sub_item_project_rows
 ```
 
-通过前端上传 Excel 和通过脚本批量处理，都会使用同一条标准目录链路。
-
-## 7. 本地批量跑 Excel
+### 3. 展开清单级样本
 
 ```bash
-cd /home/jerrylmr/githubRepository/engcost-classifier-demo
-source backend/.venv/bin/activate
-python scripts/batch_classify_excel.py /path/to/excel_dir --overwrite
+backend/.venv/bin/python scripts/build_cost_item_samples.py \
+  excel_outputs/classified_projects.xlsx \
+  -o outputs/cost_item_samples.xlsx
 ```
 
-默认输出到 `/path/to/excel_dir/classified_results/`。
-
-常用参数：
+输出文件：
 
 ```bash
-python scripts/batch_classify_excel.py /path/to/excel_dir --overwrite
-python scripts/batch_classify_excel.py /path/to/excel_dir -o /path/to/output_dir --overwrite
-python scripts/batch_classify_excel.py /path/to/input.xlsx -o /path/to/output.xlsx --overwrite
+outputs/cost_item_samples.xlsx
 ```
 
-脚本默认会跳过已经带 `_分类结果` 或 `_classified` 后缀的文件。
-
-## 8. 分析分类结果
-
-可以对标准目录分类结果做汇总分析，并导出一份 Excel 报表：
-
-```bash
-cd /home/jerrylmr/githubRepository/engcost-classifier-demo
-source backend/.venv/bin/activate
-python scripts/analyze_excel_outputs.py excel_outputs
-```
-
-默认输出：
+其中 `samples` sheet 每一行代表一条清单样本：
 
 ```text
-excel_outputs/分析汇总.xlsx
+source_row_id + sub_item_project_rows 中的 seq
 ```
 
-汇总文件包含 4 个 sheet：
+关键字段包括：
 
-- `总览`
-- `一级分类统计`
-- `二级分类统计`
-- `重点样本`
+```text
+file_name
+工程名称
+sub_project_id
+catalog_id
+一级分类
+二级分类
+维修状态
+标准对象
+复合目录
+cost_item_name
+project_description
+unit_normalized
+quantity
+unit_price
+labor_unit_price
+machinery_unit_price
+item_similarity_text
+item_context_text
+```
 
-也可以自定义输出路径：
+### 4. 构建 embedding 索引
 
 ```bash
-python scripts/analyze_excel_outputs.py excel_outputs -o reports/分析汇总.xlsx
+backend/.venv/bin/python scripts/build_cost_item_embedding_index.py \
+  --samples outputs/cost_item_samples.xlsx \
+  --output-dir outputs/cost_item_index \
+  --model BAAI/bge-m3
 ```
 
-## 9. 运行测试
+输出目录：
 
 ```bash
-cd backend
-source .venv/bin/activate
-python -m unittest discover -s tests -p "test_*.py"
+outputs/cost_item_index/
 ```
 
-## 10. 可继续扩展
+包含：
 
-- 增加“人工修正后回写训练集”功能
+```text
+samples.parquet
+item_similarity_embeddings.npy
+item_context_embeddings.npy
+index_meta.json
+```
+
+这些文件是运行产物，不需要提交 Git。
+
+### 5. 查询相似清单并估算价格区间
+
+示例：估算 500 平方米屋面卷材防水的参考价格。
+
+```bash
+backend/.venv/bin/python scripts/query_cost_item_estimate.py \
+  --index-dir outputs/cost_item_index \
+  --query "屋面卷材防水；3.0mm SBS沥青防水卷材；含基层清理" \
+  --context "屋面漏水维修工程" \
+  --unit "m²" \
+  --quantity 500 \
+  --top-k 10 \
+  --output outputs/cost_estimate_result.xlsx
+```
+
+输出文件：
+
+```bash
+outputs/cost_estimate_result.xlsx
+```
+
+其中：
+
+- `summary` sheet：参考单价区间、估算总价区间、样本数量、说明。
+- `matches` sheet：top-k 相似清单样本明细。
+
+说明：
+
+````text
+参考区间来自已审定清单样本的相似项检索结果，仅用于维修项目初案估算参考，不替代正式造价审核。
+
+
+### 6. 文件提交说明
+
+以下目录和文件为运行产物，不提交 Git：
+
+```text
+excel_outputs/
+outputs/
+*.xlsx
+*.npy
+*.parquet
+````
+
+如需提交示例数据，应使用脱敏的小样本文件。

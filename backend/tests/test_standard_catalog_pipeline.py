@@ -45,6 +45,10 @@ NEW_HEADERS = [
     "是否白蚁相关",
     "是否建议复核",
     "分类依据",
+    "file_name",
+    "consultation_project_name",
+    "renovation_content",
+    "sub_item_project_rows",
 ]
 
 OLD_HEADERS = {"置信度", "匹配类型", "分类方式", "候选目录"}
@@ -56,6 +60,25 @@ def make_workbook(*project_names: str) -> bytes:
     worksheet.cell(row=1, column=1, value="工程名称")
     for row, value in enumerate(project_names, start=2):
         worksheet.cell(row=row, column=1, value=value)
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+def make_ocr_workbook(rows: list[tuple[object, object, object, object]]) -> bytes:
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    headers = [
+        "file_name",
+        "consultation_project_name",
+        "renovation_content",
+        "sub_item_project_rows",
+    ]
+    for column, header in enumerate(headers, start=1):
+        worksheet.cell(row=1, column=column, value=header)
+    for row_index, values in enumerate(rows, start=2):
+        for column, value in enumerate(values, start=1):
+            worksheet.cell(row=row_index, column=column, value=value)
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()
@@ -79,6 +102,10 @@ def make_classified_workbook(path: Path) -> None:
         "否",
         "是",
         "疑似复合工程",
+        "ocr.xlsx",
+        "咨询项目",
+        "维修内容",
+        "[]",
     ]
     for column, value in enumerate(values, start=1):
         worksheet.cell(row=2, column=column, value=value)
@@ -433,6 +460,103 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertTrue(OLD_HEADERS.isdisjoint(set(headers)))
             self.assertEqual(worksheet.cell(row=2, column=1).value, "减压阀更换")
             self.assertEqual(worksheet.cell(row=2, column=2).value, OUT_OF_SCOPE_ID)
+
+    def test_batch_script_caches_repeated_project_names(self):
+        script = ROOT / "scripts" / "batch_classify_excel.py"
+        spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        calls: list[str] = []
+
+        def fake_classify(project_text: str) -> dict[str, object]:
+            calls.append(project_text)
+            return {
+                "project_name": project_text,
+                "catalog_id": f"ID-{len(calls)}",
+                "category": "一级",
+                "item": "二级",
+                "pipeline_status": "ok",
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / "input.xlsx"
+            output_file = tmp_path / "output.xlsx"
+            input_file.write_bytes(make_workbook("屋面维修", "屋面维修", "", "外墙维修"))
+
+            cache: dict[str, dict[str, object]] = {}
+            stats = module.classify_workbook(input_file, output_file, fake_classify, cache)
+
+            self.assertEqual(stats, (2, 1, 4, 1))
+            self.assertEqual(calls, ["屋面维修", "外墙维修"])
+            workbook = openpyxl.load_workbook(output_file)
+            worksheet = workbook.active
+            self.assertEqual(worksheet.cell(row=2, column=2).value, "ID-1")
+            self.assertEqual(worksheet.cell(row=3, column=2).value, "ID-1")
+            self.assertIsNone(worksheet.cell(row=4, column=2).value)
+            self.assertEqual(worksheet.cell(row=5, column=2).value, "ID-2")
+
+    def test_batch_script_cache_reuses_across_files_and_preserves_ocr_fields(self):
+        script = ROOT / "scripts" / "batch_classify_excel.py"
+        spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        calls: list[str] = []
+
+        def fake_classify(project_text: str) -> dict[str, object]:
+            calls.append(project_text)
+            return {
+                "project_name": project_text,
+                "catalog_id": "CP-TEST",
+                "category": "一级",
+                "item": "二级",
+                "pipeline_status": "ok",
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            first_input = tmp_path / "first.xlsx"
+            second_input = tmp_path / "second.xlsx"
+            first_output = tmp_path / "first-output.xlsx"
+            second_output = tmp_path / "second-output.xlsx"
+            first_input.write_bytes(
+                make_ocr_workbook(
+                    [
+                        ("file-a.pdf", "小区屋面", "防水维修", "[{\"seq\": 1}]"),
+                        ("file-b.pdf", "小区屋面", "防水维修", "[{\"seq\": 2}]"),
+                        ("blank.pdf", "", "", "[{\"seq\": 3}]"),
+                    ]
+                )
+            )
+            second_input.write_bytes(make_ocr_workbook([("file-c.pdf", "小区屋面", "防水维修", "[]")]))
+
+            cache: dict[str, dict[str, object]] = {}
+            first_stats = module.classify_workbook(first_input, first_output, fake_classify, cache)
+            second_stats = module.classify_workbook(second_input, second_output, fake_classify, cache)
+
+            self.assertEqual(first_stats, (1, 1, 3, 1))
+            self.assertEqual(second_stats, (0, 1, 1, 0))
+            self.assertEqual(calls, ["小区屋面 防水维修"])
+
+            first_workbook = openpyxl.load_workbook(first_output)
+            first_sheet = first_workbook.active
+            self.assertEqual(first_sheet.cell(row=2, column=13).value, "file-a.pdf")
+            self.assertEqual(first_sheet.cell(row=2, column=16).value, "[{\"seq\": 1}]")
+            self.assertEqual(first_sheet.cell(row=3, column=13).value, "file-b.pdf")
+            self.assertEqual(first_sheet.cell(row=3, column=16).value, "[{\"seq\": 2}]")
+            self.assertEqual(first_sheet.cell(row=4, column=13).value, "blank.pdf")
+            self.assertEqual(first_sheet.cell(row=4, column=16).value, "[{\"seq\": 3}]")
+
+            second_workbook = openpyxl.load_workbook(second_output)
+            second_sheet = second_workbook.active
+            self.assertEqual(second_sheet.cell(row=2, column=1).value, "小区屋面 防水维修")
+            self.assertEqual(second_sheet.cell(row=2, column=13).value, "file-c.pdf")
 
     def test_batch_script_importable(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"
