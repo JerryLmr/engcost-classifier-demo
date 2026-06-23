@@ -26,9 +26,19 @@ RESULT_HEADERS = [
     "是否白蚁相关",
     "是否建议复核",
     "分类依据",
+    "file_name",
+    "consultation_project_name",
+    "renovation_content",
+    "sub_item_project_rows",
 ]
 
 EXCEL_SUFFIXES = {".xlsx", ".xlsm"}
+OCR_HEADERS = [
+    "file_name",
+    "consultation_project_name",
+    "renovation_content",
+    "sub_item_project_rows",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,20 +79,92 @@ def _bool_text(value: object) -> str:
     return "是" if bool(value) else "否"
 
 
-def _write_result_row(worksheet, row: int, result: dict[str, object], source_file: Path, source_row: int) -> None:
+def _cell_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _load_header_map(worksheet) -> dict[str, int]:
+    header_map: dict[str, int] = {}
+    for column in range(1, worksheet.max_column + 1):
+        header = _cell_text(worksheet.cell(row=1, column=column).value)
+        if header and header not in header_map:
+            header_map[header] = column
+    return header_map
+
+
+def _get_cell(worksheet, header_map: dict[str, int], row: int, header: str) -> object:
+    column = header_map.get(header)
+    if not column:
+        return None
+    return worksheet.cell(row=row, column=column).value
+
+
+def _get_text(worksheet, header_map: dict[str, int], row: int, header: str) -> str:
+    return _cell_text(_get_cell(worksheet, header_map, row, header))
+
+
+def _build_project_name(project_name: object, consultation_project_name: object, renovation_content: object) -> str:
+    existing_project_name = _cell_text(project_name)
+    if existing_project_name:
+        return existing_project_name
+    return " ".join(
+        part for part in [_cell_text(consultation_project_name), _cell_text(renovation_content)] if part
+    ).strip()
+
+
+def _detect_project_name_column(header_map: dict[str, int]) -> int | None:
+    if "工程名称" in header_map:
+        return header_map["工程名称"]
+    return None
+
+
+def _validate_input_headers(header_map: dict[str, int], first_header: object) -> int | None:
+    project_name_column = _detect_project_name_column(header_map)
+    if project_name_column:
+        return project_name_column
+
+    missing_ocr_headers = [header for header in OCR_HEADERS if header not in header_map]
+    if not missing_ocr_headers:
+        return None
+
+    if first_header is None or str(first_header).strip() == "":
+        raise ValueError("第一列表头不能为空")
+    raise ValueError(
+        "输入 Excel 缺少 工程名称 列；若使用 OCR 原始表，必须包含字段: "
+        + ", ".join(OCR_HEADERS)
+        + f"。当前缺少: {', '.join(missing_ocr_headers)}"
+    )
+
+
+def _read_ocr_values(worksheet, header_map: dict[str, int], row: int) -> dict[str, object]:
+    return {header: _get_cell(worksheet, header_map, row, header) for header in OCR_HEADERS}
+
+
+def _write_result_row(
+    worksheet,
+    row: int,
+    result: dict[str, object],
+    ocr_values: dict[str, object],
+) -> None:
     values = [
-        result["project_name"],
-        result["catalog_id"],
-        result["category"],
-        result["item"],
-        result["repair_status"],
-        result["standard_group"],
-        _bool_text(result["is_composite"]),
-        " | ".join(result["secondary_catalog_labels"]),
-        _bool_text(result["is_emergency"]),
-        _bool_text(result["termite_related"]),
-        _bool_text(result["needs_review"]),
-        result["reason"],
+        result.get("project_name", ""),
+        result.get("catalog_id", ""),
+        result.get("category", ""),
+        result.get("item", ""),
+        result.get("repair_status", ""),
+        result.get("standard_group", ""),
+        _bool_text(result.get("is_composite")) if "is_composite" in result else "",
+        " | ".join(result.get("secondary_catalog_labels") or []),
+        _bool_text(result.get("is_emergency")) if "is_emergency" in result else "",
+        _bool_text(result.get("termite_related")) if "termite_related" in result else "",
+        _bool_text(result.get("needs_review")) if "needs_review" in result else "",
+        result.get("reason", ""),
+        ocr_values.get("file_name"),
+        ocr_values.get("consultation_project_name"),
+        ocr_values.get("renovation_content"),
+        ocr_values.get("sub_item_project_rows"),
     ]
     for column, value in enumerate(values, start=1):
         worksheet.cell(row=row, column=column, value=value)
@@ -93,8 +175,8 @@ def classify_workbook(path: Path, output_path: Path, classify_project_func) -> t
     source_sheet = workbook.active
 
     first_header = source_sheet.cell(row=1, column=1).value
-    if first_header is None or str(first_header).strip() == "":
-        raise ValueError("第一列表头不能为空")
+    header_map = _load_header_map(source_sheet)
+    project_name_column = _validate_input_headers(header_map, first_header)
 
     output_workbook = openpyxl.Workbook()
     output_sheet = output_workbook.active
@@ -103,17 +185,28 @@ def classify_workbook(path: Path, output_path: Path, classify_project_func) -> t
         output_sheet.cell(row=1, column=column, value=header)
 
     processed = 0
-    skipped = 0
+    empty_project_name_rows = 0
     output_row = 2
     consecutive_llm_service_errors = 0
     max_consecutive_llm_service_errors = 3
     for source_row in range(2, source_sheet.max_row + 1):
-        project_name = source_sheet.cell(row=source_row, column=1).value
-        if project_name is None or str(project_name).strip() == "":
-            skipped += 1
+        ocr_values = _read_ocr_values(source_sheet, header_map, source_row)
+        if project_name_column:
+            project_name = source_sheet.cell(row=source_row, column=project_name_column).value
+            project_text = _cell_text(project_name)
+        else:
+            project_text = _build_project_name(
+                None,
+                ocr_values.get("consultation_project_name"),
+                ocr_values.get("renovation_content"),
+            )
+        if not project_text:
+            empty_project_name_rows += 1
+            print(f"[WARN] {path.name}:{source_row} 工程名称为空，保留原始行但跳过分类", flush=True)
+            _write_result_row(output_sheet, output_row, {"project_name": ""}, ocr_values)
+            output_row += 1
             continue
 
-        project_text = str(project_name).strip()
         print(f"[ROW ] {path.name}:{source_row} {project_text[:80]}", flush=True)
 
         result = classify_project_func(project_text)
@@ -126,7 +219,7 @@ def classify_workbook(path: Path, output_path: Path, classify_project_func) -> t
             flush=True,
         )
 
-        _write_result_row(output_sheet, output_row, result, path, source_row)
+        _write_result_row(output_sheet, output_row, result, ocr_values)
         output_row += 1
         processed += 1
 
@@ -150,7 +243,8 @@ def classify_workbook(path: Path, output_path: Path, classify_project_func) -> t
     output = io.BytesIO()
     output_workbook.save(output)
     output_path.write_bytes(output.getvalue())
-    return processed, skipped
+    workbook.close()
+    return processed, empty_project_name_rows
 
 
 def _is_directory_output(raw_output: str, output_path: Path) -> bool:
@@ -240,13 +334,13 @@ def main() -> int:
     for path, output_path in jobs:
         print(f"[RUN ] {path.name}")
         try:
-            processed, skipped = classify_workbook(path, output_path, classify_project_standard)
+            processed, empty_project_name_rows = classify_workbook(path, output_path, classify_project_standard)
             total_files += 1
             total_processed += processed
-            total_skipped += skipped
+            total_skipped += empty_project_name_rows
             print(
                 f"[ OK ] {path.name} -> {output_path.name} "
-                f"(处理 {processed} 行, 跳过 {skipped} 行空值)"
+                f"(分类 {processed} 行, 空工程名保留 {empty_project_name_rows} 行)"
             )
         except Exception as exc:  # noqa: BLE001
             failed_files.append((path.name, str(exc)))
@@ -254,7 +348,7 @@ def main() -> int:
 
     print()
     print(f"[DONE] 成功文件: {total_files}, 失败文件: {len(failed_files)}")
-    print(f"[DONE] 总处理行数: {total_processed}, 总跳过空行: {total_skipped}")
+    print(f"[DONE] 总分类行数: {total_processed}, 空工程名保留行数: {total_skipped}")
     if failed_files:
         print("[DONE] 失败明细:")
         for name, error in failed_files:

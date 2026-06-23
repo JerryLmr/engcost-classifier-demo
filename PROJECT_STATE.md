@@ -6,6 +6,7 @@
 ## System Capabilities
 - 支持单条工程名称分类，返回一级分类、二级分类、维修状态、分类依据、复合工程、紧急维修、白蚁相关和建议复核字段。
 - 支持 Excel 批量分类，自动输出分类结果、复合工程标记、复合目录和复核相关列并下载结果文件。
+- 支持 OCR 原始 Excel 直连批量分类，可由 `consultation_project_name` 和 `renovation_content` 自动生成工程名称，并保留 OCR 追溯字段。
 - CP/CF 标准目录管线采用完整 compact 标准目录 LLM 选择：normalizer、alias、动作词和复核提示只提供上下文，最终 catalog_id 经标准目录 id 校验后进入维修状态判断。
 - 支持复合工程的其它标准目录输出：`secondary_catalog_ids` / `secondary_catalog_labels`。
 - 支持基于目录的批量结果分析，并可导出 Excel 汇总报表。
@@ -17,7 +18,8 @@
 - 新增 `build_cost_item_embedding_index.py`，可从已审定清单样本 Excel 构建 parquet + numpy embedding 索引。
 - 新增 `query_cost_item_estimate.py`，可对输入清单项进行相似样本检索，并输出终端摘要或 Excel 查询结果。
 - 已为第二阶段补充 `pandas`、`numpy`、`sentence-transformers`、`pyarrow` 依赖。
-- 已保留 `build_cost_item_samples.py` 的 samples 输出结构，第二阶段仅消费其现有字段。
+- 已更新 `build_cost_item_samples.py` 的 samples 输出结构，保留 `file_name` 追溯字段。
+- 已更新批量分类脚本，可直接读取 OCR 原始四字段并输出 `final_target.xlsx`。
 - 已更新批量分类、上传分类、结果分析和前端展示以适配 full catalog only 输出。
 
 ## Decisions

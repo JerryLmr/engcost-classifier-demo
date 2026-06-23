@@ -10,6 +10,7 @@ import openpyxl
 
 
 PROJECT_HEADERS = [
+    "file_name",
     "工程名称",
     "consultation_project_name",
     "renovation_content",
@@ -29,6 +30,7 @@ PROJECT_HEADERS = [
 SAMPLE_HEADERS = [
     "source_row_id",
     "item_row_id",
+    "file_name",
     "工程名称",
     "consultation_project_name",
     "renovation_content",
@@ -133,6 +135,7 @@ def compact_json(value: Any) -> str:
 
 def raw_row_summary(row_values: dict[str, str]) -> str:
     summary = {
+        "file_name": row_values.get("file_name", ""),
         "工程名称": row_values.get("工程名称", ""),
         "consultation_project_name": row_values.get("consultation_project_name", ""),
         "renovation_content": row_values.get("renovation_content", ""),
