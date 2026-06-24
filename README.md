@@ -137,47 +137,46 @@ outputs/cost_item_index/
 
 ```text
 samples.parquet
-item_similarity_embeddings.npy
-item_context_embeddings.npy
+item_embeddings.npy
+project_embeddings.npy
+full_embeddings.npy
 index_meta.json
 ```
 
 这些文件是运行产物，不需要提交 Git。
 
-### 5. 查询相似清单并估算价格区间
+### 5. LLM 自然语言估价实验
 
-示例：估算 500 平方米屋面卷材防水的参考价格。
+示例：用户只输入口语化维修需求，由 LLM 抽取检索 profile，再用相似清单样本统计参考价格。
 
 ```bash
-backend/.venv/bin/python scripts/query_cost_item_estimate.py \
+backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
   --index-dir outputs/cost_item_index \
-  --query "屋面卷材防水；3.0mm SBS沥青防水卷材；含基层清理" \
-  --context "屋面漏水维修工程" \
-  --unit "m²" \
-  --quantity 500 \
-  --top-k 10 \
-  --output outputs/cost_estimate_result.xlsx \
+  --text "屋面漏水，想做3mm SBS防水，面积大概500平" \
+  --output outputs/estimate_llm.xlsx \
   --overwrite
 ```
 
 输出文件：
 
 ```bash
-outputs/cost_estimate_result.xlsx
+outputs/estimate_llm.xlsx
 ```
 
 其中：
 
-- `summary` sheet：参考单价区间、估算总价区间、样本数量、说明。
-- `matches` sheet：top-k 相似清单样本明细。
+- `summary` sheet：LLM 解析出的工程场景、清单对象、做法特征、内部预测目录、相似度和 warning。
+- `unit_price_by_unit` sheet：按历史样本单位分组的综合单价统计；缺少用户单位时不同单位不会混合估价。
+- `matches` sheet：top-k 重排后的相似清单样本明细，包含三路语义分数、目录匹配和单位匹配。
 
 所有输出默认不覆盖；如需覆盖已有结果，请显式传入 `--overwrite`。
 
 说明：
 
-```text
-参考区间来自已审定清单样本的相似项检索结果，仅用于维修项目初案估算参考，不替代正式造价审核。
-```
+- 用户不需要提供 `catalog_id`；系统会用工程分类结果生成内部 `catalog_id`，仅用于同类样本强化和解释。
+- 用户不一定提供单位或数量；缺少单位时按历史样本单位分组，缺少数量时只给单价参考，不估算总价。
+- `--min-score` 默认 `0.6`，用于筛选进入价格统计的可信样本。
+- LLM 只负责解析输入，不直接估价；价格区间来自已审定清单样本的相似项统计，仅用于维修项目初案估算参考。
 
 
 ### 6. 文件提交说明

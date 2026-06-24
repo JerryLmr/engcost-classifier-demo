@@ -31,9 +31,11 @@ build_samples_script = load_script_module("build_cost_item_samples", "scripts/bu
 if np is not None and pd is not None:
     build_index = load_script_module("build_cost_item_embedding_index", "scripts/build_cost_item_embedding_index.py")
     query_estimate = load_script_module("query_cost_item_estimate", "scripts/query_cost_item_estimate.py")
+    query_estimate_llm = load_script_module("query_cost_estimate_llm", "scripts/query_cost_estimate_llm.py")
 else:
     build_index = None
     query_estimate = None
+    query_estimate_llm = None
 
 
 @unittest.skipIf(np is None or pd is None, "cost item estimate dependencies are not installed")
@@ -119,6 +121,26 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertAlmostEqual(float(np.linalg.norm(normalized[0])), 1.0)
         self.assertEqual(normalized[1].tolist(), [0.0, 0.0])
 
+    def test_shared_normalize_unit_handles_square_and_cubic_units(self):
+        self.assertEqual(build_samples_script.normalize_unit("m^2"), "m²")
+        self.assertEqual(build_samples_script.normalize_unit("平方米"), "m²")
+        self.assertEqual(build_samples_script.normalize_unit("平"), "m²")
+        self.assertEqual(build_samples_script.normalize_unit("m^{3}"), "m³")
+        self.assertEqual(build_samples_script.normalize_unit(" 台 "), "台")
+
+    def test_build_index_adds_three_embedding_text_columns(self):
+        samples = self.sample_frame()
+        samples.loc[1, "工程名称"] = ""
+        samples.loc[1, "consultation_project_name"] = "外墙咨询"
+        samples.loc[1, "renovation_content"] = "渗漏维修"
+
+        indexed = build_index.add_embedding_text_columns(samples)
+
+        self.assertEqual(indexed.loc[0, "item_text"], "屋面卷材防水 3.0mm SBS 沥青防水卷材")
+        self.assertEqual(indexed.loc[0, "project_text"], "屋面漏水维修工程")
+        self.assertEqual(indexed.loc[0, "full_text"], "屋面漏水维修工程 屋面卷材防水 3.0mm SBS 沥青防水卷材 单位：m²")
+        self.assertEqual(indexed.loc[1, "project_text"], "外墙咨询 渗漏维修")
+
     def test_build_samples_validate_paths_requires_overwrite_for_existing_output(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -192,7 +214,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             item_weight=0.75,
             context_weight=0.25,
         )
-        self.assertEqual(matches["item_row_id"].tolist(), ["2-1", "3-1"])
+        self.assertEqual(matches["cost_item_name"].tolist(), ["屋面卷材防水", "外墙防水"])
 
         summary = query_estimate.summarize_price_ranges(
             matches=matches,
@@ -241,6 +263,139 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         self.assertEqual(summary_headers, ["query", "context", "unit", "catalog_id"])
         self.assertEqual(match_headers, ["rank", "final_score", "item_score", "context_score"])
+
+    def test_llm_query_rerank_uses_catalog_and_unit_bonuses(self):
+        samples = self.sample_frame()
+        item_embeddings = np.array(
+            [
+                [1.0, 0.0],
+                [0.96, 0.0],
+                [0.0, 1.0],
+            ],
+            dtype=np.float32,
+        )
+        project_embeddings = np.array(
+            [
+                [1.0, 0.0],
+                [0.95, 0.0],
+                [0.0, 1.0],
+            ],
+            dtype=np.float32,
+        )
+        full_embeddings = np.array(
+            [
+                [1.0, 0.0],
+                [0.94, 0.0],
+                [0.0, 1.0],
+            ],
+            dtype=np.float32,
+        )
+
+        matches = query_estimate_llm.score_and_rerank_candidates(
+            samples=samples,
+            item_embeddings=item_embeddings,
+            project_embeddings=project_embeddings,
+            full_embeddings=full_embeddings,
+            item_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
+            project_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
+            full_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
+            predicted_catalog_id="CP-002-03",
+            unit="m²",
+            top_k=2,
+        )
+
+        self.assertEqual(matches["cost_item_name"].tolist(), ["屋面卷材防水", "外墙防水"])
+        self.assertEqual(matches["catalog_match"].tolist(), ["exact", "prefix"])
+        self.assertEqual(matches["unit_match"].tolist(), [True, True])
+        self.assertAlmostEqual(float(matches["final_score"].iloc[0]), 1.10, places=5)
+
+    def test_llm_query_price_summary_groups_by_unit_and_totals_only_with_quantity(self):
+        matches = pd.DataFrame(
+            [
+                {"final_score": 0.8, "unit_normalized": "m²", "unit_price": 80},
+                {"final_score": 0.7, "unit_normalized": "m²", "unit_price": 100},
+                {"final_score": 0.9, "unit_normalized": "台", "unit_price": 500},
+                {"final_score": 0.4, "unit_normalized": "m²", "unit_price": 120},
+                {"final_score": 0.95, "unit_normalized": "m", "unit_price": None},
+            ]
+        )
+
+        price_pool = query_estimate_llm.price_sample_pool(matches, min_score=0.6)
+        grouped = query_estimate_llm.summarize_unit_prices(price_pool, quantity=10)
+
+        square = grouped[grouped["unit"] == "m²"].iloc[0]
+        self.assertEqual(square["priced_count"], 2)
+        self.assertEqual(square["median"], 90.0)
+        self.assertEqual(square["estimated_total_median"], 900.0)
+        self.assertEqual(query_estimate_llm.main_priced_count(price_pool, "m²"), 2)
+        self.assertEqual(query_estimate_llm.main_priced_count(price_pool, ""), 3)
+
+        grouped_without_quantity = query_estimate_llm.summarize_unit_prices(price_pool, quantity=None)
+        self.assertIsNone(grouped_without_quantity[grouped_without_quantity["unit"] == "m²"].iloc[0]["estimated_total_median"])
+
+    def test_llm_query_warnings_follow_profile_and_score_rules(self):
+        warnings = query_estimate_llm.build_warnings(
+            profile={"quantity": None, "unit": "", "confidence": "low"},
+            classify_warnings=["工程分类未能稳定匹配标准目录：fallback"],
+            priced_count=1,
+            top_score=0.5,
+            min_score=0.6,
+        )
+
+        self.assertIn("工程分类未能稳定匹配标准目录：fallback", warnings)
+        self.assertIn("未识别工程量，只能给单价参考，不能估算总价。", warnings)
+        self.assertIn("未识别计量单位，已按历史样本单位分组展示，不能混合不同单位直接估价。", warnings)
+        self.assertIn("高相似可计价样本不足，建议补充材料、做法、面积或设备规格。", warnings)
+        self.assertIn("相似度偏低，结果仅供线索参考。", warnings)
+        self.assertIn("输入信息较模糊，系统解析置信度低。", warnings)
+
+    def test_write_llm_query_result_workbook_has_expected_sheets(self):
+        summary = {
+            "raw_text": "屋面漏水",
+            "project_text": "屋面漏水维修工程",
+            "item_text": "屋面防水",
+            "feature_text": "3mm SBS",
+            "inferred_quantity": 10,
+            "inferred_unit": "m²",
+            "predicted_catalog_id": "CP-002-03",
+            "predicted_category": "屋面",
+            "predicted_item": "防水层",
+            "min_score": 0.6,
+            "top_score": 0.9,
+            "priced_count": 1,
+            "warnings": "",
+        }
+        unit_price_by_unit = pd.DataFrame(
+            [
+                {
+                    "unit": "m²",
+                    "sample_count": 1,
+                    "priced_count": 1,
+                    "min": 80,
+                    "p25": 80,
+                    "median": 80,
+                    "p75": 80,
+                    "max": 80,
+                    "estimated_total_p25": 800,
+                    "estimated_total_median": 800,
+                    "estimated_total_p75": 800,
+                }
+            ],
+            columns=query_estimate_llm.UNIT_PRICE_COLUMNS,
+        )
+        matches = pd.DataFrame([{column: "" for column in query_estimate_llm.MATCH_COLUMNS}])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "query_result.xlsx"
+            query_estimate_llm.write_query_result_workbook(output_path, summary, unit_price_by_unit, matches)
+            workbook = openpyxl.load_workbook(output_path, read_only=True, data_only=True)
+            self.assertEqual(workbook.sheetnames, ["summary", "unit_price_by_unit", "matches"])
+            summary_headers = [workbook["summary"].cell(row=1, column=column).value for column in range(1, 5)]
+            match_headers = [workbook["matches"].cell(row=1, column=column).value for column in range(1, 5)]
+            workbook.close()
+
+        self.assertEqual(summary_headers, ["raw_text", "project_text", "item_text", "feature_text"])
+        self.assertEqual(match_headers, ["rank", "final_score", "item_score", "project_score"])
 
 
 if __name__ == "__main__":

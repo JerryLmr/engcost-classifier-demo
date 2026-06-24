@@ -2,11 +2,20 @@
 import argparse
 import json
 import re
+import sys
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
 import openpyxl
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND_DIR = ROOT / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from classifier.unit_normalizer import normalize_unit  # noqa: E402
 
 
 PROJECT_HEADERS = [
@@ -186,41 +195,6 @@ def parse_sub_item_rows(raw_value: Any) -> tuple[list[Any] | None, str | None]:
     if not isinstance(parsed, list):
         return None, f"sub_item_project_rows 解析后不是数组: {type(parsed).__name__}"
     return parsed, None
-
-
-def normalize_unit(unit: Any) -> str:
-    text = cell_text(unit)
-    if not text:
-        return ""
-
-    compact = re.sub(r"\s+", "", text).lower()
-    compact = compact.replace("ｍ", "m")
-    compact = compact.replace("$", "")
-    compact = compact.replace("{", "").replace("}", "")
-    compact = compact.replace("^", "")
-
-    square_units = {
-        "m2",
-        "m²",
-        "㎡",
-        "平方米",
-        "平米",
-        "m^{2}",
-        "m^2",
-    }
-    cubic_units = {
-        "m3",
-        "m³",
-        "立方米",
-        "m^{3}",
-        "m^3",
-    }
-
-    if compact in square_units or compact == "m2":
-        return "m²"
-    if compact in cubic_units or compact == "m3":
-        return "m³"
-    return re.sub(r"\s+", "", text)
 
 
 def parse_number(value: Any) -> float | None:
