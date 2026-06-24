@@ -6,17 +6,18 @@ from typing import Any, Dict, Sequence
 import requests
 
 from classifier.settings import (
-    LLM_PROVIDER,
     LLM_TIMEOUT_SECONDS,
     LMSTUDIO_API_KEY,
     LMSTUDIO_BASE_URL,
     LMSTUDIO_MAX_TOKENS,
     LMSTUDIO_MODEL,
     LMSTUDIO_RESPONSE_FORMAT,
-    OLLAMA_BASE_URL,
-    OLLAMA_MODEL,
 )
 from classifier.standard_catalog_loader import OUT_OF_SCOPE_ID, StandardCatalogItem, get_standard_catalog_by_id
+
+
+class LLMServiceError(RuntimeError):
+    """Raised when the LM Studio service cannot be reached or returns a transport error."""
 
 
 @dataclass(frozen=True)
@@ -122,22 +123,15 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
     raise ValueError("No valid JSON object found in LLM response")
 
 
-def _request_ollama_json(prompt: str) -> Dict[str, Any]:
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"temperature": 0},
-        "format": "json",
-    }
-    response = requests.post(
-        f"{OLLAMA_BASE_URL}/api/generate",
-        json=payload,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return _extract_json_object(data.get("response", ""))
+def check_lmstudio_service(timeout_seconds: float = 3.0) -> None:
+    try:
+        response = requests.get(f"{LMSTUDIO_BASE_URL}/models", timeout=timeout_seconds)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(
+            "LM Studio 服务不可用，请先启动 LM Studio Server，并检查 "
+            f"LMSTUDIO_BASE_URL={LMSTUDIO_BASE_URL}"
+        ) from exc
 
 
 def _request_lmstudio_json(prompt: str) -> Dict[str, Any]:
@@ -158,28 +152,33 @@ def _request_lmstudio_json(prompt: str) -> Dict[str, Any]:
         "max_tokens": LMSTUDIO_MAX_TOKENS,
     }
     _apply_lmstudio_response_format(payload)
-    response = requests.post(
-        f"{LMSTUDIO_BASE_URL}/chat/completions",
-        headers={
-            "Authorization": f"Bearer {LMSTUDIO_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
+    try:
+        response = requests.post(
+            f"{LMSTUDIO_BASE_URL}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {LMSTUDIO_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=LLM_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except (
+        requests.exceptions.Timeout,
+        requests.exceptions.ConnectionError,
+        requests.exceptions.RequestException,
+    ) as exc:
+        raise LLMServiceError(
+            "LM Studio 服务请求失败，请检查 LM Studio Server 和 "
+            f"LMSTUDIO_BASE_URL={LMSTUDIO_BASE_URL}: {exc}"
+        ) from exc
     data = response.json()
     content = data["choices"][0]["message"]["content"]
     return _extract_json_object(content)
 
 
 def request_llm_json(prompt: str) -> Dict[str, Any]:
-    provider = LLM_PROVIDER.strip().lower()
-    if provider == "ollama":
-        return _request_ollama_json(prompt)
-    if provider == "lmstudio":
-        return _request_lmstudio_json(prompt)
-    raise ValueError(f"Unsupported LLM_PROVIDER: {LLM_PROVIDER}")
+    return _request_lmstudio_json(prompt)
 
 
 def compact_catalog_prompt_label(item: StandardCatalogItem) -> str:
@@ -349,6 +348,8 @@ def llm_select_catalog_item_from_full_catalog(
     for _attempt in range(2):
         try:
             return _validate_full_catalog_item_selection(request_llm_json(prompt))
+        except LLMServiceError:
+            raise
         except Exception as exc:  # noqa: BLE001
             last_error = exc
     reason = "LLM full catalog item selection invalid after retry"
@@ -370,6 +371,8 @@ def llm_select_repair_status(project_name: str, selected_item: StandardCatalogIt
     for _attempt in range(2):
         try:
             return _validate_status_selection(request_llm_json(prompt), selected_item)
+        except LLMServiceError:
+            raise
         except Exception as exc:  # noqa: BLE001
             last_error = exc
     reason = "LLM status selection invalid after retry"

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from classifier.settings import OLLAMA_MODEL
+from classifier.settings import LMSTUDIO_MODEL
 from models.schemas import ClassifyRequest
 from services.analysis_service import analyze_excel_file
 from services.excel_service import classify_excel_file
@@ -29,7 +29,7 @@ def _presentation_result(result: dict[str, object]) -> dict[str, object]:
 
 @router.get("/health")
 def health_check():
-    return {"status": "ok", "model": OLLAMA_MODEL}
+    return {"status": "ok", "model": LMSTUDIO_MODEL}
 
 
 @router.post("/classify")

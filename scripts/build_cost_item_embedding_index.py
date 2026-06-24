@@ -14,6 +14,13 @@ REQUIRED_COLUMNS = [
     "item_context_text",
 ]
 
+MANAGED_OUTPUT_FILES = [
+    "samples.parquet",
+    "item_similarity_embeddings.npy",
+    "item_context_embeddings.npy",
+    "index_meta.json",
+]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="构建已审定清单样本 embedding 索引")
@@ -21,7 +28,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", required=True, help="索引输出目录")
     parser.add_argument("--model", default="BAAI/bge-m3", help="sentence-transformers 模型名")
     parser.add_argument("--batch-size", type=int, default=32, help="embedding 批大小")
+    parser.add_argument("--overwrite", action="store_true", help="若索引输出文件已存在则覆盖")
     return parser.parse_args()
+
+
+def validate_output_dir(output_dir: Path, overwrite: bool) -> None:
+    if output_dir.exists() and not output_dir.is_dir():
+        raise ValueError(f"输出路径不是目录: {output_dir}")
+    existing = [name for name in MANAGED_OUTPUT_FILES if (output_dir / name).exists()]
+    if existing and not overwrite:
+        raise ValueError(
+            "输出已存在，请加 --overwrite 或更换输出目录: "
+            f"{output_dir} ({', '.join(existing)})"
+        )
 
 
 def load_samples(samples_path: Path) -> pd.DataFrame:
@@ -151,6 +170,7 @@ def main() -> int:
     output_dir = Path(args.output_dir).expanduser().resolve()
 
     try:
+        validate_output_dir(output_dir, args.overwrite)
         input_count, encoded_count, embedding_dim = build_cost_item_embedding_index(
             samples_path=samples_path,
             output_dir=output_dir,

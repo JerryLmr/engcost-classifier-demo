@@ -31,6 +31,14 @@ sub_item_project_rows
 
 ### 2. 工程项目级分类
 
+LLM 后端仅支持 LM Studio。启动 LM Studio Server 后，可手动检查：
+
+```bash
+curl --max-time 3 "$LMSTUDIO_BASE_URL/models"
+```
+
+批量分类脚本会在正式处理前自动执行 LM Studio preflight；服务不可用时会快速失败。
+
 ```bash
 backend/.venv/bin/python scripts/batch_classify_excel.py \
   excel_inputs/audit_ocr_export.xlsx \
@@ -70,7 +78,8 @@ sub_item_project_rows
 ```bash
 backend/.venv/bin/python scripts/build_cost_item_samples.py \
   excel_outputs/classified_projects.xlsx \
-  -o outputs/cost_item_samples.xlsx
+  -o outputs/cost_item_samples.xlsx \
+  --overwrite
 ```
 
 输出文件：
@@ -114,7 +123,8 @@ item_context_text
 backend/.venv/bin/python scripts/build_cost_item_embedding_index.py \
   --samples outputs/cost_item_samples.xlsx \
   --output-dir outputs/cost_item_index \
-  --model BAAI/bge-m3
+  --model BAAI/bge-m3 \
+  --overwrite
 ```
 
 输出目录：
@@ -146,7 +156,8 @@ backend/.venv/bin/python scripts/query_cost_item_estimate.py \
   --unit "m²" \
   --quantity 500 \
   --top-k 10 \
-  --output outputs/cost_estimate_result.xlsx
+  --output outputs/cost_estimate_result.xlsx \
+  --overwrite
 ```
 
 输出文件：
@@ -160,10 +171,13 @@ outputs/cost_estimate_result.xlsx
 - `summary` sheet：参考单价区间、估算总价区间、样本数量、说明。
 - `matches` sheet：top-k 相似清单样本明细。
 
+所有输出默认不覆盖；如需覆盖已有结果，请显式传入 `--overwrite`。
+
 说明：
 
-````text
+```text
 参考区间来自已审定清单样本的相似项检索结果，仅用于维修项目初案估算参考，不替代正式造价审核。
+```
 
 
 ### 6. 文件提交说明
@@ -176,6 +190,6 @@ outputs/
 *.xlsx
 *.npy
 *.parquet
-````
+```
 
 如需提交示例数据，应使用脱敏的小样本文件。

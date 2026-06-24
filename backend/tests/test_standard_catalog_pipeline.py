@@ -17,6 +17,7 @@ from classifier.alias_matcher import load_text_aliases, match_aliases
 from classifier.catalog_postprocess import postprocess_item_selection
 from classifier.llm_client import (
     ItemSelection,
+    LLMServiceError,
     StatusSelection,
     build_full_catalog_item_selection_prompt,
     llm_select_catalog_item_from_full_catalog,
@@ -178,6 +179,12 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertIn("LLM returned invalid catalog_id: BAD-ID", result.reason)
         self.assertEqual(mock_request.call_count, 2)
 
+    @patch("classifier.llm_client.request_llm_json", side_effect=LLMServiceError("service down"))
+    def test_full_catalog_selection_raises_service_error_without_retry(self, mock_request):
+        with self.assertRaises(LLMServiceError):
+            llm_select_catalog_item_from_full_catalog("减压阀更换", load_standard_catalog())
+        self.assertEqual(mock_request.call_count, 1)
+
     def test_postprocess_promotes_weak_current_secondary_item(self):
         result = postprocess_item_selection(
             "弱电安防、监控、门禁",
@@ -308,6 +315,20 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertTrue(result.invalid_after_retry)
         self.assertEqual(mock_request.call_count, 2)
 
+    @patch("classifier.llm_client.request_llm_json", side_effect=LLMServiceError("service down"))
+    def test_llm_status_selection_raises_service_error_without_retry(self, mock_request):
+        item = get_standard_catalog_by_id()["CF-015-05"]
+        with self.assertRaises(LLMServiceError):
+            llm_select_repair_status("减压阀更换", item)
+        self.assertEqual(mock_request.call_count, 1)
+
+    @patch("classifier.llm_client._request_lmstudio_json", return_value={"ok": True})
+    def test_request_llm_json_uses_lmstudio_directly(self, mock_request):
+        from classifier.llm_client import request_llm_json
+
+        self.assertEqual(request_llm_json("prompt"), {"ok": True})
+        mock_request.assert_called_once_with("prompt")
+
     @patch(
         "classifier.llm_client.llm_select_repair_status",
         return_value=StatusSelection(repair_status="更新", needs_review=False, reason="更换对应更新"),
@@ -330,6 +351,16 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertEqual(result["secondary_catalog_ids"], [])
         self.assertEqual(result["secondary_catalog_labels"], [])
         self.assertFalse(result["needs_review"])
+
+    @patch(
+        "classifier.llm_client.llm_select_catalog_item_from_full_catalog",
+        side_effect=LLMServiceError("service down"),
+    )
+    def test_standard_classifier_marks_llm_service_error(self, _mock_item):
+        result = classify_project_standard("减压阀更换")
+        self.assertEqual(result["pipeline_status"], "llm_service_error")
+        self.assertEqual(result["catalog_id"], OUT_OF_SCOPE_ID)
+        self.assertIn("service down", result["reason"])
 
     @patch(
         "classifier.llm_client.llm_select_repair_status",
@@ -437,22 +468,27 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
 
     def test_batch_script_outputs_new_headers_only(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"
-        env = os.environ.copy()
-        env["LLM_PROVIDER"] = "disabled"
+        spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        def fake_classify(project_text: str) -> dict[str, object]:
+            return {
+                "project_name": project_text,
+                "catalog_id": OUT_OF_SCOPE_ID,
+                "category": "体系外",
+                "item": "体系外",
+                "pipeline_status": "fallback",
+            }
+
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             input_file = tmp_path / "input.xlsx"
             output_file = tmp_path / "output.xlsx"
             input_file.write_bytes(make_workbook("减压阀更换", "屋面及外墙渗漏维修"))
-            run = subprocess.run(
-                [sys.executable, str(script), str(input_file), "-o", str(output_file), "--overwrite"],
-                cwd=ROOT,
-                env=env,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
+            module.classify_workbook(input_file, output_file, fake_classify, {})
             workbook = openpyxl.load_workbook(output_file)
             worksheet = workbook.active
             headers = [worksheet.cell(row=1, column=i).value for i in range(1, worksheet.max_column + 1)]
@@ -460,6 +496,53 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertTrue(OLD_HEADERS.isdisjoint(set(headers)))
             self.assertEqual(worksheet.cell(row=2, column=1).value, "减压阀更换")
             self.assertEqual(worksheet.cell(row=2, column=2).value, OUT_OF_SCOPE_ID)
+
+    def test_batch_script_preflight_failure_returns_error_without_output(self):
+        script = ROOT / "scripts" / "batch_classify_excel.py"
+        env = os.environ.copy()
+        env["LMSTUDIO_BASE_URL"] = "http://127.0.0.1:9/v1"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / "input.xlsx"
+            output_file = tmp_path / "output.xlsx"
+            input_file.write_bytes(make_workbook("减压阀更换"))
+            run = subprocess.run(
+                [sys.executable, str(script), str(input_file), "-o", str(output_file), "--overwrite"],
+                cwd=ROOT,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(run.returncode, 1)
+            self.assertIn("[ERROR] LM Studio 服务不可用", run.stdout)
+            self.assertFalse(output_file.exists())
+
+    def test_batch_script_llm_service_error_fails_without_writing_output(self):
+        script = ROOT / "scripts" / "batch_classify_excel.py"
+        spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        def fake_classify(project_text: str) -> dict[str, object]:
+            return {
+                "project_name": project_text,
+                "catalog_id": OUT_OF_SCOPE_ID,
+                "pipeline_status": "llm_service_error",
+                "reason": "service down",
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / "input.xlsx"
+            output_file = tmp_path / "output.xlsx"
+            input_file.write_bytes(make_workbook("减压阀更换"))
+            with self.assertRaisesRegex(RuntimeError, "LLM 服务连接失败"):
+                module.classify_workbook(input_file, output_file, fake_classify, {})
+            self.assertFalse(output_file.exists())
 
     def test_batch_script_caches_repeated_project_names(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"

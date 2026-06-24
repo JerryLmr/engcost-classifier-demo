@@ -195,8 +195,6 @@ def classify_workbook(
     empty_project_name_rows = 0
     output_rows = 0
     output_row = 2
-    consecutive_llm_service_errors = 0
-    max_consecutive_llm_service_errors = 3
     for source_row in range(2, source_sheet.max_row + 1):
         ocr_values = _read_ocr_values(source_sheet, header_map, source_row)
         if project_name_column:
@@ -224,6 +222,8 @@ def classify_workbook(
             print(f"[ROW ] {path.name}:{source_row} {project_text[:80]}", flush=True)
 
             result = classify_project_func(project_text)
+            if result.get("pipeline_status") == "llm_service_error":
+                raise RuntimeError(f"LLM 服务连接失败，已停止处理当前文件。失败行: {source_row}")
             classification_cache[project_text] = result
             classify_call_count += 1
 
@@ -239,22 +239,6 @@ def classify_workbook(
         output_row += 1
         output_rows += 1
         processed += 1
-
-        if result.get("pipeline_status") == "llm_service_error":
-            consecutive_llm_service_errors += 1
-        else:
-            consecutive_llm_service_errors = 0
-
-        if consecutive_llm_service_errors >= max_consecutive_llm_service_errors:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output = io.BytesIO()
-            output_workbook.save(output)
-            output_path.write_bytes(output.getvalue())
-            raise RuntimeError(
-                f"连续 {max_consecutive_llm_service_errors} 行 LLM 服务连接失败，"
-                f"已停止处理当前文件。最后失败行: {source_row}。"
-                f"已保存部分结果: {output_path}"
-            )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output = io.BytesIO()
@@ -325,6 +309,7 @@ def validate_jobs(jobs: list[tuple[Path, Path]], overwrite: bool) -> None:
 
 
 def main() -> int:
+    from classifier.llm_client import check_lmstudio_service  # noqa: E402
     from services.standard_classifier import classify_project_standard  # noqa: E402
 
     args = parse_args()
@@ -337,6 +322,12 @@ def main() -> int:
 
     if not jobs:
         print("[ERROR] 没有可处理的 Excel 文件")
+        return 1
+
+    try:
+        check_lmstudio_service()
+    except RuntimeError as exc:
+        print(f"[ERROR] {exc}")
         return 1
 
     total_files = 0

@@ -1,10 +1,6 @@
 import os
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "lmstudio")
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
-
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 
 LMSTUDIO_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://172.18.0.1:1234/v1")
 LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "qwen/qwen3.6-35b-a3b")

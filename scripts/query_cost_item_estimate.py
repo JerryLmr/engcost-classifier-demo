@@ -81,10 +81,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quantity", type=float, default=None, help="估算数量")
     parser.add_argument("--top-k", type=int, default=10, help="输出相似样本数量")
     parser.add_argument("--output", default="", help="可选 xlsx 输出路径")
+    parser.add_argument("--overwrite", action="store_true", help="若输出文件已存在则覆盖")
     parser.add_argument("--item-weight", type=float, default=0.75, help="清单项语义权重")
     parser.add_argument("--context-weight", type=float, default=0.25, help="上下文语义权重")
     parser.add_argument("--min-candidates", type=int, default=20, help="catalog_id 过滤最小候选数")
     return parser.parse_args()
+
+
+def validate_output_path(output_path: Path | None, overwrite: bool) -> None:
+    if output_path is None:
+        return
+    if output_path.exists() and output_path.is_dir():
+        raise ValueError(f"输出路径是目录，不是文件: {output_path}")
+    if output_path.exists() and not overwrite:
+        raise ValueError(f"输出已存在，请加 --overwrite 或更换输出路径: {output_path}")
 
 
 def load_embedding_model(model_name: str) -> Any:
@@ -405,6 +415,7 @@ def main() -> int:
     output_path = Path(args.output).expanduser().resolve() if args.output else None
 
     try:
+        validate_output_path(output_path, args.overwrite)
         summary, _matches = run_query(
             index_dir=index_dir,
             query=args.query,

@@ -29,13 +29,6 @@ EMERGENCY_TERMS = (
     "安全隐患",
     "必须消除",
 )
-LLM_SERVICE_ERROR_TERMS = (
-    "Connection refused",
-    "RemoteDisconnected",
-    "Max retries exceeded",
-    "Connection aborted",
-    "HTTPConnectionPool",
-)
 
 
 def _contains_any(text: str, terms: list[str] | tuple[str, ...]) -> bool:
@@ -49,11 +42,6 @@ def is_emergency_project(project_name: str) -> bool:
 
 def is_termite_related(project_name: str, catalog_id: str) -> bool:
     return catalog_id == "TERMITE-001" or _contains_any(project_name, TERMITE_TERMS)
-
-
-def is_llm_service_error(reason: str) -> bool:
-    text = str(reason or "")
-    return any(term in text for term in LLM_SERVICE_ERROR_TERMS)
 
 
 def _context_hints(
@@ -151,6 +139,14 @@ def classify_project_standard(project_name: str) -> dict[str, Any]:
         alias_result = match_aliases(normalized)
         context_hints = _context_hints(normalized, alias_result)
         return _classify_project_full_catalog(project_name, normalized, alias_result, context_hints)
+    except llm_client.LLMServiceError as exc:
+        return fallback_result(
+            project_name,
+            f"分类失败：{exc}",
+            is_emergency=is_emergency_project(project_name),
+            termite_related=is_termite_related(project_name, OUT_OF_SCOPE_ID),
+            pipeline_status="llm_service_error",
+        )
     except Exception as exc:  # noqa: BLE001
         reason = f"分类失败：{exc}"
         return fallback_result(
@@ -158,5 +154,5 @@ def classify_project_standard(project_name: str) -> dict[str, Any]:
             reason,
             is_emergency=is_emergency_project(project_name),
             termite_related=is_termite_related(project_name, OUT_OF_SCOPE_ID),
-            pipeline_status="llm_service_error" if is_llm_service_error(reason) else "fallback",
+            pipeline_status="fallback",
         )

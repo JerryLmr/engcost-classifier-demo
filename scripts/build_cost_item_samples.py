@@ -91,6 +91,11 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="输出清单样本 Excel 路径",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="若输出文件已存在则覆盖",
+    )
     return parser.parse_args()
 
 
@@ -471,7 +476,7 @@ def write_workbook(output_path: Path, samples: list[dict[str, Any]], errors: lis
     workbook.save(output_path)
 
 
-def validate_paths(input_path: Path, output_path: Path) -> None:
+def validate_paths(input_path: Path, output_path: Path, overwrite: bool) -> None:
     if not input_path.exists():
         raise ValueError(f"输入文件不存在: {input_path}")
     if not input_path.is_file():
@@ -480,6 +485,8 @@ def validate_paths(input_path: Path, output_path: Path) -> None:
         raise ValueError(f"输入文件不是 Excel: {input_path}")
     if output_path.exists() and output_path.is_dir():
         raise ValueError(f"输出路径是目录，不是文件: {output_path}")
+    if output_path.exists() and not overwrite:
+        raise ValueError(f"输出已存在，请加 --overwrite 或更换输出路径: {output_path}")
 
 
 def main() -> int:
@@ -488,7 +495,7 @@ def main() -> int:
     output_path = Path(args.output).expanduser().resolve()
 
     try:
-        validate_paths(input_path, output_path)
+        validate_paths(input_path, output_path, args.overwrite)
         samples, errors = build_samples(input_path)
         write_workbook(output_path, samples, errors)
     except ValueError as exc:

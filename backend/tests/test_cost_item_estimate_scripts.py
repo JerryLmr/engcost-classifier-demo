@@ -26,6 +26,8 @@ def load_script_module(name: str, relative_path: str):
     return module
 
 
+build_samples_script = load_script_module("build_cost_item_samples", "scripts/build_cost_item_samples.py")
+
 if np is not None and pd is not None:
     build_index = load_script_module("build_cost_item_embedding_index", "scripts/build_cost_item_embedding_index.py")
     query_estimate = load_script_module("query_cost_item_estimate", "scripts/query_cost_item_estimate.py")
@@ -116,6 +118,38 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         normalized = build_index.normalize_embeddings(embeddings)
         self.assertAlmostEqual(float(np.linalg.norm(normalized[0])), 1.0)
         self.assertEqual(normalized[1].tolist(), [0.0, 0.0])
+
+    def test_build_samples_validate_paths_requires_overwrite_for_existing_output(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            input_path = tmp_path / "classified.xlsx"
+            output_path = tmp_path / "samples.xlsx"
+            workbook = openpyxl.Workbook()
+            workbook.save(input_path)
+            output_path.write_text("existing", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "输出已存在，请加 --overwrite"):
+                build_samples_script.validate_paths(input_path, output_path, overwrite=False)
+            build_samples_script.validate_paths(input_path, output_path, overwrite=True)
+
+    def test_build_index_validate_output_dir_requires_overwrite_for_managed_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "index"
+            output_dir.mkdir()
+            (output_dir / "samples.parquet").write_text("existing", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "输出已存在，请加 --overwrite"):
+                build_index.validate_output_dir(output_dir, overwrite=False)
+            build_index.validate_output_dir(output_dir, overwrite=True)
+
+    def test_query_validate_output_path_requires_overwrite_for_existing_output(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "query.xlsx"
+            output_path.write_text("existing", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "输出已存在，请加 --overwrite"):
+                query_estimate.validate_output_path(output_path, overwrite=False)
+            query_estimate.validate_output_path(output_path, overwrite=True)
 
     def test_candidate_mask_relaxes_missing_unit_and_supplements_composite_catalog(self):
         samples = self.sample_frame()
