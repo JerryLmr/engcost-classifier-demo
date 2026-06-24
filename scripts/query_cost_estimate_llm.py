@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,65 +15,121 @@ BACKEND_DIR = ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from classifier.unit_normalizer import normalize_unit  # noqa: E402
 from classifier.llm_client import request_llm_json  # noqa: E402
+from classifier.unit_normalizer import normalize_unit  # noqa: E402
 from services.standard_classifier import classify_project_standard  # noqa: E402
 
 
 CATALOG_EXACT_BONUS = 0.06
-CATALOG_PREFIX_BONUS = 0.02
 UNIT_MATCH_BONUS = 0.03
 HAS_UNIT_PRICE_BONUS = 0.01
+NO_EXACT_CATALOG_WARNING = "样本库缺少该标准目录下的历史工程/清单项，不能形成可靠价格参考。"
 
 SUMMARY_COLUMNS = [
     "raw_text",
-    "project_text",
-    "item_text",
-    "feature_text",
+    "classified_project_text",
+    "llm_item_query",
+    "llm_feature_query",
     "inferred_quantity",
     "inferred_unit",
     "predicted_catalog_id",
-    "predicted_category",
-    "predicted_item",
-    "min_score",
-    "top_score",
-    "priced_count",
+    "predicted_一级分类",
+    "predicted_二级分类",
+    "predicted_维修状态",
+    "predicted_标准对象",
+    "top_project_score",
+    "matched_project_count",
+    "recommended_item_count",
     "warnings",
 ]
 
-UNIT_PRICE_COLUMNS = [
-    "unit",
-    "sample_count",
-    "priced_count",
-    "min",
-    "p25",
-    "median",
-    "p75",
-    "max",
-    "estimated_total_p25",
-    "estimated_total_median",
-    "estimated_total_p75",
+RECOMMENDED_ITEM_COLUMNS = [
+    "rank",
+    "cost_item_name",
+    "project_description",
+    "unit_normalized",
+    "source_project_count",
+    "occurrence_count",
+    "support_ratio",
+    "unit_price_count",
+    "unit_price_p25",
+    "unit_price_median",
+    "unit_price_p75",
+    "labor_unit_price_count",
+    "labor_unit_price_p25",
+    "labor_unit_price_median",
+    "labor_unit_price_p75",
+    "machinery_unit_price_count",
+    "machinery_unit_price_p25",
+    "machinery_unit_price_median",
+    "machinery_unit_price_p75",
+    "example_source_row_ids",
+    "example_item_row_ids",
 ]
 
-MATCH_COLUMNS = [
+DEBUG_ITEM_MATCH_COLUMNS = [
     "rank",
     "final_score",
     "item_score",
     "project_score",
     "full_score",
     "catalog_match",
-    "unit_match",
+    "source_row_id",
+    "item_row_id",
     "工程名称",
     "catalog_id",
     "一级分类",
     "二级分类",
     "维修状态",
+    "标准对象",
     "cost_item_name",
     "project_description",
     "unit_normalized",
     "quantity",
     "unit_price",
+    "labor_unit_price",
+    "machinery_unit_price",
+    "score_below_min_score",
+    "catalog_mismatch",
 ]
+
+PROJECT_MATCH_COLUMNS = [
+    "rank",
+    "project_score",
+    "source_row_id",
+    "工程名称",
+    "catalog_id",
+    "一级分类",
+    "二级分类",
+    "维修状态",
+    "标准对象",
+    "item_count",
+]
+
+PRICE_COLUMNS = {
+    "unit_price_p25",
+    "unit_price_median",
+    "unit_price_p75",
+    "labor_unit_price_p25",
+    "labor_unit_price_median",
+    "labor_unit_price_p75",
+    "machinery_unit_price_p25",
+    "machinery_unit_price_median",
+    "machinery_unit_price_p75",
+    "unit_price",
+    "labor_unit_price",
+    "machinery_unit_price",
+    "quantity",
+}
+
+SCORE_COLUMNS = {
+    "final_score",
+    "item_score",
+    "project_score",
+    "full_score",
+    "support_ratio",
+    "top_project_score",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,8 +138,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--text", required=True, help="口语化维修需求")
     parser.add_argument("--output", default="", help="可选 xlsx 输出路径")
     parser.add_argument("--overwrite", action="store_true", help="若输出文件已存在则覆盖")
-    parser.add_argument("--top-k", type=int, default=20, help="输出相似样本数量")
-    parser.add_argument("--min-score", type=float, default=0.6, help="价格统计最小 final_score")
+    parser.add_argument("--top-k", type=int, default=20, help="输出工程、推荐清单项和调试匹配数量")
+    parser.add_argument("--min-score", type=float, default=0.6, help="debug_item_matches 低分标记阈值")
     return parser.parse_args()
 
 
@@ -126,21 +183,28 @@ def encode_query(model: Any, text: str) -> np.ndarray:
     return normalize_embeddings(embedding)[0]
 
 
-def load_samples_and_embeddings(index_dir: Path) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+def load_index(
+    index_dir: Path,
+) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
     samples_path = index_dir / "samples.parquet"
+    groups_path = index_dir / "project_groups.parquet"
     item_path = index_dir / "item_embeddings.npy"
     project_path = index_dir / "project_embeddings.npy"
     full_path = index_dir / "full_embeddings.npy"
+    group_path = index_dir / "project_group_embeddings.npy"
     meta_path = index_dir / "index_meta.json"
+    paths = [samples_path, groups_path, item_path, project_path, full_path, group_path, meta_path]
 
-    missing = [path.name for path in [samples_path, item_path, project_path, full_path, meta_path] if not path.exists()]
+    missing = [path.name for path in paths if not path.exists()]
     if missing:
         raise ValueError(f"索引目录缺少文件: {', '.join(missing)}")
 
     samples = pd.read_parquet(samples_path)
+    project_groups = pd.read_parquet(groups_path)
     item_embeddings = np.load(item_path)
     project_embeddings = np.load(project_path)
     full_embeddings = np.load(full_path)
+    project_group_embeddings = np.load(group_path)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
     if (
@@ -148,10 +212,14 @@ def load_samples_and_embeddings(index_dir: Path) -> tuple[pd.DataFrame, np.ndarr
         or len(samples) != project_embeddings.shape[0]
         or len(samples) != full_embeddings.shape[0]
     ):
-        raise ValueError("样本数量与 embedding 数量不一致")
+        raise ValueError("样本数量与清单 embedding 数量不一致")
     if item_embeddings.shape != project_embeddings.shape or item_embeddings.shape != full_embeddings.shape:
-        raise ValueError("三路 embedding 维度或样本数不一致")
-    return samples, item_embeddings, project_embeddings, full_embeddings, meta
+        raise ValueError("三路清单 embedding 维度或样本数不一致")
+    if len(project_groups) != project_group_embeddings.shape[0]:
+        raise ValueError("工程分组数量与 embedding 数量不一致")
+    if project_group_embeddings.shape[1] != item_embeddings.shape[1]:
+        raise ValueError("工程分组 embedding 维度与清单 embedding 维度不一致")
+    return samples, project_groups, item_embeddings, project_embeddings, full_embeddings, project_group_embeddings, meta
 
 
 def cell_text(value: Any) -> str:
@@ -176,30 +244,27 @@ def parse_quantity(value: Any) -> float | None:
 
 def build_query_profile_prompt(raw_text: str) -> str:
     return f"""
-请把用户的口语化维修需求抽取成检索 profile。你只负责解析输入，不要估算价格，不要生成 catalog_id。
+请把用户的口语化维修需求抽取成检索辅助文本。你只负责改写检索词，不要做标准目录分类，不要估算价格，不要生成 catalog_id。
 
 用户输入：
 {raw_text}
 
 字段要求：
-- project_text 表示工程/维修场景。
-- item_text 表示清单项、材料或设备对象。
-- feature_text 表示做法、规格、项目特征。
+- llm_item_query 表示清单项、材料、设备或维修对象，可为空。
+- llm_feature_query 表示做法、规格、项目特征，可为空。
 - quantity/unit 只在用户明确给出时填写，不要猜。
-- catalog_hint_text 可填写有助于工程分类的自然语言线索，但不要填写 catalog_id。
 - missing_info 填写影响估价可靠性的缺失信息。
 - confidence 只能是 high、medium、low。
+- 不要输出 project_text、一级分类、二级分类或 catalog_id。
 
 只输出 JSON object，不要 markdown，不要解释。
 
 JSON 字段固定为：
 {{
-  "project_text": "...",
-  "item_text": "...",
-  "feature_text": "...",
+  "llm_item_query": "",
+  "llm_feature_query": "",
   "quantity": null,
   "unit": "",
-  "catalog_hint_text": "",
   "missing_info": [],
   "confidence": "medium"
 }}
@@ -213,28 +278,22 @@ def normalize_query_profile(raw_profile: dict[str, Any]) -> dict[str, Any]:
     confidence = cell_text(raw_profile.get("confidence")).lower()
     if confidence not in {"high", "medium", "low"}:
         confidence = "low"
-
-    unit = normalize_unit(raw_profile.get("unit"))
     return {
-        "project_text": cell_text(raw_profile.get("project_text")),
-        "item_text": cell_text(raw_profile.get("item_text")),
-        "feature_text": cell_text(raw_profile.get("feature_text")),
+        "llm_item_query": cell_text(raw_profile.get("llm_item_query")),
+        "llm_feature_query": cell_text(raw_profile.get("llm_feature_query")),
         "quantity": parse_quantity(raw_profile.get("quantity")),
-        "unit": unit,
-        "catalog_hint_text": cell_text(raw_profile.get("catalog_hint_text")),
+        "unit": normalize_unit(raw_profile.get("unit")),
         "missing_info": [cell_text(item) for item in missing_info if cell_text(item)],
         "confidence": confidence,
     }
 
 
 def extract_query_profile(raw_text: str) -> dict[str, Any]:
-    raw_profile = request_llm_json(build_query_profile_prompt(raw_text))
-    return normalize_query_profile(raw_profile)
+    return normalize_query_profile(request_llm_json(build_query_profile_prompt(raw_text)))
 
 
-def classify_query_profile(profile: dict[str, Any], raw_text: str) -> tuple[dict[str, Any], list[str]]:
-    classify_text = profile.get("project_text") or raw_text
-    result = classify_project_standard(str(classify_text))
+def classify_raw_text(raw_text: str) -> tuple[dict[str, Any], list[str]]:
+    result = classify_project_standard(raw_text)
     warnings: list[str] = []
     pipeline_status = cell_text(result.get("pipeline_status"))
     if pipeline_status and pipeline_status != "ok":
@@ -243,16 +302,126 @@ def classify_query_profile(profile: dict[str, Any], raw_text: str) -> tuple[dict
     return result, warnings
 
 
-def catalog_prefix(catalog_id: str) -> str:
-    text = cell_text(catalog_id)
-    prefix = text.split("-", 1)[0]
-    return prefix if prefix in {"CP", "CF"} else ""
-
-
 def top_indexes(scores: np.ndarray, limit: int) -> np.ndarray:
     if limit <= 0 or scores.size == 0:
         return np.array([], dtype=int)
     return np.argsort(scores)[::-1][: min(limit, scores.size)]
+
+
+def select_project_groups(
+    project_groups: pd.DataFrame,
+    project_group_embeddings: np.ndarray,
+    raw_query_embedding: np.ndarray,
+    predicted_catalog_id: str,
+    top_k: int,
+) -> tuple[pd.DataFrame, bool]:
+    scores = project_group_embeddings @ raw_query_embedding
+    groups = project_groups.copy()
+    groups["project_score"] = scores
+
+    if predicted_catalog_id:
+        exact = groups[groups["catalog_id"].fillna("").astype(str).str.strip() == predicted_catalog_id].copy()
+        if exact.empty:
+            return exact, False
+        selected = exact.sort_values("project_score", ascending=False).head(max(top_k, 0)).copy()
+    else:
+        selected = groups.sort_values("project_score", ascending=False).head(max(top_k, 0)).copy()
+
+    selected.insert(0, "rank", range(1, len(selected) + 1))
+    return selected, True
+
+
+def normalize_signature_text(value: Any) -> str:
+    text = cell_text(value).lower()
+    text = re.sub(r"\s+", "", text)
+    return re.sub(r"[，,。；;：:/\\|()（）【】\[\]{}<>《》\"'“”‘’]", "", text)
+
+
+def item_signature(row: pd.Series) -> str:
+    return "|".join(
+        [
+            normalize_signature_text(row.get("cost_item_name")),
+            normalize_signature_text(row.get("project_description")),
+            cell_text(row.get("unit_normalized")),
+        ]
+    )
+
+
+def numeric_values(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(frame[column], errors="coerce").dropna()
+
+
+def price_stats(frame: pd.DataFrame, column: str) -> dict[str, Any]:
+    values = numeric_values(frame, column)
+    if values.empty:
+        return {
+            f"{column}_count": 0,
+            f"{column}_p25": None,
+            f"{column}_median": None,
+            f"{column}_p75": None,
+        }
+    return {
+        f"{column}_count": int(values.count()),
+        f"{column}_p25": float(values.quantile(0.25)),
+        f"{column}_median": float(values.quantile(0.5)),
+        f"{column}_p75": float(values.quantile(0.75)),
+    }
+
+
+def ordered_examples(values: pd.Series, limit: int = 5) -> str:
+    examples: list[str] = []
+    for value in values:
+        text = cell_text(value)
+        if text and text not in examples:
+            examples.append(text)
+        if len(examples) >= limit:
+            break
+    return ", ".join(examples)
+
+
+def aggregate_recommended_items(samples: pd.DataFrame, matched_projects: pd.DataFrame, top_k: int) -> pd.DataFrame:
+    if matched_projects.empty:
+        return pd.DataFrame(columns=RECOMMENDED_ITEM_COLUMNS)
+
+    source_ids = set(matched_projects["source_row_id"].tolist())
+    item_rows = samples[samples["source_row_id"].isin(source_ids)].copy()
+    if item_rows.empty:
+        return pd.DataFrame(columns=RECOMMENDED_ITEM_COLUMNS)
+    item_rows["item_signature"] = item_rows.apply(item_signature, axis=1)
+
+    matched_project_count = len(source_ids)
+    rows: list[dict[str, Any]] = []
+    for _signature, group in item_rows.groupby("item_signature", sort=False, dropna=False):
+        first = group.iloc[0]
+        source_project_count = int(group["source_row_id"].nunique())
+        row = {
+            "cost_item_name": cell_text(first.get("cost_item_name")),
+            "project_description": cell_text(first.get("project_description")),
+            "unit_normalized": cell_text(first.get("unit_normalized")),
+            "source_project_count": source_project_count,
+            "occurrence_count": int(len(group)),
+            "support_ratio": source_project_count / matched_project_count if matched_project_count else 0.0,
+            "example_source_row_ids": ordered_examples(group["source_row_id"]),
+            "example_item_row_ids": ordered_examples(group["item_row_id"]),
+        }
+        for column in ["unit_price", "labor_unit_price", "machinery_unit_price"]:
+            row.update(price_stats(group, column))
+        rows.append(row)
+
+    recommended = pd.DataFrame(rows)
+    if recommended.empty:
+        return pd.DataFrame(columns=RECOMMENDED_ITEM_COLUMNS)
+    recommended = recommended.sort_values(
+        ["source_project_count", "occurrence_count", "unit_price_count"],
+        ascending=[False, False, False],
+    ).head(max(top_k, 0)).copy()
+    recommended.insert(0, "rank", range(1, len(recommended) + 1))
+    for column in RECOMMENDED_ITEM_COLUMNS:
+        if column not in recommended.columns:
+            recommended[column] = None
+    return recommended[RECOMMENDED_ITEM_COLUMNS]
 
 
 def numeric_or_none(value: Any) -> float | None:
@@ -262,7 +431,7 @@ def numeric_or_none(value: Any) -> float | None:
     return float(number)
 
 
-def score_and_rerank_candidates(
+def build_debug_item_matches(
     samples: pd.DataFrame,
     item_embeddings: np.ndarray,
     project_embeddings: np.ndarray,
@@ -273,50 +442,42 @@ def score_and_rerank_candidates(
     predicted_catalog_id: str,
     unit: str,
     top_k: int,
+    min_score: float,
 ) -> pd.DataFrame:
     item_scores = item_embeddings @ item_query_embedding
     project_scores = project_embeddings @ project_query_embedding
     full_scores = full_embeddings @ full_query_embedding
-
     recall_limit = max(top_k, 0) * 3
+
     candidate_indexes = set(top_indexes(item_scores, recall_limit).tolist())
     candidate_indexes.update(top_indexes(project_scores, recall_limit).tolist())
     candidate_indexes.update(top_indexes(full_scores, recall_limit).tolist())
 
-    predicted_prefix = catalog_prefix(predicted_catalog_id)
     rows: list[dict[str, Any]] = []
     for index in candidate_indexes:
         sample = samples.iloc[index]
         sample_catalog_id = cell_text(sample.get("catalog_id"))
-        exact_match = bool(predicted_catalog_id and sample_catalog_id == predicted_catalog_id)
-        prefix_match = bool(
-            not exact_match
-            and predicted_prefix
-            and catalog_prefix(sample_catalog_id) == predicted_prefix
-        )
-        sample_unit = cell_text(sample.get("unit_normalized"))
-        unit_match = bool(unit and sample_unit == unit)
-        unit_price = numeric_or_none(sample.get("unit_price"))
-        has_unit_price = unit_price is not None
+        catalog_match = bool(predicted_catalog_id and sample_catalog_id == predicted_catalog_id)
+        unit_match = bool(unit and cell_text(sample.get("unit_normalized")) == unit)
+        has_unit_price = numeric_or_none(sample.get("unit_price")) is not None
         semantic_score = max(float(item_scores[index]), float(project_scores[index]), float(full_scores[index]))
         final_score = semantic_score
-        if exact_match:
+        if catalog_match:
             final_score += CATALOG_EXACT_BONUS
-        if prefix_match:
-            final_score += CATALOG_PREFIX_BONUS
         if unit_match:
             final_score += UNIT_MATCH_BONUS
         if has_unit_price:
             final_score += HAS_UNIT_PRICE_BONUS
 
-        row = {column: sample.get(column, "") for column in MATCH_COLUMNS if column not in {
+        row = {column: sample.get(column, "") for column in DEBUG_ITEM_MATCH_COLUMNS if column not in {
             "rank",
             "final_score",
             "item_score",
             "project_score",
             "full_score",
             "catalog_match",
-            "unit_match",
+            "score_below_min_score",
+            "catalog_mismatch",
         }}
         row.update(
             {
@@ -324,100 +485,48 @@ def score_and_rerank_candidates(
                 "item_score": float(item_scores[index]),
                 "project_score": float(project_scores[index]),
                 "full_score": float(full_scores[index]),
-                "catalog_match": "exact" if exact_match else "prefix" if prefix_match else "",
-                "unit_match": unit_match,
+                "catalog_match": catalog_match,
+                "score_below_min_score": final_score < min_score,
+                "catalog_mismatch": bool(predicted_catalog_id and sample_catalog_id != predicted_catalog_id),
             }
         )
         rows.append(row)
 
     if not rows:
-        return pd.DataFrame(columns=MATCH_COLUMNS)
-
-    matches = pd.DataFrame(rows).sort_values(["final_score"], ascending=False).head(max(top_k, 0)).copy()
+        return pd.DataFrame(columns=DEBUG_ITEM_MATCH_COLUMNS)
+    matches = pd.DataFrame(rows).sort_values("final_score", ascending=False).head(max(top_k, 0)).copy()
     matches.insert(0, "rank", range(1, len(matches) + 1))
-    for column in MATCH_COLUMNS:
+    for column in DEBUG_ITEM_MATCH_COLUMNS:
         if column not in matches.columns:
             matches[column] = ""
-    return matches[MATCH_COLUMNS]
+    return matches[DEBUG_ITEM_MATCH_COLUMNS]
 
 
-def price_sample_pool(matches: pd.DataFrame, min_score: float) -> pd.DataFrame:
-    if matches.empty:
-        return matches.copy()
-    pool = matches.copy()
-    pool["unit_price_numeric"] = pd.to_numeric(pool["unit_price"], errors="coerce")
-    pool["final_score_numeric"] = pd.to_numeric(pool["final_score"], errors="coerce")
-    return pool[(pool["final_score_numeric"] >= min_score) & pool["unit_price_numeric"].notna()].copy()
-
-
-def quantile_or_none(values: pd.Series, q: float) -> float | None:
-    if values.empty:
-        return None
-    return float(values.quantile(q))
-
-
-def multiply_or_none(value: float | None, quantity: float | None) -> float | None:
-    if value is None or quantity is None:
-        return None
-    return float(value) * quantity
-
-
-def summarize_unit_prices(price_pool: pd.DataFrame, quantity: float | None) -> pd.DataFrame:
-    rows: list[dict[str, Any]] = []
-    if price_pool.empty:
-        return pd.DataFrame(columns=UNIT_PRICE_COLUMNS)
-
-    for unit, group in price_pool.groupby("unit_normalized", dropna=False):
-        values = pd.to_numeric(group["unit_price"], errors="coerce").dropna()
-        p25 = quantile_or_none(values, 0.25)
-        median = quantile_or_none(values, 0.5)
-        p75 = quantile_or_none(values, 0.75)
-        rows.append(
-            {
-                "unit": cell_text(unit),
-                "sample_count": int(len(group)),
-                "priced_count": int(values.count()),
-                "min": float(values.min()) if not values.empty else None,
-                "p25": p25,
-                "median": median,
-                "p75": p75,
-                "max": float(values.max()) if not values.empty else None,
-                "estimated_total_p25": multiply_or_none(p25, quantity),
-                "estimated_total_median": multiply_or_none(median, quantity),
-                "estimated_total_p75": multiply_or_none(p75, quantity),
-            }
-        )
-
-    return pd.DataFrame(rows, columns=UNIT_PRICE_COLUMNS).sort_values(
-        ["priced_count", "unit"],
-        ascending=[False, True],
-    )
-
-
-def main_priced_count(price_pool: pd.DataFrame, unit: str) -> int:
-    if price_pool.empty:
-        return 0
-    if unit:
-        return int((price_pool["unit_normalized"].fillna("").astype(str).str.strip() == unit).sum())
-    return int(len(price_pool))
+def project_matches_for_output(matched_projects: pd.DataFrame) -> pd.DataFrame:
+    if matched_projects.empty:
+        return pd.DataFrame(columns=PROJECT_MATCH_COLUMNS)
+    output = matched_projects.copy()
+    for column in PROJECT_MATCH_COLUMNS:
+        if column not in output.columns:
+            output[column] = ""
+    return output[PROJECT_MATCH_COLUMNS]
 
 
 def build_warnings(
     profile: dict[str, Any],
     classify_warnings: list[str],
-    priced_count: int,
-    top_score: float | None,
-    min_score: float,
+    exact_catalog_available: bool,
+    recommended_count: int,
 ) -> list[str]:
     warnings = list(classify_warnings)
+    if not exact_catalog_available:
+        warnings.append(NO_EXACT_CATALOG_WARNING)
     if profile.get("quantity") is None:
-        warnings.append("未识别工程量，只能给单价参考，不能估算总价。")
+        warnings.append("未识别工程量，推荐清单项仅提供单价参考。")
     if not profile.get("unit"):
-        warnings.append("未识别计量单位，已按历史样本单位分组展示，不能混合不同单位直接估价。")
-    if priced_count < 3:
-        warnings.append("高相似可计价样本不足，建议补充材料、做法、面积或设备规格。")
-    if top_score is not None and top_score < min_score:
-        warnings.append("相似度偏低，结果仅供线索参考。")
+        warnings.append("未识别计量单位，价格参考按推荐清单项自身单位展示。")
+    if recommended_count == 0:
+        warnings.append("未形成推荐清单项，请补充材料、做法、面积或设备规格。")
     if profile.get("confidence") == "low":
         warnings.append("输入信息较模糊，系统解析置信度低。")
     return warnings
@@ -427,33 +536,65 @@ def build_summary(
     raw_text: str,
     profile: dict[str, Any],
     classification: dict[str, Any],
-    min_score: float,
-    top_score: float | None,
-    priced_count: int,
+    matched_projects: pd.DataFrame,
+    recommended_items: pd.DataFrame,
     warnings: list[str],
 ) -> dict[str, Any]:
+    top_project_score = float(matched_projects["project_score"].iloc[0]) if not matched_projects.empty else None
     return {
         "raw_text": raw_text,
-        "project_text": profile.get("project_text"),
-        "item_text": profile.get("item_text"),
-        "feature_text": profile.get("feature_text"),
+        "classified_project_text": raw_text,
+        "llm_item_query": profile.get("llm_item_query"),
+        "llm_feature_query": profile.get("llm_feature_query"),
         "inferred_quantity": profile.get("quantity"),
         "inferred_unit": profile.get("unit"),
         "predicted_catalog_id": cell_text(classification.get("catalog_id")),
-        "predicted_category": cell_text(classification.get("category")),
-        "predicted_item": cell_text(classification.get("item")),
-        "min_score": min_score,
-        "top_score": top_score,
-        "priced_count": priced_count,
+        "predicted_一级分类": cell_text(classification.get("category")),
+        "predicted_二级分类": cell_text(classification.get("item")),
+        "predicted_维修状态": cell_text(classification.get("repair_status")),
+        "predicted_标准对象": cell_text(classification.get("standard_group")),
+        "top_project_score": top_project_score,
+        "matched_project_count": int(len(matched_projects)),
+        "recommended_item_count": int(len(recommended_items)),
         "warnings": "；".join(warnings),
     }
+
+
+def apply_workbook_style(output_path: Path) -> None:
+    from openpyxl import load_workbook
+    from openpyxl.styles import Alignment, Font
+
+    workbook = load_workbook(output_path)
+    for worksheet in workbook.worksheets:
+        worksheet.freeze_panes = "A2"
+        for cell in worksheet[1]:
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        for column_cells in worksheet.columns:
+            header = cell_text(column_cells[0].value)
+            max_length = len(header)
+            for cell in column_cells[1: min(len(column_cells), 80)]:
+                max_length = max(max_length, len(cell_text(cell.value)))
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                if header in SCORE_COLUMNS:
+                    cell.number_format = "0.0000"
+                elif header in PRICE_COLUMNS:
+                    cell.number_format = "0.00"
+            width = min(max(max_length + 2, 10), 42)
+            if header in {"project_description", "warnings", "llm_feature_query"}:
+                width = 48
+            elif header in {"cost_item_name", "工程名称"}:
+                width = 30
+            worksheet.column_dimensions[column_cells[0].column_letter].width = width
+    workbook.save(output_path)
+    workbook.close()
 
 
 def write_query_result_workbook(
     output_path: Path,
     summary: dict[str, Any],
-    unit_price_by_unit: pd.DataFrame,
-    matches: pd.DataFrame,
+    recommended_items: pd.DataFrame,
+    debug_item_matches: pd.DataFrame,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
@@ -462,8 +603,9 @@ def write_query_result_workbook(
             sheet_name="summary",
             index=False,
         )
-        unit_price_by_unit.to_excel(writer, sheet_name="unit_price_by_unit", index=False)
-        matches.to_excel(writer, sheet_name="matches", index=False)
+        recommended_items.to_excel(writer, sheet_name="recommended_items", index=False)
+        debug_item_matches.to_excel(writer, sheet_name="debug_item_matches", index=False)
+    apply_workbook_style(output_path)
 
 
 def run_query(
@@ -473,66 +615,69 @@ def run_query(
     min_score: float,
     output: Path | None,
 ) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
-    samples, item_embeddings, project_embeddings, full_embeddings, meta = load_samples_and_embeddings(index_dir)
+    (
+        samples,
+        project_groups,
+        item_embeddings,
+        project_embeddings,
+        full_embeddings,
+        project_group_embeddings,
+        meta,
+    ) = load_index(index_dir)
     profile = extract_query_profile(raw_text)
-    classification, classify_warnings = classify_query_profile(profile, raw_text)
+    classification, classify_warnings = classify_raw_text(raw_text)
 
     model = load_embedding_model(str(meta.get("model") or "BAAI/bge-m3"))
-    item_query = join_text([profile.get("item_text", ""), profile.get("feature_text", "")]) or raw_text
-    project_query = profile.get("project_text") or raw_text
-    full_query = join_text(
-        [
-            raw_text,
-            profile.get("project_text", ""),
-            profile.get("item_text", ""),
-            profile.get("feature_text", ""),
-        ]
+    raw_query_embedding = encode_query(model, raw_text)
+    predicted_catalog_id = cell_text(classification.get("catalog_id"))
+    matched_projects, exact_catalog_available = select_project_groups(
+        project_groups=project_groups,
+        project_group_embeddings=project_group_embeddings,
+        raw_query_embedding=raw_query_embedding,
+        predicted_catalog_id=predicted_catalog_id,
+        top_k=top_k,
     )
+    recommended_items = aggregate_recommended_items(samples, matched_projects, top_k)
 
-    matches = score_and_rerank_candidates(
+    item_query = join_text([profile.get("llm_item_query", ""), profile.get("llm_feature_query", "")]) or raw_text
+    full_query = join_text([raw_text, profile.get("llm_item_query", ""), profile.get("llm_feature_query", "")])
+    debug_item_matches = build_debug_item_matches(
         samples=samples,
         item_embeddings=item_embeddings,
         project_embeddings=project_embeddings,
         full_embeddings=full_embeddings,
         item_query_embedding=encode_query(model, item_query),
-        project_query_embedding=encode_query(model, project_query),
+        project_query_embedding=raw_query_embedding,
         full_query_embedding=encode_query(model, full_query),
-        predicted_catalog_id=cell_text(classification.get("catalog_id")),
+        predicted_catalog_id=predicted_catalog_id,
         unit=profile.get("unit", ""),
         top_k=top_k,
+        min_score=min_score,
     )
 
-    price_pool = price_sample_pool(matches, min_score)
-    unit_price_by_unit = summarize_unit_prices(price_pool, profile.get("quantity"))
-    priced_count = main_priced_count(price_pool, profile.get("unit", ""))
-    top_score = float(matches["final_score"].iloc[0]) if not matches.empty else None
-    warnings = build_warnings(profile, classify_warnings, priced_count, top_score, min_score)
-    summary = build_summary(
-        raw_text=raw_text,
-        profile=profile,
-        classification=classification,
-        min_score=min_score,
-        top_score=top_score,
-        priced_count=priced_count,
-        warnings=warnings,
-    )
+    warnings = build_warnings(profile, classify_warnings, exact_catalog_available, len(recommended_items))
+    summary = build_summary(raw_text, profile, classification, matched_projects, recommended_items, warnings)
 
     if output:
-        write_query_result_workbook(output, summary, unit_price_by_unit, matches)
+        write_query_result_workbook(output, summary, recommended_items, debug_item_matches)
 
-    return summary, unit_price_by_unit, matches
+    return summary, recommended_items, debug_item_matches
 
 
-def print_terminal_summary(summary: dict[str, Any], unit_price_by_unit: pd.DataFrame, output_path: Path | None) -> None:
-    print(f"[DONE] top_score: {summary.get('top_score')}")
-    print(f"预测目录: {summary.get('predicted_catalog_id')} {summary.get('predicted_category')} / {summary.get('predicted_item')}")
-    if unit_price_by_unit.empty:
-        print("[WARN] 没有满足 min-score 的可计价样本。")
-    else:
-        first = unit_price_by_unit.iloc[0].to_dict()
+def print_terminal_summary(summary: dict[str, Any], recommended_items: pd.DataFrame, output_path: Path | None) -> None:
+    print(f"[DONE] matched projects: {summary.get('matched_project_count')}")
+    print(f"[DONE] recommended items: {summary.get('recommended_item_count')}")
+    print(
+        "预测目录: "
+        f"{summary.get('predicted_catalog_id')} "
+        f"{summary.get('predicted_一级分类')} / {summary.get('predicted_二级分类')}"
+    )
+    if not recommended_items.empty:
+        first = recommended_items.iloc[0].to_dict()
         print(
-            "综合单价参考: "
-            f"{first.get('p25')} - {first.get('p75')}，中位数 {first.get('median')} / {first.get('unit')}"
+            "首位推荐清单项: "
+            f"{first.get('cost_item_name')} / {first.get('unit_normalized')} / "
+            f"单价中位数 {first.get('unit_price_median')}"
         )
     if summary.get("warnings"):
         print(f"注意事项: {summary['warnings']}")
@@ -547,7 +692,7 @@ def main() -> int:
 
     try:
         validate_output_path(output_path, args.overwrite)
-        summary, unit_price_by_unit, _matches = run_query(
+        summary, recommended_items, _debug_item_matches = run_query(
             index_dir=index_dir,
             raw_text=args.text,
             top_k=args.top_k,
@@ -558,7 +703,7 @@ def main() -> int:
         print(f"[ERROR] {exc}")
         return 1
 
-    print_terminal_summary(summary, unit_price_by_unit, output_path)
+    print_terminal_summary(summary, recommended_items, output_path)
     return 0
 
 

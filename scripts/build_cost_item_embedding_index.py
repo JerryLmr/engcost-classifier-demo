@@ -19,6 +19,8 @@ MANAGED_OUTPUT_FILES = [
     "item_embeddings.npy",
     "project_embeddings.npy",
     "full_embeddings.npy",
+    "project_groups.parquet",
+    "project_group_embeddings.npy",
     "index_meta.json",
     "item_similarity_embeddings.npy",
     "item_context_embeddings.npy",
@@ -130,6 +132,60 @@ def add_embedding_text_columns(samples: pd.DataFrame) -> pd.DataFrame:
     return indexed
 
 
+PROJECT_GROUP_COLUMNS = [
+    "source_row_id",
+    "工程名称",
+    "catalog_id",
+    "一级分类",
+    "二级分类",
+    "维修状态",
+    "标准对象",
+    "group_text",
+    "item_count",
+]
+
+
+def build_project_groups(samples: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for source_row_id, group in samples.groupby("source_row_id", sort=False, dropna=False):
+        first = group.iloc[0]
+        project_text = safe_text(first.get("工程名称")) or join_parts(
+            [
+                safe_text(first.get("consultation_project_name")),
+                safe_text(first.get("renovation_content")),
+            ],
+            " ",
+        )
+        item_summaries: list[str] = []
+        seen: set[str] = set()
+        for _index, item in group.iterrows():
+            item_text = join_parts(
+                [
+                    safe_text(item.get("cost_item_name")),
+                    safe_text(item.get("project_description")),
+                ],
+                " ",
+            )
+            if item_text and item_text not in seen:
+                item_summaries.append(item_text)
+                seen.add(item_text)
+
+        rows.append(
+            {
+                "source_row_id": source_row_id,
+                "工程名称": project_text,
+                "catalog_id": safe_text(first.get("catalog_id")),
+                "一级分类": safe_text(first.get("一级分类")),
+                "二级分类": safe_text(first.get("二级分类")),
+                "维修状态": safe_text(first.get("维修状态")),
+                "标准对象": safe_text(first.get("标准对象")),
+                "group_text": join_parts([project_text, " ".join(item_summaries)], " "),
+                "item_count": int(len(group)),
+            }
+        )
+    return pd.DataFrame(rows, columns=PROJECT_GROUP_COLUMNS)
+
+
 def load_embedding_model(model_name: str) -> Any:
     try:
         from sentence_transformers import SentenceTransformer
@@ -183,11 +239,14 @@ def build_index_meta(
             "item_embeddings": "item_embeddings.npy",
             "project_embeddings": "project_embeddings.npy",
             "full_embeddings": "full_embeddings.npy",
+            "project_groups": "project_groups.parquet",
+            "project_group_embeddings": "project_group_embeddings.npy",
         },
         "field_descriptions": {
             "item_text": "清单项和项目特征文本，用于 item_score 检索",
             "project_text": "工程/维修场景文本，用于 project_score 检索",
             "full_text": "工程场景、清单项和单位文本，用于 full_score 检索",
+            "group_text": "工程文本和工程下清单项摘要，用于 source_row_id 工程召回",
             "unit_price": "综合单价，查询阶段用于参考区间计算",
             "labor_unit_price": "人工单价，查询阶段用于参考区间计算",
             "machinery_unit_price": "机械单价，查询阶段用于参考区间计算",
@@ -197,9 +256,11 @@ def build_index_meta(
 
 def write_index(
     samples: pd.DataFrame,
+    project_groups: pd.DataFrame,
     item_embeddings: np.ndarray,
     project_embeddings: np.ndarray,
     full_embeddings: np.ndarray,
+    project_group_embeddings: np.ndarray,
     output_dir: Path,
     meta: dict[str, Any],
 ) -> None:
@@ -209,9 +270,11 @@ def write_index(
         if path.exists() and path.is_file():
             path.unlink()
     samples.to_parquet(output_dir / "samples.parquet", index=False)
+    project_groups.to_parquet(output_dir / "project_groups.parquet", index=False)
     np.save(output_dir / "item_embeddings.npy", item_embeddings)
     np.save(output_dir / "project_embeddings.npy", project_embeddings)
     np.save(output_dir / "full_embeddings.npy", full_embeddings)
+    np.save(output_dir / "project_group_embeddings.npy", project_group_embeddings)
     (output_dir / "index_meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -225,20 +288,35 @@ def build_cost_item_embedding_index(
     batch_size: int,
 ) -> tuple[int, int, int]:
     samples = add_embedding_text_columns(load_samples(samples_path))
+    project_groups = build_project_groups(samples)
     model = load_embedding_model(model_name)
 
     item_embeddings = encode_texts(model, text_series(samples["item_text"]), batch_size)
     project_embeddings = encode_texts(model, text_series(samples["project_text"]), batch_size)
     full_embeddings = encode_texts(model, text_series(samples["full_text"]), batch_size)
+    project_group_embeddings = encode_texts(model, text_series(project_groups["group_text"]), batch_size)
 
     if item_embeddings.shape != project_embeddings.shape or item_embeddings.shape != full_embeddings.shape:
         raise ValueError("三路 embedding 维度或样本数不一致")
     if len(samples) != item_embeddings.shape[0]:
         raise ValueError("样本数量与 embedding 数量不一致")
+    if len(project_groups) != project_group_embeddings.shape[0]:
+        raise ValueError("工程分组数量与 embedding 数量不一致")
+    if project_group_embeddings.shape[1] != item_embeddings.shape[1]:
+        raise ValueError("工程分组 embedding 维度与清单 embedding 维度不一致")
 
     embedding_dim = int(item_embeddings.shape[1]) if item_embeddings.ndim == 2 else 0
     meta = build_index_meta(samples_path, model_name, len(samples), embedding_dim)
-    write_index(samples, item_embeddings, project_embeddings, full_embeddings, output_dir, meta)
+    write_index(
+        samples,
+        project_groups,
+        item_embeddings,
+        project_embeddings,
+        full_embeddings,
+        project_group_embeddings,
+        output_dir,
+        meta,
+    )
     return len(samples), item_embeddings.shape[0], embedding_dim
 
 

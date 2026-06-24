@@ -141,6 +141,24 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(indexed.loc[0, "full_text"], "屋面漏水维修工程 屋面卷材防水 3.0mm SBS 沥青防水卷材 单位：m²")
         self.assertEqual(indexed.loc[1, "project_text"], "外墙咨询 渗漏维修")
 
+    def test_build_project_groups_aggregates_source_rows(self):
+        samples = self.sample_frame()
+        duplicate = samples.iloc[0].copy()
+        duplicate["item_row_id"] = "2-2"
+        duplicate["cost_item_name"] = "防水层拆除"
+        duplicate["project_description"] = "拆除原屋面防水层"
+        samples = pd.concat([samples, pd.DataFrame([duplicate])], ignore_index=True)
+
+        project_groups = build_index.build_project_groups(samples)
+
+        self.assertEqual(project_groups["source_row_id"].tolist(), [2, 3, 4])
+        roof = project_groups[project_groups["source_row_id"] == 2].iloc[0]
+        self.assertEqual(roof["工程名称"], "屋面漏水维修工程")
+        self.assertEqual(roof["catalog_id"], "CP-002-03")
+        self.assertEqual(roof["item_count"], 2)
+        self.assertIn("屋面卷材防水 3.0mm SBS 沥青防水卷材", roof["group_text"])
+        self.assertIn("防水层拆除 拆除原屋面防水层", roof["group_text"])
+
     def test_build_samples_validate_paths_requires_overwrite_for_existing_output(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -255,7 +273,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / "query_result.xlsx"
             query_estimate.write_query_result_workbook(output_path, summary, matches)
-            workbook = openpyxl.load_workbook(output_path, read_only=True, data_only=True)
+            workbook = openpyxl.load_workbook(output_path, data_only=True)
             self.assertEqual(workbook.sheetnames, ["summary", "matches"])
             summary_headers = [workbook["summary"].cell(row=1, column=column).value for column in range(1, 5)]
             match_headers = [workbook["matches"].cell(row=1, column=column).value for column in range(1, 5)]
@@ -264,34 +282,95 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(summary_headers, ["query", "context", "unit", "catalog_id"])
         self.assertEqual(match_headers, ["rank", "final_score", "item_score", "context_score"])
 
-    def test_llm_query_rerank_uses_catalog_and_unit_bonuses(self):
-        samples = self.sample_frame()
-        item_embeddings = np.array(
-            [
-                [1.0, 0.0],
-                [0.96, 0.0],
-                [0.0, 1.0],
-            ],
-            dtype=np.float32,
-        )
-        project_embeddings = np.array(
-            [
-                [1.0, 0.0],
-                [0.95, 0.0],
-                [0.0, 1.0],
-            ],
-            dtype=np.float32,
-        )
-        full_embeddings = np.array(
-            [
-                [1.0, 0.0],
-                [0.94, 0.0],
-                [0.0, 1.0],
-            ],
-            dtype=np.float32,
+    def test_llm_profile_normalization_uses_retrieval_only_fields(self):
+        profile = query_estimate_llm.normalize_query_profile(
+            {
+                "llm_item_query": "SBS防水卷材",
+                "llm_feature_query": "3mm厚",
+                "project_text": "不应保留",
+                "catalog_id": "CP-002-03",
+                "quantity": 500,
+                "unit": "平",
+                "missing_info": ["基层做法"],
+                "confidence": "HIGH",
+            }
         )
 
-        matches = query_estimate_llm.score_and_rerank_candidates(
+        self.assertEqual(
+            set(profile),
+            {"llm_item_query", "llm_feature_query", "quantity", "unit", "missing_info", "confidence"},
+        )
+        self.assertEqual(profile["unit"], "m²")
+        self.assertEqual(profile["confidence"], "high")
+
+    def test_select_project_groups_uses_exact_catalog_only(self):
+        project_groups = pd.DataFrame(
+            [
+                {"source_row_id": 2, "catalog_id": "CP-002-03", "工程名称": "屋面漏水维修工程", "item_count": 3},
+                {"source_row_id": 3, "catalog_id": "CP-003-01", "工程名称": "外墙维修工程", "item_count": 2},
+                {"source_row_id": 4, "catalog_id": "CF-015-04", "工程名称": "管道维修工程", "item_count": 1},
+            ]
+        )
+        embeddings = np.array([[0.7, 0.0], [1.0, 0.0], [0.9, 0.0]], dtype=np.float32)
+
+        selected, exact_available = query_estimate_llm.select_project_groups(
+            project_groups,
+            embeddings,
+            raw_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
+            predicted_catalog_id="CP-002-03",
+            top_k=10,
+        )
+        self.assertTrue(exact_available)
+        self.assertEqual(selected["source_row_id"].tolist(), [2])
+
+        selected, exact_available = query_estimate_llm.select_project_groups(
+            project_groups,
+            embeddings,
+            raw_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
+            predicted_catalog_id="CP-999-00",
+            top_k=10,
+        )
+        self.assertFalse(exact_available)
+        self.assertTrue(selected.empty)
+
+    def test_recommended_items_aggregate_by_signature_and_price_fields(self):
+        samples = self.sample_frame()
+        duplicate = samples.iloc[0].copy()
+        duplicate["source_row_id"] = 5
+        duplicate["item_row_id"] = "5-1"
+        duplicate["unit_price"] = 120
+        duplicate["labor_unit_price"] = 30
+        duplicate["machinery_unit_price"] = 7
+        samples = pd.concat([samples, pd.DataFrame([duplicate])], ignore_index=True)
+        matched_projects = pd.DataFrame(
+            [
+                {"source_row_id": 2, "project_score": 0.9},
+                {"source_row_id": 5, "project_score": 0.8},
+            ]
+        )
+
+        recommended = query_estimate_llm.aggregate_recommended_items(samples, matched_projects, top_k=10)
+
+        self.assertEqual(len(recommended), 1)
+        row = recommended.iloc[0]
+        self.assertEqual(row["cost_item_name"], "屋面卷材防水")
+        self.assertEqual(row["source_project_count"], 2)
+        self.assertEqual(row["occurrence_count"], 2)
+        self.assertEqual(row["support_ratio"], 1.0)
+        self.assertEqual(row["unit_price_count"], 2)
+        self.assertEqual(row["unit_price_median"], 100.0)
+        self.assertEqual(row["labor_unit_price_count"], 2)
+        self.assertEqual(row["machinery_unit_price_count"], 2)
+        self.assertIn("2", str(row["example_source_row_ids"]))
+        self.assertIn("5", str(row["example_source_row_ids"]))
+
+    def test_debug_item_matches_has_no_prefix_catalog_bonus(self):
+        samples = self.sample_frame()
+        item_embeddings = np.array([[0.8, 0.0], [0.99, 0.0], [0.0, 1.0]], dtype=np.float32)
+        project_embeddings = np.array([[0.8, 0.0], [0.99, 0.0], [0.0, 1.0]], dtype=np.float32)
+        full_embeddings = np.array([[0.8, 0.0], [0.99, 0.0], [0.0, 1.0]], dtype=np.float32)
+
+        matches = query_estimate_llm.build_debug_item_matches(
             samples=samples,
             item_embeddings=item_embeddings,
             project_embeddings=project_embeddings,
@@ -300,102 +379,91 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             project_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
             full_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
             predicted_catalog_id="CP-002-03",
-            unit="m²",
+            unit="",
             top_k=2,
-        )
-
-        self.assertEqual(matches["cost_item_name"].tolist(), ["屋面卷材防水", "外墙防水"])
-        self.assertEqual(matches["catalog_match"].tolist(), ["exact", "prefix"])
-        self.assertEqual(matches["unit_match"].tolist(), [True, True])
-        self.assertAlmostEqual(float(matches["final_score"].iloc[0]), 1.10, places=5)
-
-    def test_llm_query_price_summary_groups_by_unit_and_totals_only_with_quantity(self):
-        matches = pd.DataFrame(
-            [
-                {"final_score": 0.8, "unit_normalized": "m²", "unit_price": 80},
-                {"final_score": 0.7, "unit_normalized": "m²", "unit_price": 100},
-                {"final_score": 0.9, "unit_normalized": "台", "unit_price": 500},
-                {"final_score": 0.4, "unit_normalized": "m²", "unit_price": 120},
-                {"final_score": 0.95, "unit_normalized": "m", "unit_price": None},
-            ]
-        )
-
-        price_pool = query_estimate_llm.price_sample_pool(matches, min_score=0.6)
-        grouped = query_estimate_llm.summarize_unit_prices(price_pool, quantity=10)
-
-        square = grouped[grouped["unit"] == "m²"].iloc[0]
-        self.assertEqual(square["priced_count"], 2)
-        self.assertEqual(square["median"], 90.0)
-        self.assertEqual(square["estimated_total_median"], 900.0)
-        self.assertEqual(query_estimate_llm.main_priced_count(price_pool, "m²"), 2)
-        self.assertEqual(query_estimate_llm.main_priced_count(price_pool, ""), 3)
-
-        grouped_without_quantity = query_estimate_llm.summarize_unit_prices(price_pool, quantity=None)
-        self.assertIsNone(grouped_without_quantity[grouped_without_quantity["unit"] == "m²"].iloc[0]["estimated_total_median"])
-
-    def test_llm_query_warnings_follow_profile_and_score_rules(self):
-        warnings = query_estimate_llm.build_warnings(
-            profile={"quantity": None, "unit": "", "confidence": "low"},
-            classify_warnings=["工程分类未能稳定匹配标准目录：fallback"],
-            priced_count=1,
-            top_score=0.5,
             min_score=0.6,
         )
 
+        self.assertEqual(matches["cost_item_name"].tolist(), ["外墙防水", "屋面卷材防水"])
+        self.assertEqual(matches["catalog_match"].tolist(), [False, True])
+        self.assertEqual(matches["catalog_mismatch"].tolist(), [True, False])
+        self.assertAlmostEqual(float(matches.loc[matches["cost_item_name"] == "外墙防水", "final_score"].iloc[0]), 1.0)
+        self.assertAlmostEqual(float(matches.loc[matches["cost_item_name"] == "屋面卷材防水", "final_score"].iloc[0]), 0.87)
+
+    def test_llm_query_warnings_for_missing_exact_catalog_samples(self):
+        warnings = query_estimate_llm.build_warnings(
+            profile={"quantity": None, "unit": "", "confidence": "low"},
+            classify_warnings=["工程分类未能稳定匹配标准目录：fallback"],
+            exact_catalog_available=False,
+            recommended_count=0,
+        )
+
         self.assertIn("工程分类未能稳定匹配标准目录：fallback", warnings)
-        self.assertIn("未识别工程量，只能给单价参考，不能估算总价。", warnings)
-        self.assertIn("未识别计量单位，已按历史样本单位分组展示，不能混合不同单位直接估价。", warnings)
-        self.assertIn("高相似可计价样本不足，建议补充材料、做法、面积或设备规格。", warnings)
-        self.assertIn("相似度偏低，结果仅供线索参考。", warnings)
+        self.assertIn(query_estimate_llm.NO_EXACT_CATALOG_WARNING, warnings)
+        self.assertIn("未识别工程量，推荐清单项仅提供单价参考。", warnings)
+        self.assertIn("未识别计量单位，价格参考按推荐清单项自身单位展示。", warnings)
+        self.assertIn("未形成推荐清单项，请补充材料、做法、面积或设备规格。", warnings)
         self.assertIn("输入信息较模糊，系统解析置信度低。", warnings)
 
-    def test_write_llm_query_result_workbook_has_expected_sheets(self):
+    def test_write_llm_query_result_workbook_has_expected_sheets_and_style(self):
         summary = {
             "raw_text": "屋面漏水",
-            "project_text": "屋面漏水维修工程",
-            "item_text": "屋面防水",
-            "feature_text": "3mm SBS",
+            "classified_project_text": "屋面漏水",
+            "llm_item_query": "屋面防水",
+            "llm_feature_query": "3mm SBS",
             "inferred_quantity": 10,
             "inferred_unit": "m²",
             "predicted_catalog_id": "CP-002-03",
-            "predicted_category": "屋面",
-            "predicted_item": "防水层",
-            "min_score": 0.6,
-            "top_score": 0.9,
-            "priced_count": 1,
+            "predicted_一级分类": "屋面",
+            "predicted_二级分类": "防水层",
+            "predicted_维修状态": "维修",
+            "predicted_标准对象": "共用部位",
+            "top_project_score": 0.9,
+            "matched_project_count": 1,
+            "recommended_item_count": 1,
             "warnings": "",
         }
-        unit_price_by_unit = pd.DataFrame(
+        recommended = pd.DataFrame(
             [
                 {
-                    "unit": "m²",
-                    "sample_count": 1,
-                    "priced_count": 1,
-                    "min": 80,
-                    "p25": 80,
-                    "median": 80,
-                    "p75": 80,
-                    "max": 80,
-                    "estimated_total_p25": 800,
-                    "estimated_total_median": 800,
-                    "estimated_total_p75": 800,
+                    "rank": 1,
+                    "cost_item_name": "屋面卷材防水",
+                    "project_description": "3mm SBS",
+                    "unit_normalized": "m²",
+                    "source_project_count": 1,
+                    "occurrence_count": 1,
+                    "support_ratio": 1.0,
+                    "unit_price_count": 1,
+                    "unit_price_p25": 80,
+                    "unit_price_median": 80,
+                    "unit_price_p75": 80,
+                    "labor_unit_price_count": 1,
+                    "labor_unit_price_p25": 20,
+                    "labor_unit_price_median": 20,
+                    "labor_unit_price_p75": 20,
+                    "machinery_unit_price_count": 1,
+                    "machinery_unit_price_p25": 5,
+                    "machinery_unit_price_median": 5,
+                    "machinery_unit_price_p75": 5,
+                    "example_source_row_ids": "2",
+                    "example_item_row_ids": "2-1",
                 }
             ],
-            columns=query_estimate_llm.UNIT_PRICE_COLUMNS,
+            columns=query_estimate_llm.RECOMMENDED_ITEM_COLUMNS,
         )
-        matches = pd.DataFrame([{column: "" for column in query_estimate_llm.MATCH_COLUMNS}])
+        debug = pd.DataFrame([{column: "" for column in query_estimate_llm.DEBUG_ITEM_MATCH_COLUMNS}])
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / "query_result.xlsx"
-            query_estimate_llm.write_query_result_workbook(output_path, summary, unit_price_by_unit, matches)
-            workbook = openpyxl.load_workbook(output_path, read_only=True, data_only=True)
-            self.assertEqual(workbook.sheetnames, ["summary", "unit_price_by_unit", "matches"])
-            summary_headers = [workbook["summary"].cell(row=1, column=column).value for column in range(1, 5)]
-            match_headers = [workbook["matches"].cell(row=1, column=column).value for column in range(1, 5)]
+            query_estimate_llm.write_query_result_workbook(output_path, summary, recommended, debug)
+            workbook = openpyxl.load_workbook(output_path, data_only=True)
+            self.assertEqual(workbook.sheetnames, ["summary", "recommended_items", "debug_item_matches"])
+            self.assertEqual(workbook["summary"].freeze_panes, "A2")
+            self.assertTrue(workbook["summary"]["A1"].font.bold)
+            self.assertTrue(workbook["summary"]["A1"].alignment.wrap_text)
+            self.assertEqual(workbook["recommended_items"]["G2"].number_format, "0.0000")
+            self.assertEqual(workbook["recommended_items"]["J2"].number_format, "0.00")
             workbook.close()
-
-        self.assertEqual(summary_headers, ["raw_text", "project_text", "item_text", "feature_text"])
-        self.assertEqual(match_headers, ["rank", "final_score", "item_score", "project_score"])
 
 
 if __name__ == "__main__":
