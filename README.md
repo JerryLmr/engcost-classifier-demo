@@ -149,7 +149,7 @@ index_meta.json
 
 ### 5. LLM 自然语言估价实验
 
-示例：用户只输入口语化维修需求，系统先用标准目录分类定位同类历史工程，再聚合这些工程中的清单项组合。
+示例：用户只输入口语化维修需求，系统先用 `classify_project_standard(raw_text)` 做标准目录分类，再用原始输入 `raw_text` 检索同目录历史工程，聚合这些工程中的清单项组合，最后由 LLM 基于结构化推荐结果生成自然语言总结。
 
 ```bash
 backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
@@ -167,16 +167,18 @@ outputs/estimate_llm_roof_leak.xlsx
 
 其中：
 
-- `summary` sheet：原始输入、标准目录分类结果、LLM 检索改写、同目录工程数量和 warning。
+- `answer` sheet：面向最终问答形态的自然语言总结，只基于 `recommended_items` 前若干条结构化证据生成。
+- `summary` sheet：原始输入、标准目录分类结果、同目录工程数量、推荐清单项数量和 warning。
 - `recommended_items` sheet：主结果，按同目录历史工程中的清单项签名聚合，展示出现次数、支持工程数、支持率和综合/人工/机械单价分位数。
-- `debug_item_matches` sheet：全库 item embedding 调试召回结果，只用于观察语义召回，不作为业务结论。
+- `debug_item_matches` sheet：全库 item embedding 调试召回结果，查询文本同样使用 `raw_text`，只用于观察语义召回，不作为业务结论。
 
 所有输出默认不覆盖；如需覆盖已有结果，请显式传入 `--overwrite`。
 
 说明：
 
 - 用户不需要提供 `catalog_id`；`catalog_id` 来自 `classify_project_standard(raw_text)`。
-- LLM 只做检索改写，不做标准目录分类，也不直接估价。
+- 本脚本不使用 LLM profile 影响主检索；工程召回和调试召回都直接使用 `raw_text`。
+- 本脚本新增的 LLM answer 只负责基于 `recommended_items` 总结，不负责标准目录分类，不新增未出现的清单项，不编造价格。
 - 如果样本库缺少同标准目录历史工程，系统会提示样本不足，不强行用 CP/CF 前缀相同的其它目录给价格。
 - 价格参考来自 `recommended_items` 中的同类历史工程清单项聚合结果，仅用于维修项目初案估算参考。
 

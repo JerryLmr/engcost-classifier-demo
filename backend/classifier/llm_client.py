@@ -134,13 +134,19 @@ def check_lmstudio_service(timeout_seconds: float = 3.0) -> None:
         ) from exc
 
 
-def _request_lmstudio_json(prompt: str) -> Dict[str, Any]:
+def _request_lmstudio_json(
+    prompt: str,
+    max_tokens: int | None = None,
+    timeout_seconds: int | None = None,
+    system_prompt: str | None = None,
+) -> Dict[str, Any]:
     payload = {
         "model": LMSTUDIO_MODEL,
         "messages": [
             {
                 "role": "system",
-                "content": (
+                "content": system_prompt
+                or (
                     "你是物业工程分类助手。"
                     "不要输出思考过程，不要输出 <think>，不要输出 markdown。"
                     "最终答案只能是一个 JSON object。"
@@ -149,7 +155,7 @@ def _request_lmstudio_json(prompt: str) -> Dict[str, Any]:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,
-        "max_tokens": LMSTUDIO_MAX_TOKENS,
+        "max_tokens": max_tokens or LMSTUDIO_MAX_TOKENS,
     }
     _apply_lmstudio_response_format(payload)
     try:
@@ -160,7 +166,7 @@ def _request_lmstudio_json(prompt: str) -> Dict[str, Any]:
                 "Content-Type": "application/json",
             },
             json=payload,
-            timeout=LLM_TIMEOUT_SECONDS,
+            timeout=timeout_seconds or LLM_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
     except (
@@ -177,8 +183,18 @@ def _request_lmstudio_json(prompt: str) -> Dict[str, Any]:
     return _extract_json_object(content)
 
 
-def request_llm_json(prompt: str) -> Dict[str, Any]:
-    return _request_lmstudio_json(prompt)
+def request_llm_json(
+    prompt: str,
+    max_tokens: int | None = None,
+    timeout_seconds: int | None = None,
+    system_prompt: str | None = None,
+) -> Dict[str, Any]:
+    return _request_lmstudio_json(
+        prompt,
+        max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
+        system_prompt=system_prompt,
+    )
 
 
 def compact_catalog_prompt_label(item: StandardCatalogItem) -> str:
