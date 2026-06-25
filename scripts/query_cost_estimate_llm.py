@@ -16,12 +16,10 @@ BACKEND_DIR = ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from classifier.llm_client import request_llm_json  # noqa: E402
+from classifier.unit_normalizer import normalize_unit  # noqa: E402
 from services.standard_classifier import classify_project_standard  # noqa: E402
 
 
-CATALOG_EXACT_BONUS = 0.06
-HAS_UNIT_PRICE_BONUS = 0.01
 LOW_PROJECT_SCORE_WARNING_THRESHOLD = 0.55
 NO_EXACT_CATALOG_WARNING = "样本库缺少该标准目录下的历史工程/清单项，不能形成可靠价格参考。"
 
@@ -35,6 +33,10 @@ SUMMARY_COLUMNS = [
     "最高工程相似度",
     "相似工程数",
     "推荐清单项数",
+    "识别工程量",
+    "工程量单位",
+    "可计算清单项数",
+    "简单合计参考金额",
     "总结来源",
     "提示",
 ]
@@ -63,34 +65,14 @@ RECOMMENDED_ITEM_COLUMNS = [
     "labor_unit_price_coverage",
     "machinery_unit_price_coverage",
     "price_breakdown_status",
+    "input_quantity",
+    "input_quantity_unit",
+    "estimated_amount_p25",
+    "estimated_amount_median",
+    "estimated_amount_p75",
+    "estimated_amount_note",
     "example_source_row_ids",
     "example_item_row_ids",
-]
-
-DEBUG_ITEM_MATCH_COLUMNS = [
-    "rank",
-    "final_score",
-    "item_score",
-    "project_score",
-    "full_score",
-    "catalog_match",
-    "source_row_id",
-    "item_row_id",
-    "工程名称",
-    "catalog_id",
-    "一级分类",
-    "二级分类",
-    "维修状态",
-    "标准对象",
-    "cost_item_name",
-    "project_description",
-    "unit_normalized",
-    "quantity",
-    "unit_price",
-    "labor_unit_price",
-    "machinery_unit_price",
-    "score_below_min_score",
-    "catalog_mismatch",
 ]
 
 PROJECT_MATCH_COLUMNS = [
@@ -120,13 +102,14 @@ PRICE_COLUMNS = {
     "labor_unit_price",
     "machinery_unit_price",
     "quantity",
+    "input_quantity",
+    "estimated_amount_p25",
+    "estimated_amount_median",
+    "estimated_amount_p75",
 }
 
 SCORE_COLUMNS = {
-    "final_score",
-    "item_score",
     "project_score",
-    "full_score",
     "support_ratio",
     "unit_price_coverage",
     "labor_unit_price_coverage",
@@ -151,8 +134,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--text", required=True, help="口语化维修需求")
     parser.add_argument("--output", default="", help="可选 xlsx 输出路径")
     parser.add_argument("--overwrite", action="store_true", help="若输出文件已存在则覆盖")
-    parser.add_argument("--top-k", type=int, default=20, help="输出工程、推荐清单项和调试匹配数量")
-    parser.add_argument("--min-score", type=float, default=0.6, help="debug_item_matches 低分标记阈值")
+    parser.add_argument("--top-k", type=int, default=20, help="输出工程和推荐清单项数量")
     return parser.parse_args()
 
 
@@ -209,15 +191,12 @@ def encode_query(model: Any, text: str) -> np.ndarray:
 
 def load_index(
     index_dir: Path,
-) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, dict[str, Any]]:
     samples_path = index_dir / "samples.parquet"
     groups_path = index_dir / "project_groups.parquet"
-    item_path = index_dir / "item_embeddings.npy"
-    project_path = index_dir / "project_embeddings.npy"
-    full_path = index_dir / "full_embeddings.npy"
     group_path = index_dir / "project_group_embeddings.npy"
     meta_path = index_dir / "index_meta.json"
-    paths = [samples_path, groups_path, item_path, project_path, full_path, group_path, meta_path]
+    paths = [samples_path, groups_path, group_path, meta_path]
 
     missing = [path.name for path in paths if not path.exists()]
     if missing:
@@ -225,25 +204,14 @@ def load_index(
 
     samples = pd.read_parquet(samples_path)
     project_groups = pd.read_parquet(groups_path)
-    item_embeddings = np.load(item_path)
-    project_embeddings = np.load(project_path)
-    full_embeddings = np.load(full_path)
     project_group_embeddings = np.load(group_path)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
-    if (
-        len(samples) != item_embeddings.shape[0]
-        or len(samples) != project_embeddings.shape[0]
-        or len(samples) != full_embeddings.shape[0]
-    ):
-        raise ValueError("样本数量与清单 embedding 数量不一致")
-    if item_embeddings.shape != project_embeddings.shape or item_embeddings.shape != full_embeddings.shape:
-        raise ValueError("三路清单 embedding 维度或样本数不一致")
     if len(project_groups) != project_group_embeddings.shape[0]:
         raise ValueError("工程分组数量与 embedding 数量不一致")
-    if project_group_embeddings.shape[1] != item_embeddings.shape[1]:
-        raise ValueError("工程分组 embedding 维度与清单 embedding 维度不一致")
-    return samples, project_groups, item_embeddings, project_embeddings, full_embeddings, project_group_embeddings, meta
+    if project_group_embeddings.ndim != 2:
+        raise ValueError("工程分组 embedding 维度不正确")
+    return samples, project_groups, project_group_embeddings, meta
 
 
 def cell_text(value: Any) -> str:
@@ -254,6 +222,22 @@ def cell_text(value: Any) -> str:
     return str(value).strip()
 
 
+def extract_simple_quantity(raw_text: str) -> dict[str, Any] | None:
+    unit_pattern = r"(平方米|平米|平方|平|m\s*\^\s*2|m\s*2|m²|㎡)"
+    match = re.search(rf"(?P<quantity>\d+(?:\.\d+)?)\s*(?P<unit>{unit_pattern})", raw_text or "", re.IGNORECASE)
+    if not match:
+        return None
+
+    raw_unit = match.group("unit")
+    normalized = normalize_unit(raw_unit)
+    return {
+        "quantity": float(match.group("quantity")),
+        "raw_unit": raw_unit,
+        "unit": normalized,
+        "source": "regex" if normalized else "regex_unrecognized_unit",
+    }
+
+
 def classify_raw_text(raw_text: str) -> tuple[dict[str, Any], list[str]]:
     result = classify_project_standard(raw_text)
     warnings: list[str] = []
@@ -262,12 +246,6 @@ def classify_raw_text(raw_text: str) -> tuple[dict[str, Any], list[str]]:
         reason = cell_text(result.get("reason"))
         warnings.append(f"工程分类未能稳定匹配标准目录：{reason or pipeline_status}")
     return result, warnings
-
-
-def top_indexes(scores: np.ndarray, limit: int) -> np.ndarray:
-    if limit <= 0 or scores.size == 0:
-        return np.array([], dtype=int)
-    return np.argsort(scores)[::-1][: min(limit, scores.size)]
 
 
 def select_project_groups(
@@ -421,71 +399,92 @@ def numeric_or_none(value: Any) -> float | None:
     return float(number)
 
 
-def build_debug_item_matches(
-    samples: pd.DataFrame,
-    item_embeddings: np.ndarray,
-    project_embeddings: np.ndarray,
-    full_embeddings: np.ndarray,
-    item_query_embedding: np.ndarray,
-    project_query_embedding: np.ndarray,
-    full_query_embedding: np.ndarray,
-    predicted_catalog_id: str,
-    top_k: int,
-    min_score: float,
+def apply_simple_amount_estimates(
+    recommended_items: pd.DataFrame,
+    quantity_info: dict[str, Any] | None,
 ) -> pd.DataFrame:
-    item_scores = item_embeddings @ item_query_embedding
-    project_scores = project_embeddings @ project_query_embedding
-    full_scores = full_embeddings @ full_query_embedding
-    recall_limit = max(top_k, 0) * 3
+    recommended = recommended_items.copy()
+    for column in [
+        "input_quantity",
+        "input_quantity_unit",
+        "estimated_amount_p25",
+        "estimated_amount_median",
+        "estimated_amount_p75",
+        "estimated_amount_note",
+    ]:
+        if column not in recommended.columns:
+            recommended[column] = None
 
-    candidate_indexes = set(top_indexes(item_scores, recall_limit).tolist())
-    candidate_indexes.update(top_indexes(project_scores, recall_limit).tolist())
-    candidate_indexes.update(top_indexes(full_scores, recall_limit).tolist())
+    if recommended.empty:
+        return recommended[RECOMMENDED_ITEM_COLUMNS]
 
-    rows: list[dict[str, Any]] = []
-    for index in candidate_indexes:
-        sample = samples.iloc[index]
-        sample_catalog_id = cell_text(sample.get("catalog_id"))
-        catalog_match = bool(predicted_catalog_id and sample_catalog_id == predicted_catalog_id)
-        has_unit_price = numeric_or_none(sample.get("unit_price")) is not None
-        semantic_score = max(float(item_scores[index]), float(project_scores[index]), float(full_scores[index]))
-        final_score = semantic_score
-        if catalog_match:
-            final_score += CATALOG_EXACT_BONUS
-        if has_unit_price:
-            final_score += HAS_UNIT_PRICE_BONUS
+    if not quantity_info:
+        recommended["estimated_amount_note"] = "未识别工程量，暂不计算参考金额"
+        return recommended[RECOMMENDED_ITEM_COLUMNS]
 
-        row = {column: sample.get(column, "") for column in DEBUG_ITEM_MATCH_COLUMNS if column not in {
-            "rank",
-            "final_score",
-            "item_score",
-            "project_score",
-            "full_score",
-            "catalog_match",
-            "score_below_min_score",
-            "catalog_mismatch",
-        }}
-        row.update(
-            {
-                "final_score": final_score,
-                "item_score": float(item_scores[index]),
-                "project_score": float(project_scores[index]),
-                "full_score": float(full_scores[index]),
-                "catalog_match": catalog_match,
-                "score_below_min_score": final_score < min_score,
-                "catalog_mismatch": bool(predicted_catalog_id and sample_catalog_id != predicted_catalog_id),
-            }
-        )
-        rows.append(row)
+    quantity = numeric_or_none(quantity_info.get("quantity"))
+    input_unit = cell_text(quantity_info.get("unit"))
+    recommended["input_quantity"] = quantity
+    recommended["input_quantity_unit"] = input_unit
 
-    if not rows:
-        return pd.DataFrame(columns=DEBUG_ITEM_MATCH_COLUMNS)
-    matches = pd.DataFrame(rows).sort_values("final_score", ascending=False).head(max(top_k, 0)).copy()
-    matches.insert(0, "rank", range(1, len(matches) + 1))
-    for column in DEBUG_ITEM_MATCH_COLUMNS:
-        if column not in matches.columns:
-            matches[column] = ""
-    return matches[DEBUG_ITEM_MATCH_COLUMNS]
+    if quantity is None or not input_unit:
+        recommended["estimated_amount_note"] = "输入工程量单位未识别，暂不计算参考金额"
+        return recommended[RECOMMENDED_ITEM_COLUMNS]
+
+    for index, row in recommended.iterrows():
+        item_unit = cell_text(row.get("unit_normalized"))
+        if item_unit != input_unit:
+            recommended.at[index, "estimated_amount_note"] = "单位不一致，未按输入工程量计算"
+            continue
+
+        p25 = numeric_or_none(row.get("unit_price_p25"))
+        median = numeric_or_none(row.get("unit_price_median"))
+        p75 = numeric_or_none(row.get("unit_price_p75"))
+        if median is None:
+            recommended.at[index, "estimated_amount_note"] = "缺少综合单价样本，无法计算参考金额"
+            continue
+
+        recommended.at[index, "estimated_amount_median"] = quantity * median
+        if p25 is not None and p75 is not None:
+            recommended.at[index, "estimated_amount_p25"] = quantity * p25
+            recommended.at[index, "estimated_amount_p75"] = quantity * p75
+            recommended.at[index, "estimated_amount_note"] = "按输入工程量和综合单价历史区间简单估算"
+        else:
+            recommended.at[index, "estimated_amount_note"] = (
+                "缺少完整 P25-P75 区间，仅保留中位数参考；answer 中不要展示为确定报价"
+            )
+
+    return recommended[RECOMMENDED_ITEM_COLUMNS]
+
+
+def count_calculable_amount_items(recommended_items: pd.DataFrame) -> int:
+    if recommended_items.empty:
+        return 0
+    p25 = numeric_frame_column(recommended_items, "estimated_amount_p25")
+    p75 = numeric_frame_column(recommended_items, "estimated_amount_p75")
+    return int((p25.notna() & p75.notna()).sum())
+
+
+def numeric_frame_column(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series([None] * len(frame), index=frame.index, dtype=float)
+    return pd.to_numeric(frame[column], errors="coerce")
+
+
+def simple_total_amounts(recommended_items: pd.DataFrame) -> dict[str, float | None]:
+    if recommended_items.empty:
+        return {"p25": None, "median": None, "p75": None}
+    p25 = numeric_frame_column(recommended_items, "estimated_amount_p25")
+    p75 = numeric_frame_column(recommended_items, "estimated_amount_p75")
+    mask = p25.notna() & p75.notna()
+    if not bool(mask.any()):
+        return {"p25": None, "median": None, "p75": None}
+    median = numeric_frame_column(recommended_items, "estimated_amount_median")
+    return {
+        "p25": float(p25[mask].sum()),
+        "median": float(median[mask].sum()) if bool(median[mask].notna().any()) else None,
+        "p75": float(p75[mask].sum()),
+    }
 
 
 def project_matches_for_output(matched_projects: pd.DataFrame) -> pd.DataFrame:
@@ -519,14 +518,34 @@ def build_warnings(
     return warnings
 
 
+def format_amount_value(value: Any) -> str:
+    number = numeric_or_none(value)
+    if number is None:
+        return ""
+    rounded = round(number, 2)
+    if rounded.is_integer():
+        return f"{rounded:,.0f}"
+    return f"{rounded:,.2f}".rstrip("0").rstrip(".")
+
+
+def format_amount_range(p25: Any, p75: Any) -> str:
+    low = format_amount_value(p25)
+    high = format_amount_value(p75)
+    if not low or not high:
+        return ""
+    return f"{low}-{high} 元"
+
+
 def build_summary(
     raw_text: str,
     classification: dict[str, Any],
     matched_projects: pd.DataFrame,
     recommended_items: pd.DataFrame,
+    quantity_info: dict[str, Any] | None,
     warnings: list[str],
 ) -> dict[str, Any]:
     top_project_score = float(matched_projects["project_score"].iloc[0]) if not matched_projects.empty else None
+    totals = simple_total_amounts(recommended_items)
     return {
         "原始输入": raw_text,
         "标准目录ID": cell_text(classification.get("catalog_id")),
@@ -537,6 +556,10 @@ def build_summary(
         "最高工程相似度": top_project_score,
         "相似工程数": int(len(matched_projects)),
         "推荐清单项数": int(len(recommended_items)),
+        "识别工程量": quantity_info.get("quantity") if quantity_info else "",
+        "工程量单位": quantity_info.get("unit") if quantity_info else "",
+        "可计算清单项数": count_calculable_amount_items(recommended_items),
+        "简单合计参考金额": format_amount_range(totals.get("p25"), totals.get("p75")),
         "总结来源": "",
         "提示": "；".join(warnings),
     }
@@ -646,78 +669,27 @@ def answer_ordered_items(recommended_items: pd.DataFrame, limit: int = 8) -> pd.
     return pd.concat([answer_items[~auxiliary_mask], answer_items[auxiliary_mask]])
 
 
-def answer_items_payload(recommended_items: pd.DataFrame, limit: int = 8) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    if recommended_items.empty:
-        return rows
+def format_simple_estimate_text(row: pd.Series) -> str:
+    quantity = numeric_or_none(row.get("input_quantity"))
+    unit = cell_text(row.get("input_quantity_unit"))
+    if quantity is None or not unit:
+        return ""
 
-    for _index, row in answer_ordered_items(recommended_items, limit=limit).iterrows():
-        is_auxiliary = is_auxiliary_answer_item(row)
-        item = {
-            "rank": int(numeric_or_none(row.get("rank")) or 0),
-            "清单项": cell_text(row.get("cost_item_name")),
-            "展示名称": answer_item_display_name(row),
-            "是否措施/辅助项": is_auxiliary,
-            "单位": cell_text(row.get("unit_normalized")) or "未注明",
-            "历史样本类似工程常见程度": format_occurrence_text(row),
-            "参考综合单价文本": format_unit_price_text(row),
-            "价格拆分文本": format_price_breakdown_text(row),
-            "施工工艺或项目特征": item_feature_text(row),
-            "支持工程数": int(numeric_or_none(row.get("source_project_count")) or 0),
-            "出现次数": int(numeric_or_none(row.get("occurrence_count")) or 0),
-            "支持率": rounded_number(row.get("support_ratio"), digits=4),
-        }
-        rows.append(item)
-    return rows
+    p25 = numeric_or_none(row.get("estimated_amount_p25"))
+    median = numeric_or_none(row.get("estimated_amount_median"))
+    p75 = numeric_or_none(row.get("estimated_amount_p75"))
+    quantity_text = format_amount_value(quantity)
 
-
-def build_answer_prompt(raw_text: str, summary: dict[str, Any], recommended_items: pd.DataFrame) -> str:
-    payload = {
-        "原始输入": raw_text,
-        "标准目录分类结果": {
-            "标准目录ID": summary.get("标准目录ID"),
-            "一级分类": summary.get("一级分类"),
-            "二级分类": summary.get("二级分类"),
-            "维修状态": summary.get("维修状态"),
-            "标准对象": summary.get("标准对象"),
-        },
-        "warnings": summary.get("提示"),
-        "recommended_items_top8": answer_items_payload(recommended_items, limit=8),
-    }
-    return f"""
-/no_think
-你是维修工程造价问答助手。只基于输入 JSON 生成 answer，不要推理过程。
-
-规则：
-- recommended_items_top8 中的“参考综合单价文本”“价格拆分文本”“历史样本类似工程常见程度”“施工工艺或项目特征”已经由程序生成。
-- 必须直接使用上述字段，不得重新解释统计 count，不得根据人工/机械为空推断不需要人工或机械。
-- 只能使用 recommended_items_top8 中的清单项，不得新增清单项/工艺。
-- 不得编造价格；不得输出 recommended_items_top8 中没有的价格。
-- 面向普通业主/物业人员，语言简洁，不使用内部技术口吻。
-- 不要输出 markdown 表格。
-- recommended_items_top8 已按主体施工项在前、措施/辅助项在后排序；直接按输入顺序输出。
-- 每项必须包含：历史样本类似工程常见程度、单位、参考综合单价、价格拆分、施工工艺/项目特征。
-- recommended_items_top8 为空时，说明同目录样本不足，不能形成可靠价格参考。
-- 施工工艺/项目特征只能使用输入字段“施工工艺或项目特征”，不得发散或新增工程事实。
-- answer 总字数控制在 900 字以内。
-
-answer 固定格式：
-根据历史已审定样本，类似【原始输入】通常可能包含以下清单项/工艺：
-1. 【展示名称】：
-   历史样本类似工程常见程度：【历史样本类似工程常见程度】
-   单位：【单位】
-   【参考综合单价文本】
-   【价格拆分文本】
-   施工工艺/项目特征：【施工工艺或项目特征】
-
-需要补充的信息/风险提示：
-...
-
-只输出 JSON object：{{"answer":"..."}}
-
-输入 JSON：
-{json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}
-""".strip()
+    if p25 is not None and p75 is not None:
+        amount_range = format_amount_range(p25, p75)
+        if amount_range:
+            return f"简单估算：按 {quantity_text} {unit} 计算，参考金额约 {amount_range}"
+    if median is not None:
+        return (
+            f"简单估算：按 {quantity_text} {unit} 计算，"
+            f"历史样本区间不足，仅可参考中位金额约 {format_amount_value(median)} 元"
+        )
+    return ""
 
 
 def build_answer_fallback(raw_text: str, summary: dict[str, Any], recommended_items: pd.DataFrame) -> str:
@@ -741,39 +713,38 @@ def build_answer_fallback(raw_text: str, summary: dict[str, Any], recommended_it
             f"   {format_price_breakdown_text(row)}\n"
             f"   施工工艺/项目特征：{item_feature_text(row)}"
         )
+        estimate_text = format_simple_estimate_text(row)
+        if estimate_text:
+            lines.append(f"   {estimate_text}")
 
     risk = warnings or "仍需人工确认工程量、施工做法、材料规格和现场条件。"
+    totals = simple_total_amounts(recommended_items)
+    total_range = format_amount_range(totals.get("p25"), totals.get("p75"))
+    if total_range:
+        lines.append("")
+        lines.append(f"按已能匹配单位的清单项简单合计，参考金额约 {total_range}。")
+
+    has_quantity = bool(cell_text(summary.get("工程量单位")))
+    notes = recommended_items.get("estimated_amount_note")
+    has_unit_mismatch = bool(notes.astype(str).str.contains("单位不一致", na=False).any()) if notes is not None else False
+    if has_quantity and has_unit_mismatch:
+        risk = f"{risk}；单位与输入工程量不一致的项目未纳入简单合计，例如台次、项、套等措施或设备类费用。"
+    if total_range:
+        risk = (
+            f"{risk}；该合计仅按历史样本综合单价区间和输入工程量粗略计算，"
+            "未包含单位不匹配、现场条件不明确或需单独确认的措施项。"
+        )
     lines.append("")
     lines.append(f"需要补充的信息/风险提示：{risk}")
     return "\n".join(lines)
 
 
 def build_answer(raw_text: str, summary: dict[str, Any], recommended_items: pd.DataFrame) -> dict[str, str]:
-    try:
-        data = request_llm_json(
-            build_answer_prompt(raw_text, summary, recommended_items),
-            max_tokens=512,
-            timeout_seconds=45,
-            system_prompt=(
-                "/no_think\n"
-                "你是维修工程造价问答助手。不要输出思考过程，不要输出 <think>，"
-                "不要输出 markdown。最终答案只能是一个 JSON object。"
-            ),
-        )
-        answer = cell_text(data.get("answer"))
-        if answer:
-            return {"answer": answer, "answer_source": "llm", "answer_error": ""}
-        return {
-            "answer": build_answer_fallback(raw_text, summary, recommended_items),
-            "answer_source": "fallback",
-            "answer_error": "LLM 返回空 answer",
-        }
-    except Exception as exc:
-        return {
-            "answer": build_answer_fallback(raw_text, summary, recommended_items),
-            "answer_source": "fallback",
-            "answer_error": str(exc),
-        }
+    return {
+        "answer": build_answer_fallback(raw_text, summary, recommended_items),
+        "answer_source": "template",
+        "answer_error": "",
+    }
 
 
 def apply_workbook_style(output_path: Path) -> None:
@@ -814,8 +785,8 @@ def write_query_result_workbook(
     output_path: Path,
     answer_result: dict[str, str],
     summary: dict[str, Any],
+    matched_projects: pd.DataFrame,
     recommended_items: pd.DataFrame,
-    debug_item_matches: pd.DataFrame,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
@@ -835,8 +806,8 @@ def write_query_result_workbook(
             sheet_name="summary",
             index=False,
         )
+        project_matches_for_output(matched_projects).to_excel(writer, sheet_name="matched_projects", index=False)
         recommended_items.to_excel(writer, sheet_name="recommended_items", index=False)
-        debug_item_matches.to_excel(writer, sheet_name="debug_item_matches", index=False)
     apply_workbook_style(output_path)
 
 
@@ -844,23 +815,17 @@ def run_query(
     index_dir: Path,
     raw_text: str,
     top_k: int,
-    min_score: float,
     output: Path | None,
 ) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame, dict[str, str]]:
-    (
-        samples,
-        project_groups,
-        item_embeddings,
-        project_embeddings,
-        full_embeddings,
-        project_group_embeddings,
-        meta,
-    ) = load_index(index_dir)
+    samples, project_groups, project_group_embeddings, meta = load_index(index_dir)
     classification, classify_warnings = classify_raw_text(raw_text)
+    quantity_info = extract_simple_quantity(raw_text)
 
     model = load_embedding_model(str(meta.get("model") or "BAAI/bge-m3"))
     try:
         raw_query_embedding = encode_query(model, raw_text)
+        if raw_query_embedding.shape[0] != project_group_embeddings.shape[1]:
+            raise ValueError("query embedding 维度与工程分组 embedding 维度不一致")
         predicted_catalog_id = cell_text(classification.get("catalog_id"))
         matched_projects, exact_catalog_available, exact_catalog_total_count = select_project_groups(
             project_groups=project_groups,
@@ -870,19 +835,7 @@ def run_query(
             top_k=top_k,
         )
         recommended_items = aggregate_recommended_items(samples, matched_projects, top_k)
-
-        debug_item_matches = build_debug_item_matches(
-            samples=samples,
-            item_embeddings=item_embeddings,
-            project_embeddings=project_embeddings,
-            full_embeddings=full_embeddings,
-            item_query_embedding=raw_query_embedding,
-            project_query_embedding=raw_query_embedding,
-            full_query_embedding=raw_query_embedding,
-            predicted_catalog_id=predicted_catalog_id,
-            top_k=top_k,
-            min_score=min_score,
-        )
+        recommended_items = apply_simple_amount_estimates(recommended_items, quantity_info)
     finally:
         release_embedding_model(model)
         del model
@@ -895,14 +848,14 @@ def run_query(
         matched_projects=matched_projects,
         recommended_count=len(recommended_items),
     )
-    summary = build_summary(raw_text, classification, matched_projects, recommended_items, warnings)
+    summary = build_summary(raw_text, classification, matched_projects, recommended_items, quantity_info, warnings)
     answer_result = build_answer(raw_text, summary, recommended_items)
     summary["总结来源"] = answer_result.get("answer_source", "")
 
     if output:
-        write_query_result_workbook(output, answer_result, summary, recommended_items, debug_item_matches)
+        write_query_result_workbook(output, answer_result, summary, matched_projects, recommended_items)
 
-    return summary, recommended_items, debug_item_matches, answer_result
+    return summary, recommended_items, matched_projects, answer_result
 
 
 def print_terminal_summary(summary: dict[str, Any], answer: str, output_path: Path | None) -> None:
@@ -928,11 +881,10 @@ def main() -> int:
 
     try:
         validate_output_path(output_path, args.overwrite)
-        summary, _recommended_items, _debug_item_matches, answer_result = run_query(
+        summary, _recommended_items, _matched_projects, answer_result = run_query(
             index_dir=index_dir,
             raw_text=args.text,
             top_k=args.top_k,
-            min_score=args.min_score,
             output=output_path,
         )
     except (RuntimeError, ValueError) as exc:

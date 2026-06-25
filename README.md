@@ -137,9 +137,6 @@ outputs/cost_item_index/
 
 ```text
 samples.parquet
-item_embeddings.npy
-project_embeddings.npy
-full_embeddings.npy
 project_groups.parquet
 project_group_embeddings.npy
 index_meta.json
@@ -151,7 +148,7 @@ index_meta.json
 
 ### 5. LLM 自然语言估价实验
 
-示例：用户只输入口语化维修需求，系统先用 `classify_project_standard(raw_text)` 做标准目录分类，再用原始输入 `raw_text` 检索同目录历史工程，聚合这些工程中的清单项组合，最后由 LLM 基于结构化推荐结果生成自然语言总结。
+示例：用户只输入口语化维修需求，系统先用 `classify_project_standard(raw_text)` 做标准目录分类，再用原始输入 `raw_text` 检索同目录历史工程，聚合这些工程中的清单项组合，最后用固定模板基于结构化推荐结果生成自然语言总结。
 
 ```bash
 backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
@@ -169,21 +166,27 @@ outputs/estimate_llm_roof_leak.xlsx
 
 其中：
 
-- `answer` sheet：面向最终问答形态的自然语言总结，只基于 `recommended_items` 前若干条结构化证据生成。
-- `summary` sheet：原始输入、标准目录分类结果、同目录工程数量、推荐清单项数量和 warning。
+- `answer` sheet：面向最终问答形态的自然语言总结，只基于 `recommended_items` 前若干条结构化证据生成，当前来源固定为 `template`。
+- `summary` sheet：原始输入、标准目录分类结果、同目录工程数量、推荐清单项数量、识别工程量、可计算清单项数、简单合计参考金额和 warning。
+- `matched_projects` sheet：召回的相似历史工程，用于复核工程级证据来源。
 - `recommended_items` sheet：主结果，按同目录历史工程中的清单项签名聚合，展示出现次数、支持工程数、支持率和综合/人工/机械单价分位数。
-- `debug_item_matches` sheet：全库 item embedding 调试召回结果，查询文本同样使用 `raw_text`，只用于观察语义召回，不作为业务结论。
 
 所有输出默认不覆盖；如需覆盖已有结果，请显式传入 `--overwrite`。
 
 说明：
 
 - 用户不需要提供 `catalog_id`；`catalog_id` 来自 `classify_project_standard(raw_text)`。
-- 本脚本不使用 LLM profile 影响主检索；工程召回和调试召回都直接使用 `raw_text`。
-- 查询阶段 embedding 模型固定使用 CPU，并在生成 LLM answer 前释放 embedding model；这样可以避免和 LM Studio 抢 GPU/显存。
-- 本脚本新增的 LLM answer 只负责基于 `recommended_items` 总结，不负责标准目录分类，不新增未出现的清单项，不编造价格。
+- 当前脚本是结构化 RAG 单轮查询；检索只依赖 `project_group_embeddings`，主链路为“工程组召回 → 展开 source_row_id 下清单项 → 聚合 recommended_items”。
+- `recommended_items` 是主业务结果；`matched_projects` 是召回的相似历史工程。
+- `debug_item_matches` 已移出默认结果，因为它属于全库单项 embedding 调试，不是当前主链路证据。
+- item/project/full 三路清单级 embedding 已从 query 主链路移除。
+- 查询阶段 embedding 模型固定使用 CPU，并在生成模板 answer 前释放 embedding model；这样可以避免和 LM Studio 抢 GPU/显存。
+- 当前 answer 只负责基于 `recommended_items` 总结，不负责标准目录分类，不新增未出现的清单项，不编造价格。
 - 如果样本库缺少同标准目录历史工程，系统会提示样本不足，不强行用 CP/CF 前缀相同的其它目录给价格。
 - 价格参考来自 `recommended_items` 中的同类历史工程清单项聚合结果，仅用于维修项目初案估算参考。
+- 如果用户输入含简单工程量，系统会对单位一致且有综合单价分位数的清单项做“综合单价 × 工程量”的 P25-P75 简单参考金额计算。
+- 该计算不是正式预算，只是历史样本综合单价区间下的粗略参考；措施项、单位不一致项、现场条件不明确或需单独确认的项目不强行计入合计。
+- 后续多轮状态中，LLM 可用于理解用户补充信息和选择适用清单项，但金额计算仍由程序执行。
 
 
 ### 6. 文件提交说明

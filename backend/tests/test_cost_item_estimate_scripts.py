@@ -131,7 +131,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(build_samples_script.normalize_unit("m^{3}"), "m³")
         self.assertEqual(build_samples_script.normalize_unit(" 台 "), "台")
 
-    def test_build_index_adds_three_embedding_text_columns(self):
+    def test_build_index_keeps_samples_without_item_embedding_text_columns(self):
         samples = self.sample_frame()
         samples.loc[1, "工程名称"] = ""
         samples.loc[1, "consultation_project_name"] = "外墙咨询"
@@ -139,10 +139,24 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         indexed = build_index.add_embedding_text_columns(samples)
 
-        self.assertEqual(indexed.loc[0, "item_text"], "屋面卷材防水 3.0mm SBS 沥青防水卷材")
-        self.assertEqual(indexed.loc[0, "project_text"], "屋面漏水维修工程")
-        self.assertEqual(indexed.loc[0, "full_text"], "屋面漏水维修工程 屋面卷材防水 3.0mm SBS 沥青防水卷材 单位：m²")
-        self.assertEqual(indexed.loc[1, "project_text"], "外墙咨询 渗漏维修")
+        self.assertEqual(indexed.columns.tolist(), samples.columns.tolist())
+        self.assertNotIn("item_text", indexed.columns)
+        self.assertNotIn("project_text", indexed.columns)
+        self.assertNotIn("full_text", indexed.columns)
+
+    def test_build_index_meta_only_tracks_project_group_embedding_files(self):
+        meta = build_index.build_index_meta(Path("samples.xlsx"), "demo-model", 3, 2)
+
+        self.assertEqual(
+            meta["files"],
+            {
+                "samples": "samples.parquet",
+                "project_groups": "project_groups.parquet",
+                "project_group_embeddings": "project_group_embeddings.npy",
+            },
+        )
+        self.assertNotIn("item_text", meta["field_descriptions"])
+        self.assertNotIn("item_embeddings", meta["files"])
 
     def test_build_project_groups_aggregates_source_rows(self):
         samples = self.sample_frame()
@@ -368,30 +382,91 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertIn("2", str(row["example_source_row_ids"]))
         self.assertIn("5", str(row["example_source_row_ids"]))
 
-    def test_debug_item_matches_has_no_prefix_catalog_bonus(self):
-        samples = self.sample_frame()
-        item_embeddings = np.array([[0.8, 0.0], [0.99, 0.0], [0.0, 1.0]], dtype=np.float32)
-        project_embeddings = np.array([[0.8, 0.0], [0.99, 0.0], [0.0, 1.0]], dtype=np.float32)
-        full_embeddings = np.array([[0.8, 0.0], [0.99, 0.0], [0.0, 1.0]], dtype=np.float32)
+    def test_extract_simple_quantity_reuses_unit_normalizer(self):
+        cases = [
+            ("面积大概500平", "平"),
+            ("面积大概500 平方米", "平方米"),
+            ("面积大概500m2", "m2"),
+            ("面积大概500 ㎡", "㎡"),
+            ("面积大概500 m²", "m²"),
+        ]
+        for text, raw_unit in cases:
+            with self.subTest(text=text):
+                quantity = query_estimate_llm.extract_simple_quantity(text)
+                self.assertEqual(quantity["quantity"], 500.0)
+                self.assertEqual(quantity["raw_unit"].replace(" ", ""), raw_unit.replace(" ", ""))
+                self.assertEqual(quantity["unit"], "m²")
+                self.assertEqual(quantity["source"], "regex")
 
-        matches = query_estimate_llm.build_debug_item_matches(
-            samples=samples,
-            item_embeddings=item_embeddings,
-            project_embeddings=project_embeddings,
-            full_embeddings=full_embeddings,
-            item_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
-            project_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
-            full_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
-            predicted_catalog_id="CP-002-03",
-            top_k=2,
-            min_score=0.6,
+        self.assertIsNone(query_estimate_llm.extract_simple_quantity("屋面漏水维修工程"))
+
+        with patch.object(query_estimate_llm, "normalize_unit", return_value=""):
+            quantity = query_estimate_llm.extract_simple_quantity("面积500平")
+        self.assertEqual(quantity["source"], "regex_unrecognized_unit")
+        self.assertEqual(quantity["unit"], "")
+
+    def test_apply_simple_amount_estimates_handles_quantity_price_and_unit_cases(self):
+        recommended = pd.DataFrame(
+            [
+                {
+                    "rank": 1,
+                    "cost_item_name": "完整区间",
+                    "unit_normalized": "m²",
+                    "unit_price_p25": 30,
+                    "unit_price_median": 36,
+                    "unit_price_p75": 42,
+                },
+                {
+                    "rank": 2,
+                    "cost_item_name": "仅中位数",
+                    "unit_normalized": "m²",
+                    "unit_price_p25": None,
+                    "unit_price_median": 20,
+                    "unit_price_p75": None,
+                },
+                {
+                    "rank": 3,
+                    "cost_item_name": "缺少综合单价",
+                    "unit_normalized": "m²",
+                    "unit_price_p25": None,
+                    "unit_price_median": None,
+                    "unit_price_p75": None,
+                },
+                {
+                    "rank": 4,
+                    "cost_item_name": "单位不一致",
+                    "unit_normalized": "项",
+                    "unit_price_p25": 100,
+                    "unit_price_median": 120,
+                    "unit_price_p75": 140,
+                },
+            ]
         )
+        for column in query_estimate_llm.RECOMMENDED_ITEM_COLUMNS:
+            if column not in recommended.columns:
+                recommended[column] = None
+        recommended = recommended[query_estimate_llm.RECOMMENDED_ITEM_COLUMNS]
 
-        self.assertEqual(matches["cost_item_name"].tolist(), ["外墙防水", "屋面卷材防水"])
-        self.assertEqual(matches["catalog_match"].tolist(), [False, True])
-        self.assertEqual(matches["catalog_mismatch"].tolist(), [True, False])
-        self.assertAlmostEqual(float(matches.loc[matches["cost_item_name"] == "外墙防水", "final_score"].iloc[0]), 1.0)
-        self.assertAlmostEqual(float(matches.loc[matches["cost_item_name"] == "屋面卷材防水", "final_score"].iloc[0]), 0.87)
+        no_quantity = query_estimate_llm.apply_simple_amount_estimates(recommended, None)
+        self.assertEqual(no_quantity["estimated_amount_note"].iloc[0], "未识别工程量，暂不计算参考金额")
+
+        estimated = query_estimate_llm.apply_simple_amount_estimates(
+            recommended,
+            {"quantity": 500.0, "raw_unit": "平", "unit": "m²", "source": "regex"},
+        )
+        self.assertEqual(estimated.loc[0, "estimated_amount_p25"], 15000)
+        self.assertEqual(estimated.loc[0, "estimated_amount_median"], 18000)
+        self.assertEqual(estimated.loc[0, "estimated_amount_p75"], 21000)
+        self.assertEqual(estimated.loc[0, "estimated_amount_note"], "按输入工程量和综合单价历史区间简单估算")
+        self.assertTrue(pd.isna(estimated.loc[1, "estimated_amount_p25"]))
+        self.assertEqual(estimated.loc[1, "estimated_amount_median"], 10000)
+        self.assertIn("缺少完整 P25-P75 区间", estimated.loc[1, "estimated_amount_note"])
+        self.assertTrue(pd.isna(estimated.loc[2, "estimated_amount_median"]))
+        self.assertEqual(estimated.loc[2, "estimated_amount_note"], "缺少综合单价样本，无法计算参考金额")
+        self.assertTrue(pd.isna(estimated.loc[3, "estimated_amount_median"]))
+        self.assertEqual(estimated.loc[3, "estimated_amount_note"], "单位不一致，未按输入工程量计算")
+        self.assertEqual(query_estimate_llm.count_calculable_amount_items(estimated), 1)
+        self.assertEqual(query_estimate_llm.simple_total_amounts(estimated), {"p25": 15000.0, "median": 18000.0, "p75": 21000.0})
 
     def test_llm_query_warnings_for_missing_exact_catalog_samples(self):
         warnings = query_estimate_llm.build_warnings(
@@ -406,24 +481,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertIn(query_estimate_llm.NO_EXACT_CATALOG_WARNING, warnings)
         self.assertIn("未形成推荐清单项，请补充材料、做法、面积或设备规格。", warnings)
 
-    def test_build_answer_reports_llm_success_error_and_empty_answer_sources(self):
+    def test_build_answer_uses_template_without_llm(self):
         summary = {"提示": ""}
         recommended = pd.DataFrame(columns=query_estimate_llm.RECOMMENDED_ITEM_COLUMNS)
 
-        with patch.object(query_estimate_llm, "request_llm_json", return_value={"answer": "自然语言总结"}):
-            result = query_estimate_llm.build_answer("屋面漏水", summary, recommended)
-        self.assertEqual(result, {"answer": "自然语言总结", "answer_source": "llm", "answer_error": ""})
-
-        with patch.object(query_estimate_llm, "request_llm_json", return_value={"answer": ""}):
-            result = query_estimate_llm.build_answer("屋面漏水", summary, recommended)
-        self.assertEqual(result["answer_source"], "fallback")
-        self.assertEqual(result["answer_error"], "LLM 返回空 answer")
-        self.assertIn("样本不足", result["answer"])
-
-        with patch.object(query_estimate_llm, "request_llm_json", side_effect=RuntimeError("service down")):
-            result = query_estimate_llm.build_answer("屋面漏水", summary, recommended)
-        self.assertEqual(result["answer_source"], "fallback")
-        self.assertEqual(result["answer_error"], "service down")
+        result = query_estimate_llm.build_answer("屋面漏水", summary, recommended)
+        self.assertEqual(result["answer_source"], "template")
+        self.assertEqual(result["answer_error"], "")
         self.assertIn("样本不足", result["answer"])
 
     def test_answer_price_text_formatters_do_not_infer_missing_labor_or_machinery(self):
@@ -486,7 +550,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "价格拆分：缺少可用综合单价，暂不展开费用拆分",
         )
 
-    def test_answer_payload_and_prompt_use_preformatted_customer_fields(self):
+    def test_template_answer_uses_preformatted_customer_fields_and_amount_ranges(self):
         recommended = pd.DataFrame(
             [
                 {
@@ -499,28 +563,34 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "support_ratio": 1.0,
                     "unit_price_count": 1,
                     "unit_price_p25": 80,
-                    "unit_price_median": 80,
-                    "unit_price_p75": 80,
+                    "unit_price_median": 90,
+                    "unit_price_p75": 100,
                     "labor_unit_price_count": 0,
                     "machinery_unit_price_count": 0,
+                    "input_quantity": 500,
+                    "input_quantity_unit": "m²",
+                    "estimated_amount_p25": 40000,
+                    "estimated_amount_median": 45000,
+                    "estimated_amount_p75": 50000,
+                    "estimated_amount_note": "按输入工程量和综合单价历史区间简单估算",
                 },
             ]
         )
 
-        payload = query_estimate_llm.answer_items_payload(recommended)
-        self.assertEqual(payload[0]["历史样本类似工程常见程度"], "高")
-        self.assertEqual(payload[0]["参考综合单价文本"], "参考综合单价：80 元/m²")
-        self.assertEqual(payload[0]["价格拆分文本"], "价格拆分：历史样本未见人工、机械费用拆分")
-        self.assertEqual(payload[0]["施工工艺或项目特征"], "3mm SBS")
-        self.assertNotIn("人工单价", payload[0])
-        self.assertNotIn("机械单价", payload[0])
+        answer = query_estimate_llm.build_answer_fallback(
+            "屋面漏水",
+            {"提示": "", "工程量单位": "m²"},
+            recommended,
+        )
 
-        prompt = query_estimate_llm.build_answer_prompt("屋面漏水", {"提示": ""}, recommended)
-        self.assertIn("必须直接使用上述字段", prompt)
-        self.assertIn("不得重新解释统计 count", prompt)
-        self.assertIn("不得根据人工/机械为空推断不需要人工或机械", prompt)
-        self.assertIn("不得编造价格", prompt)
-        self.assertIn('只输出 JSON object：{"answer":"..."}', prompt)
+        self.assertIn("历史样本类似工程常见程度：高", answer)
+        self.assertIn("参考综合单价：约 90 元/m²，历史样本区间约 80-100 元/m²", answer)
+        self.assertIn("价格拆分：历史样本未见人工、机械费用拆分", answer)
+        self.assertIn("施工工艺/项目特征：3mm SBS", answer)
+        self.assertIn("简单估算：按 500 m² 计算，参考金额约 40,000-50,000 元", answer)
+        self.assertIn("按已能匹配单位的清单项简单合计，参考金额约 40,000-50,000 元。", answer)
+        self.assertNotIn("预计总价", answer)
+        self.assertNotIn("报价", answer)
 
     def test_fallback_answer_orders_primary_items_before_auxiliary_items_only_for_answer(self):
         recommended = pd.DataFrame(
@@ -585,10 +655,30 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "最高工程相似度": 0.9,
             "相似工程数": 1,
             "推荐清单项数": 1,
-            "总结来源": "fallback",
+            "识别工程量": 500,
+            "工程量单位": "m²",
+            "可计算清单项数": 1,
+            "简单合计参考金额": "40,000-50,000 元",
+            "总结来源": "template",
             "提示": "",
         }
-        answer_result = {"answer": "自动总结", "answer_source": "fallback", "answer_error": "service down"}
+        answer_result = {"answer": "自动总结", "answer_source": "template", "answer_error": ""}
+        matched_projects = pd.DataFrame(
+            [
+                {
+                    "rank": 1,
+                    "project_score": 0.9,
+                    "source_row_id": 2,
+                    "工程名称": "屋面漏水维修工程",
+                    "catalog_id": "CP-002-03",
+                    "一级分类": "屋面",
+                    "二级分类": "防水层",
+                    "维修状态": "维修",
+                    "标准对象": "共用部位",
+                    "item_count": 1,
+                }
+            ]
+        )
         recommended = pd.DataFrame(
             [
                 {
@@ -611,27 +701,34 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "machinery_unit_price_p25": 5,
                     "machinery_unit_price_median": 5,
                     "machinery_unit_price_p75": 5,
+                    "input_quantity": 500,
+                    "input_quantity_unit": "m²",
+                    "estimated_amount_p25": 40000,
+                    "estimated_amount_median": 40000,
+                    "estimated_amount_p75": 40000,
+                    "estimated_amount_note": "按输入工程量和综合单价历史区间简单估算",
                     "example_source_row_ids": "2",
                     "example_item_row_ids": "2-1",
                 }
             ],
             columns=query_estimate_llm.RECOMMENDED_ITEM_COLUMNS,
         )
-        debug = pd.DataFrame([{column: "" for column in query_estimate_llm.DEBUG_ITEM_MATCH_COLUMNS}])
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / "query_result.xlsx"
-            query_estimate_llm.write_query_result_workbook(output_path, answer_result, summary, recommended, debug)
+            query_estimate_llm.write_query_result_workbook(output_path, answer_result, summary, matched_projects, recommended)
             workbook = openpyxl.load_workbook(output_path, data_only=True)
-            self.assertEqual(workbook.sheetnames, ["answer", "summary", "recommended_items", "debug_item_matches"])
+            self.assertEqual(workbook.sheetnames, ["answer", "summary", "matched_projects", "recommended_items"])
             self.assertEqual(workbook["answer"].cell(row=2, column=1).value, "总结来源")
-            self.assertEqual(workbook["answer"].cell(row=2, column=2).value, "fallback")
+            self.assertEqual(workbook["answer"].cell(row=2, column=2).value, "template")
             self.assertEqual(workbook["answer"].cell(row=3, column=1).value, "错误信息")
-            self.assertEqual(workbook["answer"].cell(row=3, column=2).value, "service down")
+            self.assertIsNone(workbook["answer"].cell(row=3, column=2).value)
             self.assertEqual(workbook["answer"].cell(row=4, column=1).value, "总结")
             self.assertEqual(workbook["answer"].cell(row=4, column=2).value, "自动总结")
-            summary_headers = [workbook["summary"].cell(row=1, column=column).value for column in range(1, 12)]
+            summary_headers = [workbook["summary"].cell(row=1, column=column).value for column in range(1, 16)]
             self.assertIn("总结来源", summary_headers)
+            self.assertIn("识别工程量", summary_headers)
+            self.assertEqual(workbook["matched_projects"].cell(row=1, column=1).value, "rank")
             self.assertEqual(workbook["summary"].freeze_panes, "A2")
             self.assertTrue(workbook["summary"]["A1"].font.bold)
             self.assertTrue(workbook["summary"]["A1"].alignment.wrap_text)
