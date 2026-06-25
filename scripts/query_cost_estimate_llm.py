@@ -59,6 +59,10 @@ RECOMMENDED_ITEM_COLUMNS = [
     "machinery_unit_price_p25",
     "machinery_unit_price_median",
     "machinery_unit_price_p75",
+    "unit_price_coverage",
+    "labor_unit_price_coverage",
+    "machinery_unit_price_coverage",
+    "price_breakdown_status",
     "example_source_row_ids",
     "example_item_row_ids",
 ]
@@ -124,6 +128,9 @@ SCORE_COLUMNS = {
     "project_score",
     "full_score",
     "support_ratio",
+    "unit_price_coverage",
+    "labor_unit_price_coverage",
+    "machinery_unit_price_coverage",
     "最高工程相似度",
 }
 
@@ -338,6 +345,27 @@ def ordered_examples(values: pd.Series, limit: int = 5) -> str:
     return ", ".join(examples)
 
 
+def coverage_ratio(count: int, occurrence_count: int) -> float:
+    if occurrence_count <= 0:
+        return 0.0
+    return count / occurrence_count
+
+
+def price_breakdown_status(row: dict[str, Any]) -> str:
+    unit_count = int(row.get("unit_price_count") or 0)
+    labor_count = int(row.get("labor_unit_price_count") or 0)
+    machinery_count = int(row.get("machinery_unit_price_count") or 0)
+    if unit_count <= 0:
+        return "无综合单价参考"
+    if labor_count > 0 and machinery_count > 0:
+        return "有人工和机械费用拆分"
+    if labor_count > 0:
+        return "有人工费用拆分"
+    if machinery_count > 0:
+        return "有机械费用拆分"
+    return "仅有综合单价，未见人工/机械费用拆分"
+
+
 def aggregate_recommended_items(samples: pd.DataFrame, matched_projects: pd.DataFrame, top_k: int) -> pd.DataFrame:
     if matched_projects.empty:
         return pd.DataFrame(columns=RECOMMENDED_ITEM_COLUMNS)
@@ -365,6 +393,11 @@ def aggregate_recommended_items(samples: pd.DataFrame, matched_projects: pd.Data
         }
         for column in ["unit_price", "labor_unit_price", "machinery_unit_price"]:
             row.update(price_stats(group, column))
+        occurrence_count = int(row["occurrence_count"])
+        row["unit_price_coverage"] = coverage_ratio(int(row["unit_price_count"]), occurrence_count)
+        row["labor_unit_price_coverage"] = coverage_ratio(int(row["labor_unit_price_count"]), occurrence_count)
+        row["machinery_unit_price_coverage"] = coverage_ratio(int(row["machinery_unit_price_count"]), occurrence_count)
+        row["price_breakdown_status"] = price_breakdown_status(row)
         rows.append(row)
 
     recommended = pd.DataFrame(rows)
@@ -525,19 +558,84 @@ def rounded_number(value: Any, digits: int = 2) -> float | None:
     return round(number, digits)
 
 
-def price_summary(row: pd.Series, prefix: str) -> str:
-    count = int(numeric_or_none(row.get(f"{prefix}_count")) or 0)
-    if count <= 0:
-        return "暂无可靠价格样本"
-    p25 = rounded_number(row.get(f"{prefix}_p25"))
-    median = rounded_number(row.get(f"{prefix}_median"))
-    p75 = rounded_number(row.get(f"{prefix}_p75"))
-    return f"P25-P75 {p25}-{p75} / 中位数 {median}，样本数 {count}"
+def format_money(value: Any) -> str:
+    number = rounded_number(value, digits=2)
+    if number is None:
+        return ""
+    text = f"{number:.2f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def format_price_with_unit(value: Any, unit: Any) -> str:
+    money = format_money(value)
+    if not money:
+        return ""
+    unit_text = cell_text(unit) or "未注明"
+    return f"{money} 元/{unit_text}"
+
+
+def row_count(row: pd.Series, column: str) -> int:
+    return int(numeric_or_none(row.get(column)) or 0)
+
+
+def format_unit_price_text(row: pd.Series) -> str:
+    if row_count(row, "unit_price_count") <= 0:
+        return "参考综合单价：暂无可靠综合单价参考"
+
+    unit = cell_text(row.get("unit_normalized")) or "未注明"
+    median = format_price_with_unit(row.get("unit_price_median"), unit)
+    if not median:
+        return "参考综合单价：暂无可靠综合单价参考"
+
+    p25 = format_money(row.get("unit_price_p25"))
+    median_money = format_money(row.get("unit_price_median"))
+    p75 = format_money(row.get("unit_price_p75"))
+    if p25 and median_money and p75 and len({p25, median_money, p75}) > 1:
+        return f"参考综合单价：约 {median}，历史样本区间约 {p25}-{p75} 元/{unit}"
+    return f"参考综合单价：{median}"
+
+
+def format_price_breakdown_text(row: pd.Series) -> str:
+    if row_count(row, "unit_price_count") <= 0:
+        return "价格拆分：缺少可用综合单价，暂不展开费用拆分"
+
+    unit = cell_text(row.get("unit_normalized")) or "未注明"
+    labor_count = row_count(row, "labor_unit_price_count")
+    machinery_count = row_count(row, "machinery_unit_price_count")
+    labor_price = format_price_with_unit(row.get("labor_unit_price_median"), unit)
+    machinery_price = format_price_with_unit(row.get("machinery_unit_price_median"), unit)
+
+    if labor_count > 0 and machinery_count > 0 and labor_price and machinery_price:
+        return f"价格拆分：其中包含人工约 {labor_price}、机械约 {machinery_price}"
+    if labor_count > 0 and labor_price:
+        return f"价格拆分：其中包含人工约 {labor_price}，历史样本未见机械费用拆分"
+    if machinery_count > 0 and machinery_price:
+        return f"价格拆分：其中包含机械约 {machinery_price}，历史样本未见人工费用拆分"
+    return "价格拆分：历史样本未见人工、机械费用拆分"
+
+
+def format_occurrence_text(row: pd.Series) -> str:
+    return occurrence_level(row.get("support_ratio"))
+
+
+def item_feature_text(row: pd.Series) -> str:
+    name = cell_text(row.get("cost_item_name"))
+    description = cell_text(row.get("project_description"))
+    if description and description != name:
+        return description
+    return name or description or "该清单项"
 
 
 def is_auxiliary_answer_item(row: pd.Series) -> bool:
     text = f"{cell_text(row.get('cost_item_name'))} {cell_text(row.get('project_description'))}"
     return any(keyword in text for keyword in ANSWER_AUXILIARY_KEYWORDS)
+
+
+def answer_item_display_name(row: pd.Series) -> str:
+    name = cell_text(row.get("cost_item_name"))
+    if is_auxiliary_answer_item(row) and name:
+        return f"{name}（措施/辅助项）"
+    return name
 
 
 def answer_ordered_items(recommended_items: pd.DataFrame, limit: int = 8) -> pd.DataFrame:
@@ -554,18 +652,20 @@ def answer_items_payload(recommended_items: pd.DataFrame, limit: int = 8) -> lis
         return rows
 
     for _index, row in answer_ordered_items(recommended_items, limit=limit).iterrows():
+        is_auxiliary = is_auxiliary_answer_item(row)
         item = {
             "rank": int(numeric_or_none(row.get("rank")) or 0),
             "清单项": cell_text(row.get("cost_item_name")),
-            "项目特征": cell_text(row.get("project_description")),
-            "单位": cell_text(row.get("unit_normalized")),
-            "常见程度": occurrence_level(row.get("support_ratio")),
+            "展示名称": answer_item_display_name(row),
+            "是否措施/辅助项": is_auxiliary,
+            "单位": cell_text(row.get("unit_normalized")) or "未注明",
+            "历史样本类似工程常见程度": format_occurrence_text(row),
+            "参考综合单价文本": format_unit_price_text(row),
+            "价格拆分文本": format_price_breakdown_text(row),
+            "施工工艺或项目特征": item_feature_text(row),
             "支持工程数": int(numeric_or_none(row.get("source_project_count")) or 0),
             "出现次数": int(numeric_or_none(row.get("occurrence_count")) or 0),
             "支持率": rounded_number(row.get("support_ratio"), digits=4),
-            "综合单价": price_summary(row, "unit_price"),
-            "人工单价": price_summary(row, "labor_unit_price"),
-            "机械单价": price_summary(row, "machinery_unit_price"),
         }
         rows.append(item)
     return rows
@@ -589,18 +689,26 @@ def build_answer_prompt(raw_text: str, summary: dict[str, Any], recommended_item
 你是维修工程造价问答助手。只基于输入 JSON 生成 answer，不要推理过程。
 
 规则：
+- recommended_items_top8 中的“参考综合单价文本”“价格拆分文本”“历史样本类似工程常见程度”“施工工艺或项目特征”已经由程序生成。
+- 必须直接使用上述字段，不得重新解释统计 count，不得根据人工/机械为空推断不需要人工或机械。
 - 只能使用 recommended_items_top8 中的清单项，不得新增清单项/工艺。
-- 不得编造价格；价格为“暂无可靠价格样本”时照实说明。
+- 不得编造价格；不得输出 recommended_items_top8 中没有的价格。
 - 面向普通业主/物业人员，语言简洁，不使用内部技术口吻。
-- 主体施工项优先说明，措施/辅助项后置；措施/辅助项关键词包括：垂直运输、大型机械、进出场、安拆、吊篮、脚手架、措施。
-- 每项必须包含：常见程度、单位、参考综合单价、人工/机械单价、说明。
+- 不要输出 markdown 表格。
+- recommended_items_top8 已按主体施工项在前、措施/辅助项在后排序；直接按输入顺序输出。
+- 每项必须包含：历史样本类似工程常见程度、单位、参考综合单价、价格拆分、施工工艺/项目特征。
 - recommended_items_top8 为空时，说明同目录样本不足，不能形成可靠价格参考。
-- 每个清单项最多 1 句说明，只基于“清单项”和“项目特征”。
+- 施工工艺/项目特征只能使用输入字段“施工工艺或项目特征”，不得发散或新增工程事实。
 - answer 总字数控制在 900 字以内。
 
 answer 固定格式：
 根据历史已审定样本，类似【原始输入】通常可能包含以下清单项/工艺：
-1. 【清单项】：常见程度；单位；参考综合单价；人工/机械单价；说明。
+1. 【展示名称】：
+   历史样本类似工程常见程度：【历史样本类似工程常见程度】
+   单位：【单位】
+   【参考综合单价文本】
+   【价格拆分文本】
+   施工工艺/项目特征：【施工工艺或项目特征】
 
 需要补充的信息/风险提示：
 ...
@@ -610,14 +718,6 @@ answer 固定格式：
 输入 JSON：
 {json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}
 """.strip()
-
-
-def item_description(row: pd.Series) -> str:
-    name = cell_text(row.get("cost_item_name"))
-    description = cell_text(row.get("project_description"))
-    if description and description != name:
-        return f"{name}，{description}"
-    return name or description or "该清单项"
 
 
 def build_answer_fallback(raw_text: str, summary: dict[str, Any], recommended_items: pd.DataFrame) -> str:
@@ -631,16 +731,15 @@ def build_answer_fallback(raw_text: str, summary: dict[str, Any], recommended_it
 
     lines = [f"根据历史已审定样本，类似{raw_text}通常可能包含以下清单项/工艺："]
     for index, (_row_index, row) in enumerate(answer_ordered_items(recommended_items, limit=8).iterrows(), start=1):
-        name = cell_text(row.get("cost_item_name")) or f"清单项{index}"
+        name = answer_item_display_name(row) or f"清单项{index}"
         unit = cell_text(row.get("unit_normalized")) or "未注明"
-        level = occurrence_level(row.get("support_ratio"))
-        unit_price = price_summary(row, "unit_price")
-        labor_price = price_summary(row, "labor_unit_price")
-        machinery_price = price_summary(row, "machinery_unit_price")
-        labor_machinery = f"人工单价：{labor_price}；机械单价：{machinery_price}"
         lines.append(
-            f"{index}. {name}：常见程度 {level}；单位 {unit}；"
-            f"参考综合单价 {unit_price}；{labor_machinery}；说明：{item_description(row)}。"
+            f"{index}. {name}：\n"
+            f"   历史样本类似工程常见程度：{format_occurrence_text(row)}\n"
+            f"   单位：{unit}\n"
+            f"   {format_unit_price_text(row)}\n"
+            f"   {format_price_breakdown_text(row)}\n"
+            f"   施工工艺/项目特征：{item_feature_text(row)}"
         )
 
     risk = warnings or "仍需人工确认工程量、施工做法、材料规格和现场条件。"

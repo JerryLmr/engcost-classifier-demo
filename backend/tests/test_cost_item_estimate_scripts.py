@@ -361,6 +361,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(row["unit_price_median"], 100.0)
         self.assertEqual(row["labor_unit_price_count"], 2)
         self.assertEqual(row["machinery_unit_price_count"], 2)
+        self.assertEqual(row["unit_price_coverage"], 1.0)
+        self.assertEqual(row["labor_unit_price_coverage"], 1.0)
+        self.assertEqual(row["machinery_unit_price_coverage"], 1.0)
+        self.assertEqual(row["price_breakdown_status"], "有人工和机械费用拆分")
         self.assertIn("2", str(row["example_source_row_ids"]))
         self.assertIn("5", str(row["example_source_row_ids"]))
 
@@ -422,6 +426,102 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(result["answer_error"], "service down")
         self.assertIn("样本不足", result["answer"])
 
+    def test_answer_price_text_formatters_do_not_infer_missing_labor_or_machinery(self):
+        base = {
+            "cost_item_name": "屋面卷材防水",
+            "project_description": "3.0mm SBS",
+            "unit_normalized": "m²",
+            "support_ratio": 1.0,
+            "unit_price_count": 1,
+            "unit_price_p25": 30,
+            "unit_price_median": 36.77,
+            "unit_price_p75": 42,
+            "labor_unit_price_count": 0,
+            "machinery_unit_price_count": 0,
+        }
+
+        row = pd.Series({**base, "labor_unit_price_count": 1, "labor_unit_price_median": 2.63})
+        self.assertEqual(
+            query_estimate_llm.format_unit_price_text(row),
+            "参考综合单价：约 36.77 元/m²，历史样本区间约 30-42 元/m²",
+        )
+        self.assertEqual(
+            query_estimate_llm.format_price_breakdown_text(row),
+            "价格拆分：其中包含人工约 2.63 元/m²，历史样本未见机械费用拆分",
+        )
+
+        row = pd.Series({**base, "machinery_unit_price_count": 1, "machinery_unit_price_median": 0.25})
+        self.assertEqual(
+            query_estimate_llm.format_price_breakdown_text(row),
+            "价格拆分：其中包含机械约 0.25 元/m²，历史样本未见人工费用拆分",
+        )
+
+        row = pd.Series(
+            {
+                **base,
+                "labor_unit_price_count": 1,
+                "labor_unit_price_median": 2.63,
+                "machinery_unit_price_count": 1,
+                "machinery_unit_price_median": 0.25,
+            }
+        )
+        self.assertEqual(
+            query_estimate_llm.format_price_breakdown_text(row),
+            "价格拆分：其中包含人工约 2.63 元/m²、机械约 0.25 元/m²",
+        )
+
+        row = pd.Series(base)
+        self.assertEqual(
+            query_estimate_llm.format_price_breakdown_text(row),
+            "价格拆分：历史样本未见人工、机械费用拆分",
+        )
+
+        row = pd.Series({**base, "unit_price_count": 0})
+        self.assertEqual(
+            query_estimate_llm.format_unit_price_text(row),
+            "参考综合单价：暂无可靠综合单价参考",
+        )
+        self.assertEqual(
+            query_estimate_llm.format_price_breakdown_text(row),
+            "价格拆分：缺少可用综合单价，暂不展开费用拆分",
+        )
+
+    def test_answer_payload_and_prompt_use_preformatted_customer_fields(self):
+        recommended = pd.DataFrame(
+            [
+                {
+                    "rank": 1,
+                    "cost_item_name": "屋面卷材防水",
+                    "project_description": "3mm SBS",
+                    "unit_normalized": "m²",
+                    "source_project_count": 1,
+                    "occurrence_count": 1,
+                    "support_ratio": 1.0,
+                    "unit_price_count": 1,
+                    "unit_price_p25": 80,
+                    "unit_price_median": 80,
+                    "unit_price_p75": 80,
+                    "labor_unit_price_count": 0,
+                    "machinery_unit_price_count": 0,
+                },
+            ]
+        )
+
+        payload = query_estimate_llm.answer_items_payload(recommended)
+        self.assertEqual(payload[0]["历史样本类似工程常见程度"], "高")
+        self.assertEqual(payload[0]["参考综合单价文本"], "参考综合单价：80 元/m²")
+        self.assertEqual(payload[0]["价格拆分文本"], "价格拆分：历史样本未见人工、机械费用拆分")
+        self.assertEqual(payload[0]["施工工艺或项目特征"], "3mm SBS")
+        self.assertNotIn("人工单价", payload[0])
+        self.assertNotIn("机械单价", payload[0])
+
+        prompt = query_estimate_llm.build_answer_prompt("屋面漏水", {"提示": ""}, recommended)
+        self.assertIn("必须直接使用上述字段", prompt)
+        self.assertIn("不得重新解释统计 count", prompt)
+        self.assertIn("不得根据人工/机械为空推断不需要人工或机械", prompt)
+        self.assertIn("不得编造价格", prompt)
+        self.assertIn('只输出 JSON object：{"answer":"..."}', prompt)
+
     def test_fallback_answer_orders_primary_items_before_auxiliary_items_only_for_answer(self):
         recommended = pd.DataFrame(
             [
@@ -459,6 +559,20 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         self.assertEqual(recommended["cost_item_name"].tolist(), ["垂直运输", "屋面卷材防水"])
         self.assertLess(answer.index("1. 屋面卷材防水"), answer.index("2. 垂直运输"))
+        self.assertIn("垂直运输（措施/辅助项）", answer)
+        self.assertIn("历史样本类似工程常见程度：高", answer)
+        self.assertIn("参考综合单价：80 元/m²", answer)
+        self.assertIn("价格拆分：历史样本未见人工、机械费用拆分", answer)
+        self.assertIn("施工工艺/项目特征：3mm SBS", answer)
+        for forbidden in [
+            "不需要人工费",
+            "不需要机械费",
+            "未单列人工单价",
+            "未单列机械单价",
+            "人工/机械单价暂无可靠价格样本",
+            "已含",
+        ]:
+            self.assertNotIn(forbidden, answer)
 
     def test_write_llm_query_result_workbook_has_expected_sheets_and_style(self):
         summary = {
@@ -523,6 +637,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             self.assertTrue(workbook["summary"]["A1"].alignment.wrap_text)
             self.assertEqual(workbook["recommended_items"]["G2"].number_format, "0.0000")
             self.assertEqual(workbook["recommended_items"]["J2"].number_format, "0.00")
+            self.assertEqual(workbook["recommended_items"]["T2"].number_format, "0.0000")
             workbook.close()
 
 
