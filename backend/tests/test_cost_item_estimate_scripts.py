@@ -367,6 +367,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         self.assertEqual(len(recommended), 1)
         row = recommended.iloc[0]
+        self.assertEqual(row["item_id"], "rec_001")
         self.assertEqual(row["cost_item_name"], "屋面卷材防水")
         self.assertEqual(row["source_project_count"], 2)
         self.assertEqual(row["occurrence_count"], 2)
@@ -481,14 +482,184 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertIn(query_estimate_llm.NO_EXACT_CATALOG_WARNING, warnings)
         self.assertIn("未形成推荐清单项，请补充材料、做法、面积或设备规格。", warnings)
 
-    def test_build_answer_uses_template_without_llm(self):
+    def test_build_answer_uses_fallback_template_for_empty_items(self):
         summary = {"提示": ""}
         recommended = pd.DataFrame(columns=query_estimate_llm.RECOMMENDED_ITEM_COLUMNS)
 
         result = query_estimate_llm.build_answer("屋面漏水", summary, recommended)
-        self.assertEqual(result["answer_source"], "template")
+        self.assertEqual(result["answer_source"], "fallback_template")
         self.assertEqual(result["answer_error"], "")
+        self.assertEqual(result["answer_plan"]["sections"], [])
         self.assertIn("样本不足", result["answer"])
+
+    def test_answer_plan_payload_hides_price_and_amount_numbers(self):
+        recommended = pd.DataFrame(
+            [
+                {
+                    "rank": 1,
+                    "item_id": "rec_001",
+                    "cost_item_name": "屋面卷材防水",
+                    "project_description": "3mm SBS",
+                    "unit_normalized": "m²",
+                    "source_project_count": 1,
+                    "occurrence_count": 1,
+                    "support_ratio": 1.0,
+                    "unit_price_count": 1,
+                    "unit_price_p25": 80,
+                    "unit_price_median": 90,
+                    "unit_price_p75": 100,
+                    "estimated_amount_median": 45000,
+                    "estimated_amount_note": "按输入工程量和综合单价历史区间简单估算",
+                }
+            ]
+        )
+
+        payload = query_estimate_llm.build_answer_plan_payload("屋面漏水", {"提示": ""}, recommended)
+        item = payload["recommended_items"][0]
+
+        self.assertEqual(item["item_id"], "rec_001")
+        self.assertTrue(item["has_unit_price"])
+        self.assertTrue(item["has_amount_estimate"])
+        self.assertNotIn("unit_price_p25", item)
+        self.assertNotIn("unit_price_median", item)
+        self.assertNotIn("unit_price_p75", item)
+        self.assertNotIn("estimated_amount_median", item)
+
+    def test_validate_answer_plan_filters_invalid_duplicates_and_notes(self):
+        recommended = pd.DataFrame(
+            [
+                {"rank": 1, "item_id": "rec_001", "cost_item_name": "主项"},
+                {"rank": 2, "item_id": "rec_002", "cost_item_name": "同类项"},
+            ]
+        )
+        plan = {
+            "mode": "sectioned",
+            "sections": [
+                {"title": "主项", "item_ids": ["rec_001", "missing", "rec_001"]},
+                {"title": "重复分组", "item_ids": ["rec_001", "rec_002"]},
+            ],
+            "similar_groups": [
+                {
+                    "title": "相近做法",
+                    "item_ids": ["rec_002", "missing"],
+                    "display_item_id": "missing",
+                    "reason": "同类",
+                }
+            ],
+            "conditional_item_ids": ["rec_002", "missing"],
+            "excluded_item_ids": ["missing", "rec_001"],
+            "notes": ["一", "二", "三", "四"],
+        }
+
+        validated = query_estimate_llm.validate_answer_plan(plan, recommended)
+
+        self.assertEqual(validated["sections"][0]["item_ids"], ["rec_001"])
+        self.assertEqual(validated["sections"][1]["item_ids"], ["rec_002"])
+        self.assertEqual(validated["similar_groups"][0]["display_item_id"], "rec_002")
+        self.assertEqual(validated["conditional_item_ids"], ["rec_002"])
+        self.assertEqual(validated["excluded_item_ids"], ["rec_001"])
+        self.assertEqual(validated["notes"], ["一", "二", "三"])
+
+    def test_build_answer_uses_planner_template_and_hides_similar_detail_items(self):
+        recommended = pd.DataFrame(
+            [
+                {
+                    "rank": 1,
+                    "item_id": "rec_001",
+                    "cost_item_name": "屋面卷材防水",
+                    "project_description": "3mm SBS",
+                    "unit_normalized": "m²",
+                    "support_ratio": 1.0,
+                    "unit_price_count": 1,
+                    "unit_price_p25": 80,
+                    "unit_price_median": 90,
+                    "unit_price_p75": 100,
+                    "labor_unit_price_count": 0,
+                    "machinery_unit_price_count": 0,
+                    "input_quantity": 500,
+                    "input_quantity_unit": "m²",
+                    "estimated_amount_p25": 40000,
+                    "estimated_amount_median": 45000,
+                    "estimated_amount_p75": 50000,
+                },
+                {
+                    "rank": 2,
+                    "item_id": "rec_002",
+                    "cost_item_name": "屋面卷材防水加强层",
+                    "project_description": "SBS 附加层",
+                    "unit_normalized": "m²",
+                    "support_ratio": 0.5,
+                    "unit_price_count": 1,
+                    "unit_price_median": 30,
+                    "labor_unit_price_count": 0,
+                    "machinery_unit_price_count": 0,
+                },
+                {
+                    "rank": 3,
+                    "item_id": "rec_003",
+                    "cost_item_name": "基层处理",
+                    "project_description": "基层清理",
+                    "unit_normalized": "m²",
+                    "support_ratio": 0.4,
+                    "unit_price_count": 0,
+                    "labor_unit_price_count": 0,
+                    "machinery_unit_price_count": 0,
+                },
+            ]
+        )
+        planner_plan = {
+            "mode": "sectioned",
+            "sections": [{"title": "防水做法", "item_ids": ["rec_001", "rec_002", "rec_003"]}],
+            "similar_groups": [
+                {
+                    "title": "SBS 卷材做法",
+                    "item_ids": ["rec_001", "rec_002"],
+                    "display_item_id": "rec_001",
+                    "reason": "同类卷材做法",
+                }
+            ],
+            "conditional_item_ids": ["rec_003"],
+            "excluded_item_ids": [],
+            "notes": ["需确认基层状态"],
+        }
+
+        with patch.object(query_estimate_llm, "request_llm_json", return_value=planner_plan):
+            result = query_estimate_llm.build_answer("屋面漏水", {"提示": "", "工程量单位": "m²"}, recommended)
+
+        answer = result["answer"]
+        self.assertEqual(result["answer_source"], "planner_template")
+        self.assertEqual(result["answer_error"], "")
+        self.assertIn("【防水做法】", answer)
+        self.assertIn("1. 屋面卷材防水", answer)
+        self.assertIn("历史样本中另有相近做法/同类项：屋面卷材防水加强层，详见 recommended_items。", answer)
+        self.assertNotIn("2. 屋面卷材防水加强层", answer)
+        self.assertIn("基层处理（需现场确认）", answer)
+        self.assertIn("当前不自动汇总为总价", answer)
+
+    def test_build_answer_falls_back_when_planner_fails(self):
+        recommended = pd.DataFrame(
+            [
+                {
+                    "rank": 1,
+                    "item_id": "rec_001",
+                    "cost_item_name": "消防主机",
+                    "project_description": "主机更换",
+                    "unit_normalized": "台",
+                    "support_ratio": 1.0,
+                    "unit_price_count": 0,
+                    "labor_unit_price_count": 0,
+                    "machinery_unit_price_count": 0,
+                }
+            ]
+        )
+
+        with patch.object(query_estimate_llm, "request_llm_json", side_effect=RuntimeError("service down")):
+            result = query_estimate_llm.build_answer("消防主机更换", {"提示": ""}, recommended)
+
+        self.assertEqual(result["answer_source"], "fallback_template")
+        self.assertIn("service down", result["answer_error"])
+        self.assertEqual(result["answer_plan"]["sections"][0]["title"], "历史样本候选清单项")
+        self.assertIn("消防主机", result["answer"])
 
     def test_answer_price_text_formatters_do_not_infer_missing_labor_or_machinery(self):
         base = {
@@ -588,11 +759,28 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertIn("价格拆分：历史样本未见人工、机械费用拆分", answer)
         self.assertIn("施工工艺/项目特征：3mm SBS", answer)
         self.assertIn("简单估算：按 500 m² 计算，参考金额约 40,000-50,000 元", answer)
-        self.assertIn("按已能匹配单位的清单项简单合计，参考金额约 40,000-50,000 元。", answer)
+        self.assertNotIn("按已能匹配单位的清单项简单合计", answer)
+        self.assertIn("当前不自动汇总为总价", answer)
         self.assertNotIn("预计总价", answer)
         self.assertNotIn("报价", answer)
 
-    def test_fallback_answer_orders_primary_items_before_auxiliary_items_only_for_answer(self):
+    def test_simple_estimate_text_uses_concentrated_price_when_range_rounds_equal(self):
+        row = pd.Series(
+            {
+                "input_quantity": 500,
+                "input_quantity_unit": "m²",
+                "estimated_amount_p25": 18385,
+                "estimated_amount_median": 18385,
+                "estimated_amount_p75": 18385,
+            }
+        )
+
+        text = query_estimate_llm.format_simple_estimate_text(row)
+
+        self.assertEqual(text, "简单估算：按 500 m² 计算，历史样本价格集中，参考金额约 18,385 元")
+        self.assertNotIn("18,385-18,385 元", text)
+
+    def test_fallback_answer_keeps_recommended_order_without_keyword_roles(self):
         recommended = pd.DataFrame(
             [
                 {
@@ -628,8 +816,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         answer = query_estimate_llm.build_answer_fallback("屋面漏水", {"提示": ""}, recommended)
 
         self.assertEqual(recommended["cost_item_name"].tolist(), ["垂直运输", "屋面卷材防水"])
-        self.assertLess(answer.index("1. 屋面卷材防水"), answer.index("2. 垂直运输"))
-        self.assertIn("垂直运输（措施/辅助项）", answer)
+        self.assertLess(answer.index("1. 垂直运输"), answer.index("2. 屋面卷材防水"))
+        self.assertNotIn("垂直运输（措施/辅助项）", answer)
         self.assertIn("历史样本类似工程常见程度：高", answer)
         self.assertIn("参考综合单价：80 元/m²", answer)
         self.assertIn("价格拆分：历史样本未见人工、机械费用拆分", answer)
@@ -658,11 +846,24 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "识别工程量": 500,
             "工程量单位": "m²",
             "可计算清单项数": 1,
-            "简单合计参考金额": "40,000-50,000 元",
-            "总结来源": "template",
+            "简单合计参考金额": "未自动合计",
+            "总结来源": "planner_template",
             "提示": "",
         }
-        answer_result = {"answer": "自动总结", "answer_source": "template", "answer_error": ""}
+        answer_result = {
+            "answer": "自动总结",
+            "answer_source": "planner_template",
+            "answer_error": "",
+            "answer_plan": {
+                "planner_source": "planner_template",
+                "planner_error": "",
+                "sections": [{"title": "防水做法", "item_ids": ["rec_001"]}],
+                "similar_groups": [],
+                "conditional_item_ids": [],
+                "excluded_item_ids": [],
+                "notes": ["单项参考"],
+            },
+        }
         matched_projects = pd.DataFrame(
             [
                 {
@@ -683,6 +884,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             [
                 {
                     "rank": 1,
+                    "item_id": "rec_001",
                     "cost_item_name": "屋面卷材防水",
                     "project_description": "3mm SBS",
                     "unit_normalized": "m²",
@@ -718,9 +920,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             output_path = Path(tmpdir) / "query_result.xlsx"
             query_estimate_llm.write_query_result_workbook(output_path, answer_result, summary, matched_projects, recommended)
             workbook = openpyxl.load_workbook(output_path, data_only=True)
-            self.assertEqual(workbook.sheetnames, ["answer", "summary", "matched_projects", "recommended_items"])
+            self.assertEqual(workbook.sheetnames, ["answer", "summary", "answer_plan", "matched_projects", "recommended_items"])
             self.assertEqual(workbook["answer"].cell(row=2, column=1).value, "总结来源")
-            self.assertEqual(workbook["answer"].cell(row=2, column=2).value, "template")
+            self.assertEqual(workbook["answer"].cell(row=2, column=2).value, "planner_template")
             self.assertEqual(workbook["answer"].cell(row=3, column=1).value, "错误信息")
             self.assertIsNone(workbook["answer"].cell(row=3, column=2).value)
             self.assertEqual(workbook["answer"].cell(row=4, column=1).value, "总结")
@@ -728,13 +930,19 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             summary_headers = [workbook["summary"].cell(row=1, column=column).value for column in range(1, 16)]
             self.assertIn("总结来源", summary_headers)
             self.assertIn("识别工程量", summary_headers)
+            self.assertEqual(workbook["summary"].cell(row=2, column=13).value, "未自动合计")
+            self.assertEqual(workbook["answer_plan"].cell(row=1, column=1).value, "planner_source")
+            self.assertEqual(workbook["answer_plan"].cell(row=2, column=3).value, "防水做法")
+            self.assertEqual(workbook["answer_plan"].cell(row=2, column=5).value, "rec_001")
+            self.assertEqual(workbook["recommended_items"].cell(row=1, column=2).value, "item_id")
+            self.assertEqual(workbook["recommended_items"].cell(row=2, column=2).value, "rec_001")
             self.assertEqual(workbook["matched_projects"].cell(row=1, column=1).value, "rank")
             self.assertEqual(workbook["summary"].freeze_panes, "A2")
             self.assertTrue(workbook["summary"]["A1"].font.bold)
             self.assertTrue(workbook["summary"]["A1"].alignment.wrap_text)
-            self.assertEqual(workbook["recommended_items"]["G2"].number_format, "0.0000")
+            self.assertEqual(workbook["recommended_items"]["H2"].number_format, "0.0000")
             self.assertEqual(workbook["recommended_items"]["J2"].number_format, "0.00")
-            self.assertEqual(workbook["recommended_items"]["T2"].number_format, "0.0000")
+            self.assertEqual(workbook["recommended_items"]["U2"].number_format, "0.0000")
             workbook.close()
 
 

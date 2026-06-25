@@ -17,6 +17,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from classifier.unit_normalizer import normalize_unit  # noqa: E402
+from classifier.llm_client import LLMServiceError, request_llm_json  # noqa: E402
 from services.standard_classifier import classify_project_standard  # noqa: E402
 
 
@@ -43,6 +44,7 @@ SUMMARY_COLUMNS = [
 
 RECOMMENDED_ITEM_COLUMNS = [
     "rank",
+    "item_id",
     "cost_item_name",
     "project_description",
     "unit_normalized",
@@ -117,14 +119,42 @@ SCORE_COLUMNS = {
     "最高工程相似度",
 }
 
-ANSWER_AUXILIARY_KEYWORDS = (
-    "垂直运输",
-    "大型机械",
-    "进出场",
-    "安拆",
-    "吊篮",
-    "脚手架",
-    "措施",
+ANSWER_PLAN_COLUMNS = [
+    "planner_source",
+    "planner_error",
+    "section_title",
+    "display_order",
+    "item_id",
+    "is_conditional",
+    "is_excluded",
+    "similar_group_title",
+    "similar_group_display_item_id",
+    "similar_group_reason",
+    "planner_note",
+]
+
+ANSWER_PLAN_ITEM_LIMIT = 12
+
+ANSWER_PLAN_COMPACT_ITEM_FIELDS = [
+    "item_id",
+    "rank",
+    "cost_item_name",
+    "project_description",
+    "unit_normalized",
+    "source_project_count",
+    "occurrence_count",
+    "support_ratio",
+    "price_breakdown_status",
+    "input_quantity",
+    "input_quantity_unit",
+    "estimated_amount_note",
+    "has_unit_price",
+    "has_amount_estimate",
+]
+
+NO_AUTO_TOTAL_NOTE = (
+    "以上为各清单项按输入工程量计算的单项参考金额；"
+    "由于部分清单项可能属于替代做法、重复候选或条件措施项，当前不自动汇总为总价。"
 )
 
 
@@ -386,6 +416,7 @@ def aggregate_recommended_items(samples: pd.DataFrame, matched_projects: pd.Data
         ascending=[False, False, False],
     ).head(max(top_k, 0)).copy()
     recommended.insert(0, "rank", range(1, len(recommended) + 1))
+    recommended.insert(1, "item_id", [f"rec_{index:03d}" for index in range(1, len(recommended) + 1)])
     for column in RECOMMENDED_ITEM_COLUMNS:
         if column not in recommended.columns:
             recommended[column] = None
@@ -545,7 +576,6 @@ def build_summary(
     warnings: list[str],
 ) -> dict[str, Any]:
     top_project_score = float(matched_projects["project_score"].iloc[0]) if not matched_projects.empty else None
-    totals = simple_total_amounts(recommended_items)
     return {
         "原始输入": raw_text,
         "标准目录ID": cell_text(classification.get("catalog_id")),
@@ -559,7 +589,7 @@ def build_summary(
         "识别工程量": quantity_info.get("quantity") if quantity_info else "",
         "工程量单位": quantity_info.get("unit") if quantity_info else "",
         "可计算清单项数": count_calculable_amount_items(recommended_items),
-        "简单合计参考金额": format_amount_range(totals.get("p25"), totals.get("p75")),
+        "简单合计参考金额": "未自动合计",
         "总结来源": "",
         "提示": "；".join(warnings),
     }
@@ -649,24 +679,11 @@ def item_feature_text(row: pd.Series) -> str:
     return name or description or "该清单项"
 
 
-def is_auxiliary_answer_item(row: pd.Series) -> bool:
-    text = f"{cell_text(row.get('cost_item_name'))} {cell_text(row.get('project_description'))}"
-    return any(keyword in text for keyword in ANSWER_AUXILIARY_KEYWORDS)
-
-
-def answer_item_display_name(row: pd.Series) -> str:
+def answer_item_display_name(row: pd.Series, is_conditional: bool = False) -> str:
     name = cell_text(row.get("cost_item_name"))
-    if is_auxiliary_answer_item(row) and name:
-        return f"{name}（措施/辅助项）"
+    if is_conditional and name:
+        return f"{name}（需现场确认）"
     return name
-
-
-def answer_ordered_items(recommended_items: pd.DataFrame, limit: int = 8) -> pd.DataFrame:
-    if recommended_items.empty:
-        return recommended_items.head(0).copy()
-    answer_items = recommended_items.head(limit).copy()
-    auxiliary_mask = answer_items.apply(is_auxiliary_answer_item, axis=1)
-    return pd.concat([answer_items[~auxiliary_mask], answer_items[auxiliary_mask]])
 
 
 def format_simple_estimate_text(row: pd.Series) -> str:
@@ -681,9 +698,15 @@ def format_simple_estimate_text(row: pd.Series) -> str:
     quantity_text = format_amount_value(quantity)
 
     if p25 is not None and p75 is not None:
-        amount_range = format_amount_range(p25, p75)
-        if amount_range:
-            return f"简单估算：按 {quantity_text} {unit} 计算，参考金额约 {amount_range}"
+        rounded_p25 = round(p25, 2)
+        rounded_p75 = round(p75, 2)
+        if rounded_p25 < rounded_p75:
+            amount_range = format_amount_range(p25, p75)
+            if amount_range:
+                return f"简单估算：按 {quantity_text} {unit} 计算，参考金额约 {amount_range}"
+        amount = format_amount_value(median if median is not None else p25)
+        if amount:
+            return f"简单估算：按 {quantity_text} {unit} 计算，历史样本价格集中，参考金额约 {amount} 元"
     if median is not None:
         return (
             f"简单估算：按 {quantity_text} {unit} 计算，"
@@ -692,58 +715,374 @@ def format_simple_estimate_text(row: pd.Series) -> str:
     return ""
 
 
-def build_answer_fallback(raw_text: str, summary: dict[str, Any], recommended_items: pd.DataFrame) -> str:
+def json_safe_value(value: Any) -> Any:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def ensure_recommended_item_ids(recommended_items: pd.DataFrame) -> pd.DataFrame:
+    recommended = recommended_items.copy()
+    for column in RECOMMENDED_ITEM_COLUMNS:
+        if column not in recommended.columns:
+            recommended[column] = None
+    if recommended.empty:
+        return recommended[RECOMMENDED_ITEM_COLUMNS]
+
+    item_ids: list[str] = []
+    for index, value in enumerate(recommended["item_id"].tolist(), start=1):
+        item_id = cell_text(value)
+        item_ids.append(item_id or f"rec_{index:03d}")
+    recommended["item_id"] = item_ids
+    return recommended[RECOMMENDED_ITEM_COLUMNS]
+
+
+def build_answer_plan_payload(
+    raw_text: str,
+    summary: dict[str, Any],
+    recommended_items: pd.DataFrame,
+) -> dict[str, Any]:
+    recommended = ensure_recommended_item_ids(recommended_items)
+    compact_items: list[dict[str, Any]] = []
+    for _index, row in recommended.iterrows():
+        item = {
+            "item_id": cell_text(row.get("item_id")),
+            "rank": json_safe_value(row.get("rank")),
+            "cost_item_name": cell_text(row.get("cost_item_name")),
+            "project_description": cell_text(row.get("project_description")),
+            "unit_normalized": cell_text(row.get("unit_normalized")),
+            "source_project_count": json_safe_value(row.get("source_project_count")),
+            "occurrence_count": json_safe_value(row.get("occurrence_count")),
+            "support_ratio": json_safe_value(row.get("support_ratio")),
+            "price_breakdown_status": cell_text(row.get("price_breakdown_status")),
+            "input_quantity": json_safe_value(row.get("input_quantity")),
+            "input_quantity_unit": cell_text(row.get("input_quantity_unit")),
+            "estimated_amount_note": cell_text(row.get("estimated_amount_note")),
+            "has_unit_price": row_count(row, "unit_price_count") > 0,
+            "has_amount_estimate": numeric_or_none(row.get("estimated_amount_median")) is not None,
+        }
+        compact_items.append({field: item.get(field) for field in ANSWER_PLAN_COMPACT_ITEM_FIELDS})
+    return {
+        "raw_text": raw_text,
+        "summary": {key: json_safe_value(value) for key, value in summary.items()},
+        "recommended_items": compact_items,
+    }
+
+
+def build_answer_plan_prompt(
+    raw_text: str,
+    summary: dict[str, Any],
+    recommended_items: pd.DataFrame,
+) -> str:
+    payload = build_answer_plan_payload(raw_text, summary, recommended_items)
+    payload_text = json.dumps(payload, ensure_ascii=False, indent=2)
+    return f"""
+你是维修工程造价问答的 answer planner。你的任务不是重新检索、不是报价、不是生成最终 answer，而是在输入的 recommended_items 候选池内做语义归并、业务分组和展示选择。
+
+输入数据：
+{payload_text}
+
+输出要求：
+1. 只能使用输入中存在的 item_id。
+2. 不得新增清单项。
+3. 不得输出价格。
+4. 不得输出最终 answer 正文。
+5. 如果多个 item 表达相近、属于相近做法、同类设备或同类工序，可以放入 similar_groups。
+6. similar_groups.display_item_id 表示 answer 中优先详细展示的代表项。
+7. 如果某些项目是条件项、措施项、需现场确认项，可以放入 conditional_item_ids。
+8. 如果某些项目明显是替代方案、重复候选或与用户输入不匹配，可以放入 excluded_item_ids。
+9. sections 的 title 由你根据候选项语义自行生成，不要依赖固定标题。
+10. 每个 item_id 最多出现在一个 section 中。
+11. notes 最多 3 条。
+12. 输出必须是 JSON object，不要 markdown，不要解释过程，不要 <think>。
+
+JSON 字段固定为：
+{{
+  "mode": "flat 或 sectioned",
+  "sections": [
+    {{
+      "title": "分组标题",
+      "item_ids": ["rec_001", "rec_002"]
+    }}
+  ],
+  "similar_groups": [
+    {{
+      "title": "相近做法或同类项标题",
+      "item_ids": ["rec_002", "rec_004"],
+      "display_item_id": "rec_002",
+      "reason": "简短原因"
+    }}
+  ],
+  "conditional_item_ids": ["rec_006"],
+  "excluded_item_ids": ["rec_005"],
+  "notes": ["简短提示"]
+}}
+""".strip()
+
+
+def valid_item_id_set(recommended_items: pd.DataFrame) -> set[str]:
+    if recommended_items.empty or "item_id" not in recommended_items.columns:
+        return set()
+    return {cell_text(value) for value in recommended_items["item_id"].tolist() if cell_text(value)}
+
+
+def unique_valid_item_ids(values: Any, valid_ids: set[str], used_ids: set[str] | None = None) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    result: list[str] = []
+    for value in values:
+        item_id = cell_text(value)
+        if not item_id or item_id not in valid_ids or item_id in result:
+            continue
+        if used_ids is not None and item_id in used_ids:
+            continue
+        result.append(item_id)
+        if used_ids is not None:
+            used_ids.add(item_id)
+    return result
+
+
+def validate_answer_plan(
+    plan: dict[str, Any],
+    recommended_items: pd.DataFrame,
+) -> dict[str, Any]:
+    if not isinstance(plan, dict):
+        raise ValueError("planner 返回结构不是 JSON object")
+
+    recommended = ensure_recommended_item_ids(recommended_items)
+    valid_ids = valid_item_id_set(recommended)
+    sections_input = plan.get("sections")
+    if not isinstance(sections_input, list):
+        raise ValueError("planner sections 格式错误")
+
+    used_section_ids: set[str] = set()
+    sections: list[dict[str, Any]] = []
+    for section in sections_input:
+        if not isinstance(section, dict):
+            continue
+        item_ids = unique_valid_item_ids(section.get("item_ids"), valid_ids, used_section_ids)
+        if not item_ids:
+            continue
+        sections.append(
+            {
+                "title": cell_text(section.get("title")) or "历史样本候选清单项",
+                "item_ids": item_ids,
+            }
+        )
+    if not sections:
+        raise ValueError("planner sections 为空或无有效 item_id")
+
+    similar_groups: list[dict[str, Any]] = []
+    similar_input = plan.get("similar_groups", [])
+    if isinstance(similar_input, list):
+        for group in similar_input:
+            if not isinstance(group, dict):
+                continue
+            item_ids = unique_valid_item_ids(group.get("item_ids"), valid_ids)
+            if not item_ids:
+                continue
+            display_item_id = cell_text(group.get("display_item_id"))
+            if display_item_id not in item_ids:
+                display_item_id = item_ids[0]
+            similar_groups.append(
+                {
+                    "title": cell_text(group.get("title")) or "相近做法或同类项",
+                    "item_ids": item_ids,
+                    "display_item_id": display_item_id,
+                    "reason": cell_text(group.get("reason")),
+                }
+            )
+
+    conditional_item_ids = unique_valid_item_ids(plan.get("conditional_item_ids", []), valid_ids)
+    excluded_item_ids = unique_valid_item_ids(plan.get("excluded_item_ids", []), valid_ids)
+    notes_input = plan.get("notes", [])
+    notes = [cell_text(note) for note in notes_input if cell_text(note)] if isinstance(notes_input, list) else []
+
+    mode = cell_text(plan.get("mode"))
+    if mode not in {"flat", "sectioned"}:
+        mode = "flat" if len(sections) == 1 else "sectioned"
+
+    return {
+        "mode": mode,
+        "sections": sections,
+        "similar_groups": similar_groups,
+        "conditional_item_ids": conditional_item_ids,
+        "excluded_item_ids": excluded_item_ids,
+        "notes": notes[:3],
+    }
+
+
+def build_fallback_answer_plan(
+    recommended_items: pd.DataFrame,
+    planner_error: str = "",
+) -> dict[str, Any]:
+    recommended = ensure_recommended_item_ids(recommended_items)
+    item_ids = [cell_text(value) for value in recommended["item_id"].head(ANSWER_PLAN_ITEM_LIMIT).tolist()]
+    item_ids = [item_id for item_id in item_ids if item_id]
+    notes = ["部分清单项可能属于替代做法、措施项或条件项，需人工复核是否计入。"]
+    if len(recommended) > ANSWER_PLAN_ITEM_LIMIT:
+        notes.insert(0, "候选项较多，更多候选见 recommended_items sheet。")
+    return {
+        "mode": "flat",
+        "sections": [{"title": "历史样本候选清单项", "item_ids": item_ids}] if item_ids else [],
+        "similar_groups": [],
+        "conditional_item_ids": [],
+        "excluded_item_ids": [],
+        "notes": notes[:3],
+        "planner_source": "fallback_template",
+        "planner_error": planner_error,
+    }
+
+
+def build_answer_plan(
+    raw_text: str,
+    summary: dict[str, Any],
+    recommended_items: pd.DataFrame,
+) -> dict[str, Any]:
+    recommended = ensure_recommended_item_ids(recommended_items)
+    if recommended.empty:
+        return {
+            "mode": "flat",
+            "sections": [],
+            "similar_groups": [],
+            "conditional_item_ids": [],
+            "excluded_item_ids": [],
+            "notes": [],
+            "planner_source": "fallback_template",
+            "planner_error": "",
+        }
+
+    try:
+        prompt = build_answer_plan_prompt(raw_text, summary, recommended)
+        plan = request_llm_json(
+            prompt,
+            system_prompt=(
+                "你是维修工程造价问答的 answer planner。"
+                "不要输出思考过程，不要输出 <think>，不要输出 markdown。"
+                "最终答案只能是一个 JSON object。"
+            ),
+        )
+        validated = validate_answer_plan(plan, recommended)
+        validated["planner_source"] = "planner_template"
+        validated["planner_error"] = ""
+        return validated
+    except (LLMServiceError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        return build_fallback_answer_plan(recommended, planner_error=str(exc))
+
+
+def item_lookup_by_id(recommended_items: pd.DataFrame) -> dict[str, pd.Series]:
+    recommended = ensure_recommended_item_ids(recommended_items)
+    return {cell_text(row.get("item_id")): row for _index, row in recommended.iterrows() if cell_text(row.get("item_id"))}
+
+
+def render_answer_from_plan(
+    raw_text: str,
+    summary: dict[str, Any],
+    recommended_items: pd.DataFrame,
+    answer_plan: dict[str, Any],
+) -> str:
     warnings = cell_text(summary.get("提示"))
-    if recommended_items.empty:
-        risk = warnings or "同目录推荐清单项为空，样本不足，不能形成可靠价格参考。"
+    recommended = ensure_recommended_item_ids(recommended_items)
+    if recommended.empty:
+        risk_parts = [warnings or "同目录推荐清单项为空，样本不足，不能形成可靠价格参考。", NO_AUTO_TOTAL_NOTE]
         return (
             f"根据历史已审定样本，类似{raw_text}暂未形成可用的推荐清单项/工艺。\n\n"
-            f"需要补充的信息/风险提示：{risk}"
+            f"需要补充的信息/风险提示：{'；'.join(part for part in risk_parts if part)}"
         )
+
+    item_lookup = item_lookup_by_id(recommended)
+    conditional_ids = set(answer_plan.get("conditional_item_ids") or [])
+    excluded_ids = set(answer_plan.get("excluded_item_ids") or [])
+
+    similar_by_display: dict[str, dict[str, Any]] = {}
+    similar_hidden_ids: set[str] = set()
+    for group in answer_plan.get("similar_groups") or []:
+        if not isinstance(group, dict):
+            continue
+        display_item_id = cell_text(group.get("display_item_id"))
+        item_ids = [cell_text(item_id) for item_id in group.get("item_ids", []) if cell_text(item_id)]
+        if display_item_id and item_ids:
+            similar_by_display[display_item_id] = group
+            similar_hidden_ids.update(item_id for item_id in item_ids if item_id != display_item_id)
 
     lines = [f"根据历史已审定样本，类似{raw_text}通常可能包含以下清单项/工艺："]
-    for index, (_row_index, row) in enumerate(answer_ordered_items(recommended_items, limit=8).iterrows(), start=1):
-        name = answer_item_display_name(row) or f"清单项{index}"
-        unit = cell_text(row.get("unit_normalized")) or "未注明"
-        lines.append(
-            f"{index}. {name}：\n"
-            f"   历史样本类似工程常见程度：{format_occurrence_text(row)}\n"
-            f"   单位：{unit}\n"
-            f"   {format_unit_price_text(row)}\n"
-            f"   {format_price_breakdown_text(row)}\n"
-            f"   施工工艺/项目特征：{item_feature_text(row)}"
-        )
-        estimate_text = format_simple_estimate_text(row)
-        if estimate_text:
-            lines.append(f"   {estimate_text}")
+    display_order = 1
+    rendered_any = False
+    for section in answer_plan.get("sections") or []:
+        section_title = cell_text(section.get("title")) if isinstance(section, dict) else ""
+        item_ids = section.get("item_ids", []) if isinstance(section, dict) else []
+        if section_title:
+            lines.append("")
+            lines.append(f"【{section_title}】")
+        for item_id in item_ids:
+            item_id = cell_text(item_id)
+            if not item_id or item_id in excluded_ids or item_id in similar_hidden_ids:
+                continue
+            row = item_lookup.get(item_id)
+            if row is None:
+                continue
+            rendered_any = True
+            name = answer_item_display_name(row, is_conditional=item_id in conditional_ids) or f"清单项{display_order}"
+            unit = cell_text(row.get("unit_normalized")) or "未注明"
+            lines.append(
+                f"{display_order}. {name}：\n"
+                f"   历史样本类似工程常见程度：{format_occurrence_text(row)}\n"
+                f"   单位：{unit}\n"
+                f"   {format_unit_price_text(row)}\n"
+                f"   {format_price_breakdown_text(row)}\n"
+                f"   施工工艺/项目特征：{item_feature_text(row)}"
+            )
+            estimate_text = format_simple_estimate_text(row)
+            if estimate_text:
+                lines.append(f"   {estimate_text}")
+            similar_group = similar_by_display.get(item_id)
+            if similar_group:
+                similar_names: list[str] = []
+                for similar_id in similar_group.get("item_ids", []):
+                    similar_id = cell_text(similar_id)
+                    if not similar_id or similar_id == item_id:
+                        continue
+                    similar_row = item_lookup.get(similar_id)
+                    similar_name = cell_text(similar_row.get("cost_item_name")) if similar_row is not None else ""
+                    if similar_name and similar_name not in similar_names:
+                        similar_names.append(similar_name)
+                if similar_names:
+                    lines.append(f"   历史样本中另有相近做法/同类项：{'、'.join(similar_names)}，详见 recommended_items。")
+            display_order += 1
 
-    risk = warnings or "仍需人工确认工程量、施工做法、材料规格和现场条件。"
-    totals = simple_total_amounts(recommended_items)
-    total_range = format_amount_range(totals.get("p25"), totals.get("p75"))
-    if total_range:
-        lines.append("")
-        lines.append(f"按已能匹配单位的清单项简单合计，参考金额约 {total_range}。")
+    if not rendered_any:
+        return render_answer_from_plan(raw_text, summary, recommended, build_fallback_answer_plan(recommended))
 
-    has_quantity = bool(cell_text(summary.get("工程量单位")))
-    notes = recommended_items.get("estimated_amount_note")
-    has_unit_mismatch = bool(notes.astype(str).str.contains("单位不一致", na=False).any()) if notes is not None else False
-    if has_quantity and has_unit_mismatch:
-        risk = f"{risk}；单位与输入工程量不一致的项目未纳入简单合计，例如台次、项、套等措施或设备类费用。"
-    if total_range:
-        risk = (
-            f"{risk}；该合计仅按历史样本综合单价区间和输入工程量粗略计算，"
-            "未包含单位不匹配、现场条件不明确或需单独确认的措施项。"
-        )
+    risk_parts = []
+    if warnings:
+        risk_parts.append(warnings)
+    risk_parts.extend(cell_text(note) for note in answer_plan.get("notes", []) if cell_text(note))
+    risk_parts.append(NO_AUTO_TOTAL_NOTE)
+    risk = "；".join(dict.fromkeys(part for part in risk_parts if part))
     lines.append("")
-    lines.append(f"需要补充的信息/风险提示：{risk}")
+    lines.append(f"需要补充的信息/风险提示：{risk or '仍需人工确认工程量、施工做法、材料规格和现场条件。'}")
     return "\n".join(lines)
 
 
-def build_answer(raw_text: str, summary: dict[str, Any], recommended_items: pd.DataFrame) -> dict[str, str]:
+def build_answer_fallback(raw_text: str, summary: dict[str, Any], recommended_items: pd.DataFrame) -> str:
+    return render_answer_from_plan(raw_text, summary, recommended_items, build_fallback_answer_plan(recommended_items))
+
+
+def build_answer(raw_text: str, summary: dict[str, Any], recommended_items: pd.DataFrame) -> dict[str, Any]:
+    answer_plan = build_answer_plan(raw_text, summary, recommended_items)
+    answer_source = "planner_template" if answer_plan.get("planner_source") == "planner_template" else "fallback_template"
     return {
-        "answer": build_answer_fallback(raw_text, summary, recommended_items),
-        "answer_source": "template",
-        "answer_error": "",
+        "answer": render_answer_from_plan(raw_text, summary, recommended_items, answer_plan),
+        "answer_source": answer_source,
+        "answer_error": cell_text(answer_plan.get("planner_error")),
+        "answer_plan": answer_plan,
     }
 
 
@@ -772,6 +1111,8 @@ def apply_workbook_style(output_path: Path) -> None:
                 width = 100
             elif header == "提示":
                 width = 60
+            elif header in {"planner_error", "planner_note", "similar_group_reason"}:
+                width = 60
             elif header == "project_description":
                 width = 60
             elif header in {"cost_item_name", "工程名称"}:
@@ -781,9 +1122,112 @@ def apply_workbook_style(output_path: Path) -> None:
     workbook.close()
 
 
+def answer_plan_for_output(answer_plan: dict[str, Any]) -> pd.DataFrame:
+    source = cell_text(answer_plan.get("planner_source"))
+    error = cell_text(answer_plan.get("planner_error"))
+    conditional_ids = set(answer_plan.get("conditional_item_ids") or [])
+    excluded_ids = set(answer_plan.get("excluded_item_ids") or [])
+    rows: list[dict[str, Any]] = []
+
+    similar_by_item: dict[str, dict[str, Any]] = {}
+    for group in answer_plan.get("similar_groups") or []:
+        if not isinstance(group, dict):
+            continue
+        for item_id in group.get("item_ids", []) or []:
+            item_id = cell_text(item_id)
+            if item_id:
+                similar_by_item[item_id] = group
+
+    seen_ids: set[str] = set()
+    display_order = 1
+    for section in answer_plan.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        section_title = cell_text(section.get("title"))
+        for item_id in section.get("item_ids", []) or []:
+            item_id = cell_text(item_id)
+            if not item_id:
+                continue
+            seen_ids.add(item_id)
+            group = similar_by_item.get(item_id, {})
+            rows.append(
+                {
+                    "planner_source": source,
+                    "planner_error": error,
+                    "section_title": section_title,
+                    "display_order": display_order,
+                    "item_id": item_id,
+                    "is_conditional": item_id in conditional_ids,
+                    "is_excluded": item_id in excluded_ids,
+                    "similar_group_title": cell_text(group.get("title")) if group else "",
+                    "similar_group_display_item_id": cell_text(group.get("display_item_id")) if group else "",
+                    "similar_group_reason": cell_text(group.get("reason")) if group else "",
+                    "planner_note": "",
+                }
+            )
+            display_order += 1
+
+    for item_id in sorted(excluded_ids - seen_ids):
+        group = similar_by_item.get(item_id, {})
+        rows.append(
+            {
+                "planner_source": source,
+                "planner_error": error,
+                "section_title": "",
+                "display_order": "",
+                "item_id": item_id,
+                "is_conditional": item_id in conditional_ids,
+                "is_excluded": True,
+                "similar_group_title": cell_text(group.get("title")) if group else "",
+                "similar_group_display_item_id": cell_text(group.get("display_item_id")) if group else "",
+                "similar_group_reason": cell_text(group.get("reason")) if group else "",
+                "planner_note": "",
+            }
+        )
+
+    for note in answer_plan.get("notes") or []:
+        note = cell_text(note)
+        if not note:
+            continue
+        rows.append(
+            {
+                "planner_source": source,
+                "planner_error": error,
+                "section_title": "",
+                "display_order": "",
+                "item_id": "",
+                "is_conditional": "",
+                "is_excluded": "",
+                "similar_group_title": "",
+                "similar_group_display_item_id": "",
+                "similar_group_reason": "",
+                "planner_note": note,
+            }
+        )
+
+    if not rows:
+        rows.append(
+            {
+                "planner_source": source,
+                "planner_error": error,
+                "section_title": "",
+                "display_order": "",
+                "item_id": "",
+                "is_conditional": "",
+                "is_excluded": "",
+                "similar_group_title": "",
+                "similar_group_display_item_id": "",
+                "similar_group_reason": "",
+                "planner_note": "",
+            }
+        )
+
+    return pd.DataFrame(rows, columns=ANSWER_PLAN_COLUMNS)
+
+
 def write_query_result_workbook(
     output_path: Path,
-    answer_result: dict[str, str],
+    answer_result: dict[str, Any],
     summary: dict[str, Any],
     matched_projects: pd.DataFrame,
     recommended_items: pd.DataFrame,
@@ -806,8 +1250,13 @@ def write_query_result_workbook(
             sheet_name="summary",
             index=False,
         )
+        answer_plan_for_output(answer_result.get("answer_plan", {})).to_excel(
+            writer,
+            sheet_name="answer_plan",
+            index=False,
+        )
         project_matches_for_output(matched_projects).to_excel(writer, sheet_name="matched_projects", index=False)
-        recommended_items.to_excel(writer, sheet_name="recommended_items", index=False)
+        ensure_recommended_item_ids(recommended_items).to_excel(writer, sheet_name="recommended_items", index=False)
     apply_workbook_style(output_path)
 
 
@@ -816,7 +1265,7 @@ def run_query(
     raw_text: str,
     top_k: int,
     output: Path | None,
-) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame, dict[str, str]]:
+) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     samples, project_groups, project_group_embeddings, meta = load_index(index_dir)
     classification, classify_warnings = classify_raw_text(raw_text)
     quantity_info = extract_simple_quantity(raw_text)
