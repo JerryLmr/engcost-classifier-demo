@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import gc
 import json
 import re
 import sys
@@ -34,6 +35,7 @@ SUMMARY_COLUMNS = [
     "最高工程相似度",
     "相似工程数",
     "推荐清单项数",
+    "总结来源",
     "提示",
 ]
 
@@ -125,6 +127,16 @@ SCORE_COLUMNS = {
     "最高工程相似度",
 }
 
+ANSWER_AUXILIARY_KEYWORDS = (
+    "垂直运输",
+    "大型机械",
+    "进出场",
+    "安拆",
+    "吊篮",
+    "脚手架",
+    "措施",
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LLM 自然语言造价估计实验入口")
@@ -153,9 +165,20 @@ def load_embedding_model(model_name: str) -> Any:
         raise RuntimeError("缺少依赖 sentence-transformers，请先安装 requirements.txt") from exc
 
     try:
-        return SentenceTransformer(model_name)
+        return SentenceTransformer(model_name, device="cpu")
     except Exception as exc:
         raise RuntimeError(f"embedding 模型加载失败: {model_name}: {exc}") from exc
+
+
+def release_embedding_model(model: Any) -> None:
+    del model
+    gc.collect()
+    try:
+        import torch
+    except ImportError:
+        return
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
@@ -481,6 +504,7 @@ def build_summary(
         "最高工程相似度": top_project_score,
         "相似工程数": int(len(matched_projects)),
         "推荐清单项数": int(len(recommended_items)),
+        "总结来源": "",
         "提示": "；".join(warnings),
     }
 
@@ -511,12 +535,25 @@ def price_summary(row: pd.Series, prefix: str) -> str:
     return f"P25-P75 {p25}-{p75} / 中位数 {median}，样本数 {count}"
 
 
+def is_auxiliary_answer_item(row: pd.Series) -> bool:
+    text = f"{cell_text(row.get('cost_item_name'))} {cell_text(row.get('project_description'))}"
+    return any(keyword in text for keyword in ANSWER_AUXILIARY_KEYWORDS)
+
+
+def answer_ordered_items(recommended_items: pd.DataFrame, limit: int = 8) -> pd.DataFrame:
+    if recommended_items.empty:
+        return recommended_items.head(0).copy()
+    answer_items = recommended_items.head(limit).copy()
+    auxiliary_mask = answer_items.apply(is_auxiliary_answer_item, axis=1)
+    return pd.concat([answer_items[~auxiliary_mask], answer_items[auxiliary_mask]])
+
+
 def answer_items_payload(recommended_items: pd.DataFrame, limit: int = 8) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if recommended_items.empty:
         return rows
 
-    for _index, row in recommended_items.head(limit).iterrows():
+    for _index, row in answer_ordered_items(recommended_items, limit=limit).iterrows():
         item = {
             "rank": int(numeric_or_none(row.get("rank")) or 0),
             "清单项": cell_text(row.get("cost_item_name")),
@@ -554,6 +591,9 @@ def build_answer_prompt(raw_text: str, summary: dict[str, Any], recommended_item
 规则：
 - 只能使用 recommended_items_top8 中的清单项，不得新增清单项/工艺。
 - 不得编造价格；价格为“暂无可靠价格样本”时照实说明。
+- 面向普通业主/物业人员，语言简洁，不使用内部技术口吻。
+- 主体施工项优先说明，措施/辅助项后置；措施/辅助项关键词包括：垂直运输、大型机械、进出场、安拆、吊篮、脚手架、措施。
+- 每项必须包含：常见程度、单位、参考综合单价、人工/机械单价、说明。
 - recommended_items_top8 为空时，说明同目录样本不足，不能形成可靠价格参考。
 - 每个清单项最多 1 句说明，只基于“清单项”和“项目特征”。
 - answer 总字数控制在 900 字以内。
@@ -590,7 +630,7 @@ def build_answer_fallback(raw_text: str, summary: dict[str, Any], recommended_it
         )
 
     lines = [f"根据历史已审定样本，类似{raw_text}通常可能包含以下清单项/工艺："]
-    for index, (_row_index, row) in enumerate(recommended_items.head(8).iterrows(), start=1):
+    for index, (_row_index, row) in enumerate(answer_ordered_items(recommended_items, limit=8).iterrows(), start=1):
         name = cell_text(row.get("cost_item_name")) or f"清单项{index}"
         unit = cell_text(row.get("unit_normalized")) or "未注明"
         level = occurrence_level(row.get("support_ratio"))
@@ -609,7 +649,7 @@ def build_answer_fallback(raw_text: str, summary: dict[str, Any], recommended_it
     return "\n".join(lines)
 
 
-def build_answer(raw_text: str, summary: dict[str, Any], recommended_items: pd.DataFrame) -> str:
+def build_answer(raw_text: str, summary: dict[str, Any], recommended_items: pd.DataFrame) -> dict[str, str]:
     try:
         data = request_llm_json(
             build_answer_prompt(raw_text, summary, recommended_items),
@@ -623,12 +663,18 @@ def build_answer(raw_text: str, summary: dict[str, Any], recommended_items: pd.D
         )
         answer = cell_text(data.get("answer"))
         if answer:
-            return answer
+            return {"answer": answer, "answer_source": "llm", "answer_error": ""}
+        return {
+            "answer": build_answer_fallback(raw_text, summary, recommended_items),
+            "answer_source": "fallback",
+            "answer_error": "LLM 返回空 answer",
+        }
     except Exception as exc:
-        fallback = build_answer_fallback(raw_text, summary, recommended_items)
-        return f"{fallback}\n\n注：LLM 自然语言总结生成失败，以上内容由 recommended_items 自动整理。错误：{exc}"
-
-    return build_answer_fallback(raw_text, summary, recommended_items)
+        return {
+            "answer": build_answer_fallback(raw_text, summary, recommended_items),
+            "answer_source": "fallback",
+            "answer_error": str(exc),
+        }
 
 
 def apply_workbook_style(output_path: Path) -> None:
@@ -667,14 +713,20 @@ def apply_workbook_style(output_path: Path) -> None:
 
 def write_query_result_workbook(
     output_path: Path,
-    answer: str,
+    answer_result: dict[str, str],
     summary: dict[str, Any],
     recommended_items: pd.DataFrame,
     debug_item_matches: pd.DataFrame,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        pd.DataFrame([{"字段": "总结", "内容": answer}]).to_excel(
+        pd.DataFrame(
+            [
+                {"字段": "总结来源", "内容": answer_result.get("answer_source", "")},
+                {"字段": "错误信息", "内容": answer_result.get("answer_error", "")},
+                {"字段": "总结", "内容": answer_result.get("answer", "")},
+            ]
+        ).to_excel(
             writer,
             sheet_name="answer",
             index=False,
@@ -695,7 +747,7 @@ def run_query(
     top_k: int,
     min_score: float,
     output: Path | None,
-) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame, str]:
+) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame, dict[str, str]]:
     (
         samples,
         project_groups,
@@ -708,29 +760,34 @@ def run_query(
     classification, classify_warnings = classify_raw_text(raw_text)
 
     model = load_embedding_model(str(meta.get("model") or "BAAI/bge-m3"))
-    raw_query_embedding = encode_query(model, raw_text)
-    predicted_catalog_id = cell_text(classification.get("catalog_id"))
-    matched_projects, exact_catalog_available, exact_catalog_total_count = select_project_groups(
-        project_groups=project_groups,
-        project_group_embeddings=project_group_embeddings,
-        raw_query_embedding=raw_query_embedding,
-        predicted_catalog_id=predicted_catalog_id,
-        top_k=top_k,
-    )
-    recommended_items = aggregate_recommended_items(samples, matched_projects, top_k)
+    try:
+        raw_query_embedding = encode_query(model, raw_text)
+        predicted_catalog_id = cell_text(classification.get("catalog_id"))
+        matched_projects, exact_catalog_available, exact_catalog_total_count = select_project_groups(
+            project_groups=project_groups,
+            project_group_embeddings=project_group_embeddings,
+            raw_query_embedding=raw_query_embedding,
+            predicted_catalog_id=predicted_catalog_id,
+            top_k=top_k,
+        )
+        recommended_items = aggregate_recommended_items(samples, matched_projects, top_k)
 
-    debug_item_matches = build_debug_item_matches(
-        samples=samples,
-        item_embeddings=item_embeddings,
-        project_embeddings=project_embeddings,
-        full_embeddings=full_embeddings,
-        item_query_embedding=raw_query_embedding,
-        project_query_embedding=raw_query_embedding,
-        full_query_embedding=raw_query_embedding,
-        predicted_catalog_id=predicted_catalog_id,
-        top_k=top_k,
-        min_score=min_score,
-    )
+        debug_item_matches = build_debug_item_matches(
+            samples=samples,
+            item_embeddings=item_embeddings,
+            project_embeddings=project_embeddings,
+            full_embeddings=full_embeddings,
+            item_query_embedding=raw_query_embedding,
+            project_query_embedding=raw_query_embedding,
+            full_query_embedding=raw_query_embedding,
+            predicted_catalog_id=predicted_catalog_id,
+            top_k=top_k,
+            min_score=min_score,
+        )
+    finally:
+        release_embedding_model(model)
+        del model
+        gc.collect()
 
     warnings = build_warnings(
         classify_warnings=classify_warnings,
@@ -740,12 +797,13 @@ def run_query(
         recommended_count=len(recommended_items),
     )
     summary = build_summary(raw_text, classification, matched_projects, recommended_items, warnings)
-    answer = build_answer(raw_text, summary, recommended_items)
+    answer_result = build_answer(raw_text, summary, recommended_items)
+    summary["总结来源"] = answer_result.get("answer_source", "")
 
     if output:
-        write_query_result_workbook(output, answer, summary, recommended_items, debug_item_matches)
+        write_query_result_workbook(output, answer_result, summary, recommended_items, debug_item_matches)
 
-    return summary, recommended_items, debug_item_matches, answer
+    return summary, recommended_items, debug_item_matches, answer_result
 
 
 def print_terminal_summary(summary: dict[str, Any], answer: str, output_path: Path | None) -> None:
@@ -771,7 +829,7 @@ def main() -> int:
 
     try:
         validate_output_path(output_path, args.overwrite)
-        summary, _recommended_items, _debug_item_matches, answer = run_query(
+        summary, _recommended_items, _debug_item_matches, answer_result = run_query(
             index_dir=index_dir,
             raw_text=args.text,
             top_k=args.top_k,
@@ -782,7 +840,7 @@ def main() -> int:
         print(f"[ERROR] {exc}")
         return 1
 
-    print_terminal_summary(summary, answer, output_path)
+    print_terminal_summary(summary, answer_result.get("answer", ""), output_path)
     return 0
 
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import openpyxl
 
@@ -282,26 +285,21 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(summary_headers, ["query", "context", "unit", "catalog_id"])
         self.assertEqual(match_headers, ["rank", "final_score", "item_score", "context_score"])
 
-    def test_llm_profile_normalization_uses_retrieval_only_fields(self):
-        profile = query_estimate_llm.normalize_query_profile(
-            {
-                "llm_item_query": "SBS防水卷材",
-                "llm_feature_query": "3mm厚",
-                "project_text": "不应保留",
-                "catalog_id": "CP-002-03",
-                "quantity": 500,
-                "unit": "平",
-                "missing_info": ["基层做法"],
-                "confidence": "HIGH",
-            }
-        )
+    def test_llm_query_load_embedding_model_forces_cpu(self):
+        fake_module = types.ModuleType("sentence_transformers")
+        calls = []
 
-        self.assertEqual(
-            set(profile),
-            {"llm_item_query", "llm_feature_query", "quantity", "unit", "missing_info", "confidence"},
-        )
-        self.assertEqual(profile["unit"], "m²")
-        self.assertEqual(profile["confidence"], "high")
+        class FakeSentenceTransformer:
+            def __init__(self, model_name, device=None):
+                calls.append((model_name, device))
+
+        fake_module.SentenceTransformer = FakeSentenceTransformer
+
+        with patch.dict(sys.modules, {"sentence_transformers": fake_module}):
+            model = query_estimate_llm.load_embedding_model("demo-model")
+
+        self.assertIsInstance(model, FakeSentenceTransformer)
+        self.assertEqual(calls, [("demo-model", "cpu")])
 
     def test_select_project_groups_uses_exact_catalog_only(self):
         project_groups = pd.DataFrame(
@@ -313,7 +311,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
         embeddings = np.array([[0.7, 0.0], [1.0, 0.0], [0.9, 0.0]], dtype=np.float32)
 
-        selected, exact_available = query_estimate_llm.select_project_groups(
+        selected, exact_available, exact_count = query_estimate_llm.select_project_groups(
             project_groups,
             embeddings,
             raw_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
@@ -321,9 +319,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             top_k=10,
         )
         self.assertTrue(exact_available)
+        self.assertEqual(exact_count, 1)
         self.assertEqual(selected["source_row_id"].tolist(), [2])
 
-        selected, exact_available = query_estimate_llm.select_project_groups(
+        selected, exact_available, exact_count = query_estimate_llm.select_project_groups(
             project_groups,
             embeddings,
             raw_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
@@ -331,6 +330,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             top_k=10,
         )
         self.assertFalse(exact_available)
+        self.assertEqual(exact_count, 0)
         self.assertTrue(selected.empty)
 
     def test_recommended_items_aggregate_by_signature_and_price_fields(self):
@@ -379,7 +379,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             project_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
             full_query_embedding=np.array([1.0, 0.0], dtype=np.float32),
             predicted_catalog_id="CP-002-03",
-            unit="",
             top_k=2,
             min_score=0.6,
         )
@@ -392,37 +391,90 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_llm_query_warnings_for_missing_exact_catalog_samples(self):
         warnings = query_estimate_llm.build_warnings(
-            profile={"quantity": None, "unit": "", "confidence": "low"},
             classify_warnings=["工程分类未能稳定匹配标准目录：fallback"],
             exact_catalog_available=False,
+            exact_catalog_total_count=0,
+            matched_projects=pd.DataFrame(),
             recommended_count=0,
         )
 
         self.assertIn("工程分类未能稳定匹配标准目录：fallback", warnings)
         self.assertIn(query_estimate_llm.NO_EXACT_CATALOG_WARNING, warnings)
-        self.assertIn("未识别工程量，推荐清单项仅提供单价参考。", warnings)
-        self.assertIn("未识别计量单位，价格参考按推荐清单项自身单位展示。", warnings)
         self.assertIn("未形成推荐清单项，请补充材料、做法、面积或设备规格。", warnings)
-        self.assertIn("输入信息较模糊，系统解析置信度低。", warnings)
+
+    def test_build_answer_reports_llm_success_error_and_empty_answer_sources(self):
+        summary = {"提示": ""}
+        recommended = pd.DataFrame(columns=query_estimate_llm.RECOMMENDED_ITEM_COLUMNS)
+
+        with patch.object(query_estimate_llm, "request_llm_json", return_value={"answer": "自然语言总结"}):
+            result = query_estimate_llm.build_answer("屋面漏水", summary, recommended)
+        self.assertEqual(result, {"answer": "自然语言总结", "answer_source": "llm", "answer_error": ""})
+
+        with patch.object(query_estimate_llm, "request_llm_json", return_value={"answer": ""}):
+            result = query_estimate_llm.build_answer("屋面漏水", summary, recommended)
+        self.assertEqual(result["answer_source"], "fallback")
+        self.assertEqual(result["answer_error"], "LLM 返回空 answer")
+        self.assertIn("样本不足", result["answer"])
+
+        with patch.object(query_estimate_llm, "request_llm_json", side_effect=RuntimeError("service down")):
+            result = query_estimate_llm.build_answer("屋面漏水", summary, recommended)
+        self.assertEqual(result["answer_source"], "fallback")
+        self.assertEqual(result["answer_error"], "service down")
+        self.assertIn("样本不足", result["answer"])
+
+    def test_fallback_answer_orders_primary_items_before_auxiliary_items_only_for_answer(self):
+        recommended = pd.DataFrame(
+            [
+                {
+                    "rank": 1,
+                    "cost_item_name": "垂直运输",
+                    "project_description": "材料垂直运输",
+                    "unit_normalized": "项",
+                    "source_project_count": 1,
+                    "occurrence_count": 1,
+                    "support_ratio": 1.0,
+                    "unit_price_count": 0,
+                    "labor_unit_price_count": 0,
+                    "machinery_unit_price_count": 0,
+                },
+                {
+                    "rank": 2,
+                    "cost_item_name": "屋面卷材防水",
+                    "project_description": "3mm SBS",
+                    "unit_normalized": "m²",
+                    "source_project_count": 1,
+                    "occurrence_count": 1,
+                    "support_ratio": 1.0,
+                    "unit_price_count": 1,
+                    "unit_price_p25": 80,
+                    "unit_price_median": 80,
+                    "unit_price_p75": 80,
+                    "labor_unit_price_count": 0,
+                    "machinery_unit_price_count": 0,
+                },
+            ]
+        )
+
+        answer = query_estimate_llm.build_answer_fallback("屋面漏水", {"提示": ""}, recommended)
+
+        self.assertEqual(recommended["cost_item_name"].tolist(), ["垂直运输", "屋面卷材防水"])
+        self.assertLess(answer.index("1. 屋面卷材防水"), answer.index("2. 垂直运输"))
 
     def test_write_llm_query_result_workbook_has_expected_sheets_and_style(self):
         summary = {
-            "raw_text": "屋面漏水",
-            "classified_project_text": "屋面漏水",
-            "llm_item_query": "屋面防水",
-            "llm_feature_query": "3mm SBS",
-            "inferred_quantity": 10,
-            "inferred_unit": "m²",
-            "predicted_catalog_id": "CP-002-03",
-            "predicted_一级分类": "屋面",
-            "predicted_二级分类": "防水层",
-            "predicted_维修状态": "维修",
-            "predicted_标准对象": "共用部位",
-            "top_project_score": 0.9,
-            "matched_project_count": 1,
-            "recommended_item_count": 1,
-            "warnings": "",
+            "原始输入": "屋面漏水",
+            "标准目录ID": "CP-002-03",
+            "一级分类": "屋面",
+            "二级分类": "防水层",
+            "维修状态": "维修",
+            "标准对象": "共用部位",
+            "最高工程相似度": 0.9,
+            "相似工程数": 1,
+            "推荐清单项数": 1,
+            "总结来源": "fallback",
+            "提示": "",
         }
+        answer_result = {"answer": "自动总结", "answer_source": "fallback", "answer_error": "service down"}
         recommended = pd.DataFrame(
             [
                 {
@@ -455,9 +507,17 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / "query_result.xlsx"
-            query_estimate_llm.write_query_result_workbook(output_path, summary, recommended, debug)
+            query_estimate_llm.write_query_result_workbook(output_path, answer_result, summary, recommended, debug)
             workbook = openpyxl.load_workbook(output_path, data_only=True)
-            self.assertEqual(workbook.sheetnames, ["summary", "recommended_items", "debug_item_matches"])
+            self.assertEqual(workbook.sheetnames, ["answer", "summary", "recommended_items", "debug_item_matches"])
+            self.assertEqual(workbook["answer"].cell(row=2, column=1).value, "总结来源")
+            self.assertEqual(workbook["answer"].cell(row=2, column=2).value, "fallback")
+            self.assertEqual(workbook["answer"].cell(row=3, column=1).value, "错误信息")
+            self.assertEqual(workbook["answer"].cell(row=3, column=2).value, "service down")
+            self.assertEqual(workbook["answer"].cell(row=4, column=1).value, "总结")
+            self.assertEqual(workbook["answer"].cell(row=4, column=2).value, "自动总结")
+            summary_headers = [workbook["summary"].cell(row=1, column=column).value for column in range(1, 12)]
+            self.assertIn("总结来源", summary_headers)
             self.assertEqual(workbook["summary"].freeze_panes, "A2")
             self.assertTrue(workbook["summary"]["A1"].font.bold)
             self.assertTrue(workbook["summary"]["A1"].alignment.wrap_text)

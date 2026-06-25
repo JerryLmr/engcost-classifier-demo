@@ -147,6 +147,8 @@ index_meta.json
 
 这些文件是运行产物，不需要提交 Git。
 
+构建索引阶段可使用 sentence-transformers 默认设备策略；如果本机环境可用 GPU，可让构建过程使用 GPU 加速。
+
 ### 5. LLM 自然语言估价实验
 
 示例：用户只输入口语化维修需求，系统先用 `classify_project_standard(raw_text)` 做标准目录分类，再用原始输入 `raw_text` 检索同目录历史工程，聚合这些工程中的清单项组合，最后由 LLM 基于结构化推荐结果生成自然语言总结。
@@ -178,6 +180,7 @@ outputs/estimate_llm_roof_leak.xlsx
 
 - 用户不需要提供 `catalog_id`；`catalog_id` 来自 `classify_project_standard(raw_text)`。
 - 本脚本不使用 LLM profile 影响主检索；工程召回和调试召回都直接使用 `raw_text`。
+- 查询阶段 embedding 模型固定使用 CPU，并在生成 LLM answer 前释放 embedding model；这样可以避免和 LM Studio 抢 GPU/显存。
 - 本脚本新增的 LLM answer 只负责基于 `recommended_items` 总结，不负责标准目录分类，不新增未出现的清单项，不编造价格。
 - 如果样本库缺少同标准目录历史工程，系统会提示样本不足，不强行用 CP/CF 前缀相同的其它目录给价格。
 - 价格参考来自 `recommended_items` 中的同类历史工程清单项聚合结果，仅用于维修项目初案估算参考。
