@@ -560,6 +560,68 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(validated["excluded_item_ids"], ["rec_001"])
         self.assertEqual(validated["notes"], ["一", "二", "三"])
 
+    def test_answer_plan_for_output_uses_row_types_and_plan_action(self):
+        recommended = pd.DataFrame(
+            [
+                {
+                    "rank": 1,
+                    "item_id": "rec_001",
+                    "cost_item_name": "屋面卷材防水",
+                    "project_description": "3mm SBS",
+                    "unit_normalized": "m²",
+                },
+                {
+                    "rank": 2,
+                    "item_id": "rec_002",
+                    "cost_item_name": "屋面卷材防水加强层",
+                    "project_description": "SBS 附加层",
+                    "unit_normalized": "m²",
+                },
+                {
+                    "rank": 3,
+                    "item_id": "rec_003",
+                    "cost_item_name": "拆除原防水层",
+                    "project_description": "旧防水拆除",
+                    "unit_normalized": "m²",
+                },
+            ]
+        )
+        answer_plan = {
+            "planner_source": "planner_template",
+            "planner_error": "",
+            "sections": [{"title": "核心维修工程（SBS防水）", "item_ids": ["rec_001", "rec_002"]}],
+            "similar_groups": [
+                {
+                    "title": "SBS 卷材做法",
+                    "item_ids": ["rec_001", "rec_002"],
+                    "display_item_id": "rec_001",
+                    "reason": "同类卷材做法",
+                }
+            ],
+            "conditional_item_ids": ["rec_001"],
+            "excluded_item_ids": ["rec_003"],
+            "notes": ["需确认基层状态"],
+        }
+
+        output = query_estimate_llm.answer_plan_for_output(answer_plan, recommended)
+
+        self.assertEqual(output.columns.tolist(), query_estimate_llm.ANSWER_PLAN_COLUMNS)
+        self.assertEqual(output["row_type"].tolist(), ["shown_item", "hidden_similar_item", "excluded_item", "note"])
+        self.assertEqual(output.loc[0, "section_title"], "核心维修工程（SBS防水）")
+        self.assertEqual(output.loc[0, "plan_action"], "展示，代表相近做法；需现场确认")
+        self.assertEqual(output.loc[0, "representative_item_id"], "rec_001")
+        self.assertEqual(output.loc[1, "section_title"], "核心维修工程（SBS防水）")
+        self.assertEqual(output.loc[1, "plan_action"], "作为相近做法隐藏")
+        self.assertEqual(output.loc[1, "representative_item_id"], "rec_001")
+        self.assertEqual(output.loc[1, "similar_group_title"], "SBS 卷材做法")
+        self.assertEqual(output.loc[1, "reason"], "同类卷材做法")
+        self.assertEqual(output.loc[2, "section_title"], "")
+        self.assertEqual(output.loc[2, "plan_action"], "排除")
+        self.assertEqual(output.loc[3, "plan_action"], "全局提示")
+        self.assertEqual(output.loc[3, "note"], "需确认基层状态")
+        self.assertNotIn("planner_source", output.columns)
+        self.assertNotIn("planner_error", output.columns)
+
     def test_build_answer_uses_planner_template_and_hides_similar_detail_items(self):
         recommended = pd.DataFrame(
             [
@@ -931,9 +993,15 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             self.assertIn("总结来源", summary_headers)
             self.assertIn("识别工程量", summary_headers)
             self.assertEqual(workbook["summary"].cell(row=2, column=13).value, "未自动合计")
-            self.assertEqual(workbook["answer_plan"].cell(row=1, column=1).value, "planner_source")
-            self.assertEqual(workbook["answer_plan"].cell(row=2, column=3).value, "防水做法")
-            self.assertEqual(workbook["answer_plan"].cell(row=2, column=5).value, "rec_001")
+            answer_plan_headers = [workbook["answer_plan"].cell(row=1, column=column).value for column in range(1, 13)]
+            self.assertEqual(answer_plan_headers, query_estimate_llm.ANSWER_PLAN_COLUMNS)
+            self.assertNotIn("planner_source", answer_plan_headers)
+            self.assertNotIn("planner_error", answer_plan_headers)
+            self.assertEqual(workbook["answer_plan"].cell(row=2, column=1).value, "shown_item")
+            self.assertEqual(workbook["answer_plan"].cell(row=2, column=2).value, "防水做法")
+            self.assertEqual(workbook["answer_plan"].cell(row=2, column=4).value, "rec_001")
+            self.assertEqual(workbook["answer_plan"].cell(row=2, column=5).value, "屋面卷材防水")
+            self.assertEqual(workbook["answer_plan"].cell(row=2, column=8).value, "展示")
             self.assertEqual(workbook["recommended_items"].cell(row=1, column=2).value, "item_id")
             self.assertEqual(workbook["recommended_items"].cell(row=2, column=2).value, "rec_001")
             self.assertEqual(workbook["matched_projects"].cell(row=1, column=1).value, "rank")

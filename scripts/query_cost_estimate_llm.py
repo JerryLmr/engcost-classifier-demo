@@ -120,17 +120,18 @@ SCORE_COLUMNS = {
 }
 
 ANSWER_PLAN_COLUMNS = [
-    "planner_source",
-    "planner_error",
+    "row_type",
     "section_title",
     "display_order",
     "item_id",
-    "is_conditional",
-    "is_excluded",
+    "cost_item_name",
+    "project_description",
+    "unit_normalized",
+    "plan_action",
+    "representative_item_id",
     "similar_group_title",
-    "similar_group_display_item_id",
-    "similar_group_reason",
-    "planner_note",
+    "reason",
+    "note",
 ]
 
 ANSWER_PLAN_ITEM_LIMIT = 12
@@ -1111,7 +1112,7 @@ def apply_workbook_style(output_path: Path) -> None:
                 width = 100
             elif header == "提示":
                 width = 60
-            elif header in {"planner_error", "planner_note", "similar_group_reason"}:
+            elif header in {"planner_error", "reason", "note"}:
                 width = 60
             elif header == "project_description":
                 width = 60
@@ -1122,23 +1123,67 @@ def apply_workbook_style(output_path: Path) -> None:
     workbook.close()
 
 
-def answer_plan_for_output(answer_plan: dict[str, Any]) -> pd.DataFrame:
-    source = cell_text(answer_plan.get("planner_source"))
-    error = cell_text(answer_plan.get("planner_error"))
+def answer_plan_item_fields(item_id: str, item_lookup: dict[str, pd.Series]) -> dict[str, str]:
+    row = item_lookup.get(item_id)
+    if row is None:
+        return {
+            "cost_item_name": "",
+            "project_description": "",
+            "unit_normalized": "",
+        }
+    return {
+        "cost_item_name": cell_text(row.get("cost_item_name")),
+        "project_description": cell_text(row.get("project_description")),
+        "unit_normalized": cell_text(row.get("unit_normalized")),
+    }
+
+
+def shown_item_plan_action(item_id: str, conditional_ids: set[str], representative_ids: set[str]) -> str:
+    is_representative = item_id in representative_ids
+    is_conditional = item_id in conditional_ids
+    if is_representative and is_conditional:
+        return "展示，代表相近做法；需现场确认"
+    if is_representative:
+        return "展示，代表相近做法"
+    if is_conditional:
+        return "展示，需现场确认"
+    return "展示"
+
+
+def answer_plan_for_output(answer_plan: dict[str, Any], recommended_items: pd.DataFrame) -> pd.DataFrame:
+    recommended = ensure_recommended_item_ids(recommended_items)
+    item_lookup = item_lookup_by_id(recommended)
     conditional_ids = set(answer_plan.get("conditional_item_ids") or [])
     excluded_ids = set(answer_plan.get("excluded_item_ids") or [])
     rows: list[dict[str, Any]] = []
 
     similar_by_item: dict[str, dict[str, Any]] = {}
+    representative_ids: set[str] = set()
+    hidden_similar_ids: set[str] = set()
     for group in answer_plan.get("similar_groups") or []:
         if not isinstance(group, dict):
             continue
+        display_item_id = cell_text(group.get("display_item_id"))
+        if display_item_id:
+            representative_ids.add(display_item_id)
         for item_id in group.get("item_ids", []) or []:
             item_id = cell_text(item_id)
             if item_id:
                 similar_by_item[item_id] = group
+                if display_item_id and item_id != display_item_id:
+                    hidden_similar_ids.add(item_id)
 
-    seen_ids: set[str] = set()
+    section_by_item: dict[str, str] = {}
+    for section in answer_plan.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        section_title = cell_text(section.get("title"))
+        for item_id in section.get("item_ids", []) or []:
+            item_id = cell_text(item_id)
+            if item_id and item_id not in section_by_item:
+                section_by_item[item_id] = section_title
+
+    emitted_ids: set[str] = set()
     display_order = 1
     for section in answer_plan.get("sections") or []:
         if not isinstance(section, dict):
@@ -1146,44 +1191,68 @@ def answer_plan_for_output(answer_plan: dict[str, Any]) -> pd.DataFrame:
         section_title = cell_text(section.get("title"))
         for item_id in section.get("item_ids", []) or []:
             item_id = cell_text(item_id)
-            if not item_id:
+            if not item_id or item_id in excluded_ids or item_id in hidden_similar_ids:
                 continue
-            seen_ids.add(item_id)
             group = similar_by_item.get(item_id, {})
             rows.append(
                 {
-                    "planner_source": source,
-                    "planner_error": error,
+                    "row_type": "shown_item",
                     "section_title": section_title,
                     "display_order": display_order,
                     "item_id": item_id,
-                    "is_conditional": item_id in conditional_ids,
-                    "is_excluded": item_id in excluded_ids,
+                    **answer_plan_item_fields(item_id, item_lookup),
+                    "plan_action": shown_item_plan_action(item_id, conditional_ids, representative_ids),
+                    "representative_item_id": item_id if item_id in representative_ids else "",
                     "similar_group_title": cell_text(group.get("title")) if group else "",
-                    "similar_group_display_item_id": cell_text(group.get("display_item_id")) if group else "",
-                    "similar_group_reason": cell_text(group.get("reason")) if group else "",
-                    "planner_note": "",
+                    "reason": cell_text(group.get("reason")) if group else "",
+                    "note": "",
                 }
             )
+            emitted_ids.add(item_id)
             display_order += 1
 
-    for item_id in sorted(excluded_ids - seen_ids):
+    for group in answer_plan.get("similar_groups") or []:
+        if not isinstance(group, dict):
+            continue
+        display_item_id = cell_text(group.get("display_item_id"))
+        section_title = section_by_item.get(display_item_id, "") if display_item_id else ""
+        for item_id in group.get("item_ids", []) or []:
+            item_id = cell_text(item_id)
+            if not item_id or item_id == display_item_id or item_id in emitted_ids:
+                continue
+            rows.append(
+                {
+                    "row_type": "hidden_similar_item",
+                    "section_title": section_title,
+                    "display_order": "",
+                    "item_id": item_id,
+                    **answer_plan_item_fields(item_id, item_lookup),
+                    "plan_action": "作为相近做法隐藏",
+                    "representative_item_id": display_item_id,
+                    "similar_group_title": cell_text(group.get("title")),
+                    "reason": cell_text(group.get("reason")),
+                    "note": "",
+                }
+            )
+            emitted_ids.add(item_id)
+
+    for item_id in sorted(excluded_ids - emitted_ids):
         group = similar_by_item.get(item_id, {})
         rows.append(
             {
-                "planner_source": source,
-                "planner_error": error,
+                "row_type": "excluded_item",
                 "section_title": "",
                 "display_order": "",
                 "item_id": item_id,
-                "is_conditional": item_id in conditional_ids,
-                "is_excluded": True,
+                **answer_plan_item_fields(item_id, item_lookup),
+                "plan_action": "排除",
+                "representative_item_id": "",
                 "similar_group_title": cell_text(group.get("title")) if group else "",
-                "similar_group_display_item_id": cell_text(group.get("display_item_id")) if group else "",
-                "similar_group_reason": cell_text(group.get("reason")) if group else "",
-                "planner_note": "",
+                "reason": cell_text(group.get("reason")) if group else "",
+                "note": "",
             }
         )
+        emitted_ids.add(item_id)
 
     for note in answer_plan.get("notes") or []:
         note = cell_text(note)
@@ -1191,34 +1260,36 @@ def answer_plan_for_output(answer_plan: dict[str, Any]) -> pd.DataFrame:
             continue
         rows.append(
             {
-                "planner_source": source,
-                "planner_error": error,
+                "row_type": "note",
                 "section_title": "",
                 "display_order": "",
                 "item_id": "",
-                "is_conditional": "",
-                "is_excluded": "",
+                "cost_item_name": "",
+                "project_description": "",
+                "unit_normalized": "",
+                "plan_action": "全局提示",
+                "representative_item_id": "",
                 "similar_group_title": "",
-                "similar_group_display_item_id": "",
-                "similar_group_reason": "",
-                "planner_note": note,
+                "reason": "",
+                "note": note,
             }
         )
 
     if not rows:
         rows.append(
             {
-                "planner_source": source,
-                "planner_error": error,
+                "row_type": "",
                 "section_title": "",
                 "display_order": "",
                 "item_id": "",
-                "is_conditional": "",
-                "is_excluded": "",
+                "cost_item_name": "",
+                "project_description": "",
+                "unit_normalized": "",
+                "plan_action": "",
+                "representative_item_id": "",
                 "similar_group_title": "",
-                "similar_group_display_item_id": "",
-                "similar_group_reason": "",
-                "planner_note": "",
+                "reason": "",
+                "note": "",
             }
         )
 
@@ -1250,7 +1321,7 @@ def write_query_result_workbook(
             sheet_name="summary",
             index=False,
         )
-        answer_plan_for_output(answer_result.get("answer_plan", {})).to_excel(
+        answer_plan_for_output(answer_result.get("answer_plan", {}), recommended_items).to_excel(
             writer,
             sheet_name="answer_plan",
             index=False,

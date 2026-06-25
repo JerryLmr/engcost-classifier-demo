@@ -168,7 +168,7 @@ outputs/estimate_llm_roof_leak.xlsx
 
 - `answer` sheet：面向最终问答形态的自然语言总结，由程序模板按 `answer_plan` 渲染，价格和估算金额只来自 `recommended_items`。
 - `summary` sheet：原始输入、标准目录分类结果、同目录工程数量、推荐清单项数量、识别工程量、可计算清单项数、是否自动合计和 warning。
-- `answer_plan` sheet：answer planner 的展示计划，记录分组、条件项、排除项、相近做法和 planner 来源/错误信息，便于调试。
+- `answer_plan` sheet：answer planner 的展示计划，记录每个候选项的展示分组、处理方式、相近做法归并和排除/提示信息，便于复核最终 answer 结构。
 - `matched_projects` sheet：召回的相似历史工程，用于复核工程级证据来源。
 - `recommended_items` sheet：主结果，按同目录历史工程中的清单项签名聚合，展示出现次数、支持工程数、支持率和综合/人工/机械单价分位数。
 
@@ -181,6 +181,9 @@ outputs/estimate_llm_roof_leak.xlsx
 - 主链路为“工程组召回 → 展开 source_row_id 下清单项 → 聚合 recommended_items → answer_plan → 程序模板 answer”。
 - `matched_projects` 是召回的相似历史工程，`recommended_items` 是从相似工程展开并聚合得到的候选清单项。
 - `answer_plan` 是基于 `recommended_items` 的展示规划，不等于完整候选池或最终报价清单。
+- `answer_plan.section_title` 是 LLM planner 根据本次 `recommended_items` 生成的 answer 展示分组标题，不是固定枚举，也不能作为稳定业务分类字段使用。
+- `answer_plan.plan_action` 是 planner 决策的核心字段；判断一个 item 最终如何处理，应优先看 `plan_action`。
+- 判断一个 item 在最终 answer 中放在哪一段，看 `answer_plan.section_title`。
 - `debug_item_matches` 已移出默认结果，因为它属于全库单项 embedding 调试，不是当前主链路证据。
 - item/project/full 三路清单级 embedding 已从 query 主链路移除。
 - 查询阶段 embedding 模型固定使用 CPU，并在生成模板 answer 前释放 embedding model；这样可以避免和 LM Studio 抢 GPU/显存。
