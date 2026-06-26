@@ -361,6 +361,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_recommend_items_aggregate_and_estimate_totals(self):
         samples = self.sample_frame()
+        samples.loc[0, "unit"] = "$ m^{2} $"
         duplicate = samples.iloc[0].copy()
         duplicate["source_row_id"] = 5
         duplicate["item_row_id"] = "5-1"
@@ -390,7 +391,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "清单项名称",
                 "项目特征/施工工艺",
                 "单位",
-                "样本数",
                 "历史工程量最小值",
                 "历史工程量中位数",
                 "历史工程量最大值",
@@ -410,6 +410,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "其中包含机械单价中位数",
                 "其中包含机械单价最大值",
                 "来源清单行",
+                "历史样本数",
             ],
         )
         self.assertEqual(recommended["清单项名称"].tolist()[:2], ["屋面卷材防水", "管道更换"])
@@ -419,7 +420,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         roof = recommended.iloc[0]
         self.assertEqual(roof["序号"], 1)
         self.assertEqual(roof["项目特征/施工工艺"], "3.0mm SBS 沥青防水卷材")
-        self.assertEqual(roof["样本数"], 2)
+        self.assertEqual(roof["单位"], "m²")
+        self.assertEqual(roof["历史样本数"], 2)
         self.assertEqual(roof["历史综合单价最小值"], 80.0)
         self.assertEqual(roof["历史综合单价中位数"], 100.0)
         self.assertEqual(roof["历史综合单价最大值"], 120.0)
@@ -431,31 +433,58 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
     def test_write_query_result_workbook_has_two_sheets_and_debug_toggle(self):
         samples = self.sample_frame()
         matched_projects = pd.DataFrame(
-            [{"source_row_id": 2, "project_rank": 1, "project_score": 0.9, "group_text": "debug group text"}]
+            [
+                {"source_row_id": 2, "project_rank": 1, "project_score": 0.9, "group_text": "debug group text"},
+                {"source_row_id": 4, "project_rank": 2, "project_score": 0.8, "group_text": "pipe debug text"},
+            ]
         )
         matches = query_estimate_llm.expand_matched_samples(samples, matched_projects)
-        parsed = query_estimate_llm.ParsedQuery("屋面", "屋面", None, "", "", None, None, [])
+        parsed = query_estimate_llm.ParsedQuery(
+            "500平米屋面防水，浙江省嘉兴市，一年内",
+            "屋面防水",
+            500.0,
+            "m²",
+            "浙江省嘉兴市",
+            date(2025, 1, 1),
+            date(2026, 1, 1),
+            [],
+        )
         recommended = query_estimate_llm.aggregate_recommend_items(matches, parsed)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / "query_result.xlsx"
-            query_estimate_llm.write_query_result_workbook(output_path, recommended, matches, include_debug_text=False)
+            query_estimate_llm.write_query_result_workbook(output_path, parsed, recommended, matches, include_debug_text=False)
             workbook = openpyxl.load_workbook(output_path, data_only=True)
             self.assertEqual(workbook.sheetnames, ["recommend_items", "matches"])
+            recommend_sheet = workbook["recommend_items"]
+            self.assertEqual(recommend_sheet.freeze_panes, "A4")
+            self.assertEqual(recommend_sheet.cell(row=1, column=1).value, "查询内容")
+            self.assertEqual(recommend_sheet.cell(row=1, column=2).value, "500平米屋面防水，浙江省嘉兴市，一年内")
+            self.assertEqual(recommend_sheet.cell(row=2, column=1).value, "解析结果")
+            self.assertEqual(recommend_sheet.cell(row=2, column=2).value, "识别工程量：500 m²；地点：浙江省嘉兴市；时间：一年内")
             recommend_headers = [
-                workbook["recommend_items"].cell(row=1, column=column).value
-                for column in range(1, workbook["recommend_items"].max_column + 1)
+                recommend_sheet.cell(row=3, column=column).value
+                for column in range(1, recommend_sheet.max_column + 1)
             ]
             match_headers = [workbook["matches"].cell(row=1, column=column).value for column in range(1, workbook["matches"].max_column + 1)]
+            self.assertEqual(recommend_headers, query_estimate_llm.RECOMMENDED_ITEM_COLUMNS)
             self.assertIn("项目特征/施工工艺", recommend_headers)
             self.assertNotIn("project_description", recommend_headers)
+            self.assertNotIn("unit", recommend_headers)
             self.assertNotIn("工程名称", match_headers)
             self.assertNotIn("project_description", match_headers)
             self.assertNotIn("group_text", match_headers)
+            recommend_column = {header: index for index, header in enumerate(recommend_headers, start=1)}
+            self.assertEqual(recommend_sheet.cell(row=4, column=recommend_column["单位"]).value, "m²")
+            self.assertEqual(recommend_sheet.cell(row=4, column=recommend_column["历史工程量最小值"]).value, "100.00 m²")
+            self.assertEqual(recommend_sheet.cell(row=4, column=recommend_column["历史综合单价最小值"]).value, "80.00 元/m²")
+            self.assertEqual(recommend_sheet.cell(row=4, column=recommend_column["本次估算金额中位数"]).value, "40000.00 元")
+            self.assertIn(recommend_sheet.cell(row=5, column=recommend_column["历史综合单价中位数"]).value, ("", None))
+            self.assertIn(recommend_sheet.cell(row=5, column=recommend_column["其中包含机械单价中位数"]).value, ("", None))
             workbook.close()
 
             debug_path = Path(tmpdir) / "query_result_debug.xlsx"
-            query_estimate_llm.write_query_result_workbook(debug_path, recommended, matches, include_debug_text=True)
+            query_estimate_llm.write_query_result_workbook(debug_path, parsed, recommended, matches, include_debug_text=True)
             workbook = openpyxl.load_workbook(debug_path, data_only=True)
             debug_headers = [workbook["matches"].cell(row=1, column=column).value for column in range(1, workbook["matches"].max_column + 1)]
             workbook.close()

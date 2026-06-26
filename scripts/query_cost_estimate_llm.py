@@ -33,8 +33,6 @@ RECOMMENDED_ITEM_COLUMNS = [
     "维修状态",
     "清单项名称",
     "项目特征/施工工艺",
-    "单位",
-    "样本数",
     "历史工程量最小值",
     "历史工程量中位数",
     "历史工程量最大值",
@@ -54,6 +52,7 @@ RECOMMENDED_ITEM_COLUMNS = [
     "其中包含机械单价中位数",
     "其中包含机械单价最大值",
     "来源清单行",
+    "历史样本数",
 ]
 
 MATCH_COLUMNS = [
@@ -531,13 +530,12 @@ def aggregate_recommend_items(matches: pd.DataFrame, parsed: ParsedQuery) -> pd.
 
     for _signature, group in matches.groupby(group_columns, sort=False, dropna=False):
         first = group.iloc[0]
-        unit = first_non_empty(group["unit"]) if "unit" in group.columns else ""
         unit_normalized = cell_text(first.get("unit_normalized"))
         row: dict[str, Any] = {
             "清单项名称": cell_text(first.get("cost_item_name")),
             "项目特征/施工工艺": first_non_empty(group["project_description"]) if "project_description" in group.columns else "",
-            "单位": unit or unit_normalized,
-            "样本数": int(len(group)),
+            "单位": unit_normalized,
+            "历史样本数": int(len(group)),
             "catalog_id": cell_text(first.get("catalog_id")),
             "一级分类": cell_text(first.get("一级分类")),
             "二级分类": cell_text(first.get("二级分类")),
@@ -566,15 +564,19 @@ def aggregate_recommend_items(matches: pd.DataFrame, parsed: ParsedQuery) -> pd.
     recommended["_has_unit_price"] = recommended["历史综合单价中位数"].notna()
     recommended["_has_total_price"] = recommended["历史总价中位数"].notna()
     recommended = recommended.sort_values(
-        ["max_project_score", "样本数", "_has_unit_price", "_has_total_price"],
+        ["max_project_score", "历史样本数", "_has_unit_price", "_has_total_price"],
         ascending=[False, False, False, False],
-    ).drop(columns=["max_project_score", "_has_unit_price", "_has_total_price", "catalog_id", "unit_normalized"])
+    ).drop(columns=["max_project_score", "_has_unit_price", "_has_total_price", "catalog_id"])
     recommended.insert(0, "序号", range(1, len(recommended) + 1))
 
     for column in RECOMMENDED_ITEM_COLUMNS:
         if column not in recommended.columns:
             recommended[column] = None
-    return recommended[RECOMMENDED_ITEM_COLUMNS]
+
+    # “单位”不作为展示列输出，但必须保留在内部 DataFrame，
+    # 用于把工程量、单价等展示值格式化成 “12.00 m² / 27.18 元/m²”。
+    internal_columns = [column for column in ["单位", "unit_normalized"] if column in recommended.columns]
+    return recommended[[*RECOMMENDED_ITEM_COLUMNS, *internal_columns]]
 
 
 def rename_stats(stats: dict[str, float | None], source_prefix: str, target_prefix: str) -> dict[str, float | None]:
@@ -603,15 +605,108 @@ def matches_for_output(matches: pd.DataFrame, include_debug_text: bool) -> pd.Da
     return output[columns]
 
 
+QUANTITY_DISPLAY_COLUMNS = (
+    "历史工程量最小值",
+    "历史工程量中位数",
+    "历史工程量最大值",
+)
+
+UNIT_PRICE_DISPLAY_COLUMNS = (
+    "历史综合单价最小值",
+    "历史综合单价中位数",
+    "历史综合单价最大值",
+    "其中包含人工单价最小值",
+    "其中包含人工单价中位数",
+    "其中包含人工单价最大值",
+    "其中包含机械单价最小值",
+    "其中包含机械单价中位数",
+    "其中包含机械单价最大值",
+)
+
+AMOUNT_DISPLAY_COLUMNS = (
+    "本次估算金额最小值",
+    "本次估算金额中位数",
+    "本次估算金额最大值",
+    "历史总价最小值",
+    "历史总价中位数",
+    "历史总价最大值",
+)
+
+
+def display_number(value: Any) -> str:
+    number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(number) or not np.isfinite(float(number)):
+        return ""
+    return f"{float(number):.2f}"
+
+
+def format_recommend_value(value: Any, column: str, unit: str) -> str:
+    number = display_number(value)
+    if not number:
+        return ""
+    if column in QUANTITY_DISPLAY_COLUMNS:
+        return f"{number} {unit}"
+    if column in UNIT_PRICE_DISPLAY_COLUMNS:
+        return f"{number} 元/{unit}"
+    if column in AMOUNT_DISPLAY_COLUMNS:
+        return f"{number} 元"
+    return number
+
+
+def recommend_items_for_output(recommend_items: pd.DataFrame) -> pd.DataFrame:
+    working = recommend_items.copy()
+    display_columns = [*QUANTITY_DISPLAY_COLUMNS, *UNIT_PRICE_DISPLAY_COLUMNS, *AMOUNT_DISPLAY_COLUMNS]
+
+    for column in [*RECOMMENDED_ITEM_COLUMNS, *display_columns]:
+        if column not in working.columns:
+            working[column] = ""
+
+    # “单位”只作为内部格式化依据，不再作为展示列输出。
+    # 优先使用已经归一化后的“单位”，兜底使用 unit_normalized。
+    for row_index, row in working.iterrows():
+        unit = cell_text(row.get("单位")) or cell_text(row.get("unit_normalized"))
+        for column in display_columns:
+            working.at[row_index, column] = format_recommend_value(row.get(column), column, unit)
+
+    output = working[RECOMMENDED_ITEM_COLUMNS].copy()
+    return output.fillna("")
+
+
+def time_range_text(parsed: ParsedQuery) -> str:
+    if not parsed.consultation_time_from or not parsed.consultation_time_to:
+        return "未限制"
+    days = (parsed.consultation_time_to - parsed.consultation_time_from).days
+    mapping = {
+        TIME_RANGE_DAYS["last_year"]: "一年内",
+        TIME_RANGE_DAYS["last_half_year"]: "半年内",
+        TIME_RANGE_DAYS["last_3_months"]: "近三个月",
+    }
+    return mapping.get(days, "未限制")
+
+
+def parsed_result_text(parsed: ParsedQuery) -> str:
+    quantity = "未识别"
+    if parsed.quantity is not None and parsed.unit:
+        quantity = f"{parsed.quantity:g} {parsed.unit}"
+    location = parsed.location or "未识别"
+    return f"识别工程量：{quantity}；地点：{location}；时间：{time_range_text(parsed)}"
+
+
 def write_query_result_workbook(
     output_path: Path,
+    parsed: ParsedQuery,
     recommend_items: pd.DataFrame,
     matches: pd.DataFrame,
     include_debug_text: bool,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        recommend_items.to_excel(writer, sheet_name="recommend_items", index=False)
+        recommend_items_for_output(recommend_items).to_excel(writer, sheet_name="recommend_items", index=False, startrow=2)
+        worksheet = writer.sheets["recommend_items"]
+        worksheet.cell(row=1, column=1, value="查询内容")
+        worksheet.cell(row=1, column=2, value=parsed.raw_query)
+        worksheet.cell(row=2, column=1, value="解析结果")
+        worksheet.cell(row=2, column=2, value=parsed_result_text(parsed))
         matches_for_output(matches, include_debug_text).to_excel(writer, sheet_name="matches", index=False)
     apply_workbook_style(output_path)
 
@@ -625,25 +720,41 @@ def apply_workbook_style(path: Path) -> None:
 
     workbook = openpyxl.load_workbook(path)
     for worksheet in workbook.worksheets:
-        worksheet.freeze_panes = "A2"
-        for cell in worksheet[1]:
+        header_row = 3 if worksheet.title == "recommend_items" else 1
+
+        # 不冻结窗格，避免用户打开 Excel 时出现固定区域。
+        worksheet.freeze_panes = None
+
+        for cell in worksheet[header_row]:
             cell.font = Font(bold=True)
-            cell.alignment = Alignment(wrap_text=True, vertical="top")
-        headers = [cell.value for cell in worksheet[1]]
+            cell.alignment = Alignment(wrap_text=False, vertical="top")
+
+        # 顶部查询信息加粗，但不自动换行。
+        if worksheet.title == "recommend_items":
+            for row_index in (1, 2):
+                for cell in worksheet[row_index]:
+                    cell.alignment = Alignment(wrap_text=False, vertical="top")
+                worksheet.cell(row=row_index, column=1).font = Font(bold=True)
+
+        headers = [cell.value for cell in worksheet[header_row]]
         for index, header in enumerate(headers, start=1):
-            column_letter = worksheet.cell(row=1, column=index).column_letter
+            column_letter = worksheet.cell(row=header_row, column=index).column_letter
             width = 16
-            if header in {"清单项名称", "项目特征/施工工艺", "来源清单行"}:
+            if header == "项目特征/施工工艺":
+                width = 40
+            elif header in {"清单项名称", "来源清单行"}:
                 width = 28
             if header in DEBUG_MATCH_COLUMNS:
                 width = 36
             worksheet.column_dimensions[column_letter].width = width
-            if header in PRICE_COLUMNS:
-                for row in range(2, worksheet.max_row + 1):
+            if worksheet.title != "recommend_items" and header in PRICE_COLUMNS:
+                for row in range(header_row + 1, worksheet.max_row + 1):
                     worksheet.cell(row=row, column=index).number_format = "0.00"
+
         for row in worksheet.iter_rows():
             for cell in row:
-                cell.alignment = Alignment(wrap_text=True, vertical="top")
+                cell.alignment = Alignment(wrap_text=False, vertical="top")
+
     workbook.save(path)
     workbook.close()
 
@@ -677,7 +788,7 @@ def run_query(
         matches = pd.DataFrame(columns=[*MATCH_COLUMNS, *DEBUG_MATCH_COLUMNS])
         recommend_items = pd.DataFrame(columns=RECOMMENDED_ITEM_COLUMNS)
         if output:
-            write_query_result_workbook(output, recommend_items, matches, include_debug_text)
+            write_query_result_workbook(output, parsed, recommend_items, matches, include_debug_text)
         return parsed, recommend_items, matches
 
     model = load_embedding_model(str(meta.get("model") or "BAAI/bge-m3"))
@@ -694,7 +805,7 @@ def run_query(
         gc.collect()
 
     if output:
-        write_query_result_workbook(output, recommend_items, matches, include_debug_text)
+        write_query_result_workbook(output, parsed, recommend_items, matches, include_debug_text)
 
     return parsed, recommend_items, matches
 
