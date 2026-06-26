@@ -17,6 +17,9 @@ REQUIRED_COLUMNS = [
 MANAGED_OUTPUT_FILES = [
     "samples.parquet",
     "project_groups.parquet",
+    "project_name_embeddings.npy",
+    "project_detail_embeddings.npy",
+    # 清理旧单路索引残留，查询阶段不再兼容读取。
     "project_group_embeddings.npy",
     "index_meta.json",
 ]
@@ -83,7 +86,8 @@ PROJECT_GROUP_COLUMNS = [
     "标准对象",
     "consultation_time",
     "location",
-    "group_text",
+    "project_name_text",
+    "project_detail_text",
     "item_count",
 ]
 
@@ -92,13 +96,7 @@ def build_project_groups(samples: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for source_row_id, group in samples.groupby("source_row_id", sort=False, dropna=False):
         first = group.iloc[0]
-        project_text = safe_text(first.get("工程名称")) or join_parts(
-            [
-                safe_text(first.get("consultation_project_name")),
-                safe_text(first.get("renovation_content")),
-            ],
-            " ",
-        )
+        project_name_text = safe_text(first.get("工程名称"))
         item_summaries: list[str] = []
         seen: set[str] = set()
         for _index, item in group.iterrows():
@@ -112,11 +110,12 @@ def build_project_groups(samples: pd.DataFrame) -> pd.DataFrame:
             if item_text and item_text not in seen:
                 item_summaries.append(item_text)
                 seen.add(item_text)
+        project_detail_text = " ".join(item_summaries).strip()
 
         rows.append(
             {
                 "source_row_id": source_row_id,
-                "工程名称": project_text,
+                "工程名称": project_name_text,
                 "catalog_id": safe_text(first.get("catalog_id")),
                 "一级分类": safe_text(first.get("一级分类")),
                 "二级分类": safe_text(first.get("二级分类")),
@@ -124,7 +123,8 @@ def build_project_groups(samples: pd.DataFrame) -> pd.DataFrame:
                 "标准对象": safe_text(first.get("标准对象")),
                 "consultation_time": safe_text(first.get("consultation_time")),
                 "location": safe_text(first.get("location")),
-                "group_text": join_parts([project_text, " ".join(item_summaries)], " "),
+                "project_name_text": project_name_text,
+                "project_detail_text": project_detail_text,
                 "item_count": int(len(group)),
             }
         )
@@ -182,10 +182,12 @@ def build_index_meta(
         "files": {
             "samples": "samples.parquet",
             "project_groups": "project_groups.parquet",
-            "project_group_embeddings": "project_group_embeddings.npy",
+            "project_name_embeddings": "project_name_embeddings.npy",
+            "project_detail_embeddings": "project_detail_embeddings.npy",
         },
         "field_descriptions": {
-            "group_text": "工程文本和工程下清单项摘要，用于 source_row_id 工程召回",
+            "project_name_text": "工程名称文本，用于 source_row_id 工程名称召回",
+            "project_detail_text": "工程下清单项名称和项目特征文本，用于 source_row_id 工程明细召回",
             "unit_price": "综合单价，查询阶段用于参考区间计算",
             "labor_unit_price": "人工单价，查询阶段用于参考区间计算",
             "machinery_unit_price": "机械单价，查询阶段用于参考区间计算",
@@ -196,7 +198,8 @@ def build_index_meta(
 def write_index(
     samples: pd.DataFrame,
     project_groups: pd.DataFrame,
-    project_group_embeddings: np.ndarray,
+    project_name_embeddings: np.ndarray,
+    project_detail_embeddings: np.ndarray,
     output_dir: Path,
     meta: dict[str, Any],
 ) -> None:
@@ -207,7 +210,8 @@ def write_index(
             path.unlink()
     samples.to_parquet(output_dir / "samples.parquet", index=False)
     project_groups.to_parquet(output_dir / "project_groups.parquet", index=False)
-    np.save(output_dir / "project_group_embeddings.npy", project_group_embeddings)
+    np.save(output_dir / "project_name_embeddings.npy", project_name_embeddings)
+    np.save(output_dir / "project_detail_embeddings.npy", project_detail_embeddings)
     (output_dir / "index_meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -224,17 +228,23 @@ def build_cost_item_embedding_index(
     project_groups = build_project_groups(samples)
     model = load_embedding_model(model_name)
 
-    project_group_embeddings = encode_texts(model, text_series(project_groups["group_text"]), batch_size)
+    project_name_embeddings = encode_texts(model, text_series(project_groups["project_name_text"]), batch_size)
+    project_detail_embeddings = encode_texts(model, text_series(project_groups["project_detail_text"]), batch_size)
 
-    if len(project_groups) != project_group_embeddings.shape[0]:
-        raise ValueError("工程分组数量与 embedding 数量不一致")
+    if len(project_groups) != project_name_embeddings.shape[0]:
+        raise ValueError("工程分组数量与工程名称 embedding 数量不一致")
+    if len(project_groups) != project_detail_embeddings.shape[0]:
+        raise ValueError("工程分组数量与工程明细 embedding 数量不一致")
+    if project_name_embeddings.shape[1] != project_detail_embeddings.shape[1]:
+        raise ValueError("工程名称 embedding 与工程明细 embedding 维度不一致")
 
-    embedding_dim = int(project_group_embeddings.shape[1]) if project_group_embeddings.ndim == 2 else 0
+    embedding_dim = int(project_name_embeddings.shape[1]) if project_name_embeddings.ndim == 2 else 0
     meta = build_index_meta(samples_path, model_name, len(samples), embedding_dim)
     write_index(
         samples,
         project_groups,
-        project_group_embeddings,
+        project_name_embeddings,
+        project_detail_embeddings,
         output_dir,
         meta,
     )

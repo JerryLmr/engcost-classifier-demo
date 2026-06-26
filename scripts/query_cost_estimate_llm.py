@@ -33,6 +33,7 @@ RECOMMENDED_ITEM_COLUMNS = [
     "维修状态",
     "清单项名称",
     "项目特征/施工工艺",
+    "单位",
     "历史工程量最小值",
     "历史工程量中位数",
     "历史工程量最大值",
@@ -58,6 +59,8 @@ RECOMMENDED_ITEM_COLUMNS = [
 MATCH_COLUMNS = [
     "project_rank",
     "project_score",
+    "project_name_score",
+    "project_detail_score",
     "source_row_id",
     "item_row_id",
     "consultation_time",
@@ -82,36 +85,9 @@ MATCH_COLUMNS = [
 
 DEBUG_MATCH_COLUMNS = [
     "工程名称",
-    "group_text",
+    "project_name_text",
+    "project_detail_text",
 ]
-
-PRICE_COLUMNS = {
-    "历史工程量最小值",
-    "历史工程量中位数",
-    "历史工程量最大值",
-    "本次估算金额最小值",
-    "本次估算金额中位数",
-    "本次估算金额最大值",
-    "历史综合单价最小值",
-    "历史综合单价中位数",
-    "历史综合单价最大值",
-    "历史总价最小值",
-    "历史总价中位数",
-    "历史总价最大值",
-    "其中包含人工单价最小值",
-    "其中包含人工单价中位数",
-    "其中包含人工单价最大值",
-    "其中包含机械单价最小值",
-    "其中包含机械单价中位数",
-    "其中包含机械单价最大值",
-    "project_score",
-    "quantity",
-    "unit_price",
-    "total_price",
-    "labor_unit_price",
-    "machinery_unit_price",
-}
-
 
 @dataclass(frozen=True)
 class ParsedQuery:
@@ -133,6 +109,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default="", help="可选 xlsx 输出路径")
     parser.add_argument("--overwrite", action="store_true", help="若输出文件已存在则覆盖")
     parser.add_argument("--include-debug-text", action="store_true", help="matches 输出历史工程明文字段")
+    parser.add_argument("--display", action="store_true", help="recommend_items 数值单元格拼接单位和金额单位")
+    parser.add_argument("--project-name-weight", type=float, default=0.85, help="工程名称 embedding 召回权重")
+    parser.add_argument("--project-detail-weight", type=float, default=0.15, help="工程明细 embedding 召回权重")
     parser.add_argument("--parsed-quantity", type=float, default=None, help="高级覆盖：用户工程量")
     parser.add_argument("--parsed-unit", default="", help="高级覆盖：用户工程量单位")
     parser.add_argument("--parsed-location", default="", help="高级覆盖：样本库 location")
@@ -192,26 +171,41 @@ def encode_query(model: Any, text: str) -> np.ndarray:
     return normalize_embeddings(embedding)[0]
 
 
-def load_index(index_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, dict[str, Any]]:
+def normalize_project_weights(project_name_weight: float, project_detail_weight: float) -> tuple[float, float]:
+    if project_name_weight < 0 or project_detail_weight < 0:
+        raise ValueError("--project-name-weight 和 --project-detail-weight 必须大于等于 0")
+    total = project_name_weight + project_detail_weight
+    if total <= 0:
+        raise ValueError("--project-name-weight 和 --project-detail-weight 不能同时为 0")
+    return project_name_weight / total, project_detail_weight / total
+
+
+def load_index(index_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray, dict[str, Any]]:
     samples_path = index_dir / "samples.parquet"
     groups_path = index_dir / "project_groups.parquet"
-    group_path = index_dir / "project_group_embeddings.npy"
+    name_path = index_dir / "project_name_embeddings.npy"
+    detail_path = index_dir / "project_detail_embeddings.npy"
     meta_path = index_dir / "index_meta.json"
 
-    missing = [path.name for path in [samples_path, groups_path, group_path, meta_path] if not path.exists()]
+    missing = [path.name for path in [samples_path, groups_path, name_path, detail_path, meta_path] if not path.exists()]
     if missing:
         raise ValueError(f"索引目录缺少文件: {', '.join(missing)}")
 
     samples = pd.read_parquet(samples_path)
     project_groups = pd.read_parquet(groups_path)
-    project_group_embeddings = np.load(group_path)
+    project_name_embeddings = np.load(name_path)
+    project_detail_embeddings = np.load(detail_path)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
-    if len(project_groups) != project_group_embeddings.shape[0]:
-        raise ValueError("工程分组数量与 embedding 数量不一致")
-    if project_group_embeddings.ndim != 2:
+    if len(project_groups) != project_name_embeddings.shape[0]:
+        raise ValueError("工程分组数量与工程名称 embedding 数量不一致")
+    if len(project_groups) != project_detail_embeddings.shape[0]:
+        raise ValueError("工程分组数量与工程明细 embedding 数量不一致")
+    if project_name_embeddings.ndim != 2 or project_detail_embeddings.ndim != 2:
         raise ValueError("工程分组 embedding 维度不正确")
-    return samples, project_groups, project_group_embeddings, meta
+    if project_name_embeddings.shape[1] != project_detail_embeddings.shape[1]:
+        raise ValueError("工程名称 embedding 与工程明细 embedding 维度不一致")
+    return samples, project_groups, project_name_embeddings, project_detail_embeddings, meta
 
 
 def cell_text(value: Any) -> str:
@@ -417,9 +411,10 @@ def apply_parsed_overrides(
 
 def filter_project_groups(
     project_groups: pd.DataFrame,
-    project_group_embeddings: np.ndarray,
+    project_name_embeddings: np.ndarray,
+    project_detail_embeddings: np.ndarray,
     parsed: ParsedQuery,
-) -> tuple[pd.DataFrame, np.ndarray]:
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     mask = np.ones(len(project_groups), dtype=bool)
 
     if parsed.location:
@@ -440,24 +435,34 @@ def filter_project_groups(
                 date_mask &= (dates <= pd.Timestamp(parsed.consultation_time_to)).to_numpy()
             mask &= date_mask
 
-    return project_groups.loc[mask].copy(), project_group_embeddings[mask]
+    return project_groups.loc[mask].copy(), project_name_embeddings[mask], project_detail_embeddings[mask]
 
 
 def score_project_groups(
     project_groups: pd.DataFrame,
-    project_group_embeddings: np.ndarray,
+    project_name_embeddings: np.ndarray,
+    project_detail_embeddings: np.ndarray,
     query_embedding: np.ndarray,
     top_k: int,
+    project_name_weight: float,
+    project_detail_weight: float,
 ) -> pd.DataFrame:
     if project_groups.empty or top_k <= 0:
         rows = project_groups.head(0).copy()
+        rows.insert(0, "project_detail_score", [])
+        rows.insert(0, "project_name_score", [])
         rows.insert(0, "project_score", [])
         rows.insert(0, "project_rank", [])
         return rows
 
-    scores = project_group_embeddings @ query_embedding
+    normalized_name_weight, normalized_detail_weight = normalize_project_weights(project_name_weight, project_detail_weight)
+    project_name_scores = project_name_embeddings @ query_embedding
+    project_detail_scores = project_detail_embeddings @ query_embedding
+    scores = normalized_name_weight * project_name_scores + normalized_detail_weight * project_detail_scores
     rows = project_groups.copy()
     rows["project_score"] = scores
+    rows["project_name_score"] = project_name_scores
+    rows["project_detail_score"] = project_detail_scores
     rows = rows.sort_values("project_score", ascending=False).head(top_k).copy()
     rows.insert(0, "project_rank", range(1, len(rows) + 1))
     return rows
@@ -467,7 +472,16 @@ def expand_matched_samples(samples: pd.DataFrame, matched_projects: pd.DataFrame
     if matched_projects.empty:
         return pd.DataFrame(columns=[*MATCH_COLUMNS, *DEBUG_MATCH_COLUMNS])
 
-    project_columns = ["source_row_id", "project_rank", "project_score", "group_text"]
+    project_columns = [
+        "source_row_id",
+        "project_rank",
+        "project_score",
+        "project_name_score",
+        "project_detail_score",
+        "工程名称",
+        "project_name_text",
+        "project_detail_text",
+    ]
     available_project_columns = [column for column in project_columns if column in matched_projects.columns]
     project_meta = matched_projects[available_project_columns].copy()
     source_ids = project_meta["source_row_id"].tolist()
@@ -573,10 +587,7 @@ def aggregate_recommend_items(matches: pd.DataFrame, parsed: ParsedQuery) -> pd.
         if column not in recommended.columns:
             recommended[column] = None
 
-    # “单位”不作为展示列输出，但必须保留在内部 DataFrame，
-    # 用于把工程量、单价等展示值格式化成 “12.00 m² / 27.18 元/m²”。
-    internal_columns = [column for column in ["单位", "unit_normalized"] if column in recommended.columns]
-    return recommended[[*RECOMMENDED_ITEM_COLUMNS, *internal_columns]]
+    return recommended[RECOMMENDED_ITEM_COLUMNS]
 
 
 def rename_stats(stats: dict[str, float | None], source_prefix: str, target_prefix: str) -> dict[str, float | None]:
@@ -645,28 +656,30 @@ def format_recommend_value(value: Any, column: str, unit: str) -> str:
     if not number:
         return ""
     if column in QUANTITY_DISPLAY_COLUMNS:
-        return f"{number} {unit}"
+        return f"{number} {unit}".strip()
     if column in UNIT_PRICE_DISPLAY_COLUMNS:
-        return f"{number} 元/{unit}"
+        return f"{number} 元/{unit}" if unit else f"{number} 元"
     if column in AMOUNT_DISPLAY_COLUMNS:
         return f"{number} 元"
     return number
 
 
-def recommend_items_for_output(recommend_items: pd.DataFrame) -> pd.DataFrame:
+def recommend_items_for_output(recommend_items: pd.DataFrame, display: bool = False) -> pd.DataFrame:
     working = recommend_items.copy()
     display_columns = [*QUANTITY_DISPLAY_COLUMNS, *UNIT_PRICE_DISPLAY_COLUMNS, *AMOUNT_DISPLAY_COLUMNS]
 
-    for column in [*RECOMMENDED_ITEM_COLUMNS, *display_columns]:
+    for column in RECOMMENDED_ITEM_COLUMNS:
         if column not in working.columns:
             working[column] = ""
 
-    # “单位”只作为内部格式化依据，不再作为展示列输出。
-    # 优先使用已经归一化后的“单位”，兜底使用 unit_normalized。
-    for row_index, row in working.iterrows():
-        unit = cell_text(row.get("单位")) or cell_text(row.get("unit_normalized"))
+    if display:
         for column in display_columns:
-            working.at[row_index, column] = format_recommend_value(row.get(column), column, unit)
+            if column in working.columns:
+                working[column] = working[column].astype(object)
+        for row_index, row in working.iterrows():
+            unit = cell_text(row.get("单位"))
+            for column in display_columns:
+                working.at[row_index, column] = format_recommend_value(row.get(column), column, unit)
 
     output = working[RECOMMENDED_ITEM_COLUMNS].copy()
     return output.fillna("")
@@ -698,10 +711,16 @@ def write_query_result_workbook(
     recommend_items: pd.DataFrame,
     matches: pd.DataFrame,
     include_debug_text: bool,
+    display: bool = False,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        recommend_items_for_output(recommend_items).to_excel(writer, sheet_name="recommend_items", index=False, startrow=2)
+        recommend_items_for_output(recommend_items, display=display).to_excel(
+            writer,
+            sheet_name="recommend_items",
+            index=False,
+            startrow=2,
+        )
         worksheet = writer.sheets["recommend_items"]
         worksheet.cell(row=1, column=1, value="查询内容")
         worksheet.cell(row=1, column=2, value=parsed.raw_query)
@@ -729,27 +748,10 @@ def apply_workbook_style(path: Path) -> None:
             cell.font = Font(bold=True)
             cell.alignment = Alignment(wrap_text=False, vertical="top")
 
-        # 顶部查询信息加粗，但不自动换行。
         if worksheet.title == "recommend_items":
             for row_index in (1, 2):
                 for cell in worksheet[row_index]:
                     cell.alignment = Alignment(wrap_text=False, vertical="top")
-                worksheet.cell(row=row_index, column=1).font = Font(bold=True)
-
-        headers = [cell.value for cell in worksheet[header_row]]
-        for index, header in enumerate(headers, start=1):
-            column_letter = worksheet.cell(row=header_row, column=index).column_letter
-            width = 16
-            if header == "项目特征/施工工艺":
-                width = 40
-            elif header in {"清单项名称", "来源清单行"}:
-                width = 28
-            if header in DEBUG_MATCH_COLUMNS:
-                width = 36
-            worksheet.column_dimensions[column_letter].width = width
-            if worksheet.title != "recommend_items" and header in PRICE_COLUMNS:
-                for row in range(header_row + 1, worksheet.max_row + 1):
-                    worksheet.cell(row=row, column=index).number_format = "0.00"
 
         for row in worksheet.iter_rows():
             for cell in row:
@@ -770,8 +772,12 @@ def run_query(
     parsed_location: str = "",
     consultation_time_from: str = "",
     consultation_time_to: str = "",
+    project_name_weight: float = 0.85,
+    project_detail_weight: float = 0.15,
+    display: bool = False,
 ) -> tuple[ParsedQuery, pd.DataFrame, pd.DataFrame]:
-    samples, project_groups, project_group_embeddings, meta = load_index(index_dir)
+    normalized_name_weight, normalized_detail_weight = normalize_project_weights(project_name_weight, project_detail_weight)
+    samples, project_groups, project_name_embeddings, project_detail_embeddings, meta = load_index(index_dir)
     parsed = parse_query_requirements(raw_text, project_groups)
     parsed = apply_parsed_overrides(
         parsed,
@@ -782,21 +788,34 @@ def run_query(
         consultation_time_from=consultation_time_from,
         consultation_time_to=consultation_time_to,
     )
-    filtered_groups, filtered_embeddings = filter_project_groups(project_groups, project_group_embeddings, parsed)
+    filtered_groups, filtered_name_embeddings, filtered_detail_embeddings = filter_project_groups(
+        project_groups,
+        project_name_embeddings,
+        project_detail_embeddings,
+        parsed,
+    )
 
     if filtered_groups.empty:
         matches = pd.DataFrame(columns=[*MATCH_COLUMNS, *DEBUG_MATCH_COLUMNS])
         recommend_items = pd.DataFrame(columns=RECOMMENDED_ITEM_COLUMNS)
         if output:
-            write_query_result_workbook(output, parsed, recommend_items, matches, include_debug_text)
+            write_query_result_workbook(output, parsed, recommend_items, matches, include_debug_text, display=display)
         return parsed, recommend_items, matches
 
     model = load_embedding_model(str(meta.get("model") or "BAAI/bge-m3"))
     try:
         query_embedding = encode_query(model, parsed.semantic_query_text)
-        if query_embedding.shape[0] != filtered_embeddings.shape[1]:
+        if query_embedding.shape[0] != filtered_name_embeddings.shape[1]:
             raise ValueError("query embedding 维度与工程分组 embedding 维度不一致")
-        matched_projects = score_project_groups(filtered_groups, filtered_embeddings, query_embedding, top_k)
+        matched_projects = score_project_groups(
+            filtered_groups,
+            filtered_name_embeddings,
+            filtered_detail_embeddings,
+            query_embedding,
+            top_k,
+            normalized_name_weight,
+            normalized_detail_weight,
+        )
         matches = expand_matched_samples(samples, matched_projects)
         recommend_items = aggregate_recommend_items(matches, parsed)
     finally:
@@ -805,7 +824,7 @@ def run_query(
         gc.collect()
 
     if output:
-        write_query_result_workbook(output, parsed, recommend_items, matches, include_debug_text)
+        write_query_result_workbook(output, parsed, recommend_items, matches, include_debug_text, display=display)
 
     return parsed, recommend_items, matches
 
@@ -851,6 +870,9 @@ def main() -> int:
             parsed_location=args.parsed_location,
             consultation_time_from=args.consultation_time_from,
             consultation_time_to=args.consultation_time_to,
+            project_name_weight=args.project_name_weight,
+            project_detail_weight=args.project_detail_weight,
+            display=args.display,
         )
     except (RuntimeError, ValueError) as exc:
         print(f"[ERROR] {exc}")

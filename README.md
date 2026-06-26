@@ -144,7 +144,8 @@ outputs/cost_item_index/
 ```text
 samples.parquet
 project_groups.parquet
-project_group_embeddings.npy
+project_name_embeddings.npy
+project_detail_embeddings.npy
 index_meta.json
 ```
 
@@ -172,8 +173,8 @@ outputs/cost_estimate_result.xlsx
 
 其中：
 
-- `recommend_items` sheet：领导展示主表，按相似工程展开后的历史清单项聚合，使用中文列名展示一级/二级分类、维修状态、清单项名称、项目特征/施工工艺、单位、样本数、历史工程量、估算金额、综合单价、历史总价、人工单价、机械单价和来源清单行。
-- `matches` sheet：内部追溯表，展示相似工程展开后的清单样本行。默认不输出历史工程名称、历史项目描述和 `group_text`；需要调试明文时加 `--include-debug-text`。
+- `recommend_items` sheet：领导展示主表，按相似工程展开后的历史清单项聚合，默认使用结构化数值列展示一级/二级分类、维修状态、清单项名称、项目特征/施工工艺、单位、样本数、历史工程量、估算金额、综合单价、历史总价、人工单价、机械单价和来源清单行；需要把单位和金额单位拼入数值单元格时加 `--display`。
+- `matches` sheet：内部追溯表，展示相似工程展开后的清单样本行，并保留 `project_score`、`project_name_score`、`project_detail_score`。默认不输出历史工程名称和召回文本；需要调试明文时加 `--include-debug-text`，会输出 `工程名称`、`project_name_text`、`project_detail_text`。
 
 所有输出默认不覆盖；如需覆盖已有结果，请显式传入 `--overwrite`。
 
@@ -182,7 +183,8 @@ outputs/cost_estimate_result.xlsx
 - LLM 只负责解析 `semantic_query_text`、`quantity`、`unit`、`location_hint`、`time_range_type`，不参与价格估算，不生成 answer，不推荐清单。
 - 程序会校验并归一化 LLM 输出；LLM 失败时回退为原始 `--text` 检索，不中断查询。
 - `location` 和 `consultation_time` 是结构化硬过滤条件，不参与 embedding；过滤后无结果时会输出空的 `recommend_items` 和 `matches`。
-- 主链路为“ParsedQuery → project group 召回 → 展开 source_row_id 下清单样本 → 聚合 recommend_items”。
+- 主链路为“ParsedQuery → 双路 project group embedding 加权召回 → 展开 source_row_id 下清单样本 → 聚合 recommend_items”。
+- 查询召回只使用 LLM 解析出的单一 `semantic_query_text`，同时计算工程名称和工程明细两路 embedding 相似度；默认权重为 `--project-name-weight 0.85`、`--project-detail-weight 0.15`，权重和不为 1 时会自动归一化。
 - 如果解析出用户工程量且单位与推荐项 `unit_normalized` 一致，估算总价按“用户工程量 × 历史综合单价区间”计算；否则展示历史样本总价范围。
 - 查询阶段 embedding 模型固定使用 CPU，避免和 LM Studio 抢 GPU/显存。
 

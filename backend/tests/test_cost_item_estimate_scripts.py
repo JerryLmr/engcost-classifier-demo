@@ -142,7 +142,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "标准对象": "共用部位",
                     "consultation_time": "2026-03-01",
                     "location": "浙江省嘉兴市",
-                    "group_text": "屋面漏水维修工程 屋面卷材防水 3mm SBS",
+                    "project_name_text": "屋面漏水维修工程",
+                    "project_detail_text": "屋面卷材防水 3mm SBS",
                     "item_count": 1,
                 },
                 {
@@ -155,7 +156,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "标准对象": "共用部位",
                     "consultation_time": "2024-01-01",
                     "location": "浙江省杭州市",
-                    "group_text": "外墙维修工程 外墙防水",
+                    "project_name_text": "外墙维修工程",
+                    "project_detail_text": "外墙防水",
                     "item_count": 1,
                 },
                 {
@@ -168,7 +170,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "标准对象": "共用设施设备",
                     "consultation_time": "2026-02-01",
                     "location": "浙江省嘉兴市",
-                    "group_text": "管道维修工程 管道更换",
+                    "project_name_text": "管道维修工程",
+                    "project_detail_text": "管道更换",
                     "item_count": 1,
                 },
             ]
@@ -195,9 +198,11 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {
                 "samples": "samples.parquet",
                 "project_groups": "project_groups.parquet",
-                "project_group_embeddings": "project_group_embeddings.npy",
+                "project_name_embeddings": "project_name_embeddings.npy",
+                "project_detail_embeddings": "project_detail_embeddings.npy",
             },
         )
+        self.assertNotIn("group_text", meta["field_descriptions"])
         self.assertNotIn("item_text", meta["field_descriptions"])
         self.assertNotIn("item_embeddings", meta["files"])
 
@@ -207,17 +212,23 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         duplicate["item_row_id"] = "2-2"
         duplicate["cost_item_name"] = "防水层拆除"
         duplicate["project_description"] = "拆除原屋面防水层"
+        duplicate["consultation_project_name"] = "不应拼接的咨询项目名"
+        duplicate["renovation_content"] = "不应拼接的维修内容"
         samples = pd.concat([samples, pd.DataFrame([duplicate])], ignore_index=True)
 
         project_groups = build_index.build_project_groups(samples)
 
         self.assertEqual(project_groups["source_row_id"].tolist(), [2, 3, 4])
+        self.assertEqual(project_groups.columns.tolist(), build_index.PROJECT_GROUP_COLUMNS)
+        self.assertNotIn("group_text", project_groups.columns)
         roof = project_groups[project_groups["source_row_id"] == 2].iloc[0]
         self.assertEqual(roof["工程名称"], "屋面漏水维修工程")
+        self.assertEqual(roof["project_name_text"], "屋面漏水维修工程")
         self.assertEqual(roof["catalog_id"], "CP-002-03")
         self.assertEqual(roof["item_count"], 2)
-        self.assertIn("屋面卷材防水 3.0mm SBS 沥青防水卷材", roof["group_text"])
-        self.assertIn("防水层拆除 拆除原屋面防水层", roof["group_text"])
+        self.assertIn("屋面卷材防水 3.0mm SBS 沥青防水卷材", roof["project_detail_text"])
+        self.assertIn("防水层拆除 拆除原屋面防水层", roof["project_detail_text"])
+        self.assertNotIn("屋面漏水维修工程", roof["project_detail_text"])
 
     def test_build_samples_validate_paths_requires_overwrite_for_existing_output(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -256,14 +267,16 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             index_dir = Path(tmpdir)
             self.sample_frame().to_parquet(index_dir / "samples.parquet", index=False)
             self.project_groups_frame().to_parquet(index_dir / "project_groups.parquet", index=False)
-            np.save(index_dir / "project_group_embeddings.npy", np.ones((3, 2), dtype=np.float32))
+            np.save(index_dir / "project_name_embeddings.npy", np.ones((3, 2), dtype=np.float32))
+            np.save(index_dir / "project_detail_embeddings.npy", np.zeros((3, 2), dtype=np.float32))
             (index_dir / "index_meta.json").write_text('{"model": "demo-model"}', encoding="utf-8")
 
-            samples, project_groups, embeddings, meta = query_estimate_llm.load_index(index_dir)
+            samples, project_groups, name_embeddings, detail_embeddings, meta = query_estimate_llm.load_index(index_dir)
 
         self.assertEqual(len(samples), 3)
         self.assertEqual(len(project_groups), 3)
-        self.assertEqual(embeddings.shape, (3, 2))
+        self.assertEqual(name_embeddings.shape, (3, 2))
+        self.assertEqual(detail_embeddings.shape, (3, 2))
         self.assertEqual(meta["model"], "demo-model")
 
     def test_llm_query_load_embedding_model_forces_cpu(self):
@@ -319,7 +332,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_filter_project_groups_applies_location_and_time_as_hard_filters(self):
         project_groups = self.project_groups_frame()
-        embeddings = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]], dtype=np.float32)
+        name_embeddings = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]], dtype=np.float32)
+        detail_embeddings = np.array([[0.9, 0.1], [0.4, 0.6], [0.2, 0.8]], dtype=np.float32)
         parsed = query_estimate_llm.ParsedQuery(
             raw_query="屋面",
             semantic_query_text="屋面",
@@ -331,15 +345,35 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             parse_notes=[],
         )
 
-        filtered, filtered_embeddings = query_estimate_llm.filter_project_groups(project_groups, embeddings, parsed)
+        filtered, filtered_name_embeddings, filtered_detail_embeddings = query_estimate_llm.filter_project_groups(
+            project_groups,
+            name_embeddings,
+            detail_embeddings,
+            parsed,
+        )
 
         self.assertEqual(filtered["source_row_id"].tolist(), [2, 4])
-        self.assertEqual(filtered_embeddings.tolist(), [[1.0, 0.0], [0.0, 1.0]])
+        self.assertEqual(filtered_name_embeddings.tolist(), [[1.0, 0.0], [0.0, 1.0]])
+        np.testing.assert_allclose(filtered_detail_embeddings, np.array([[0.9, 0.1], [0.2, 0.8]], dtype=np.float32))
 
         empty = query_estimate_llm.ParsedQuery("x", "x", None, "", "上海市", None, None, [])
-        filtered, filtered_embeddings = query_estimate_llm.filter_project_groups(project_groups, embeddings, empty)
+        filtered, filtered_name_embeddings, filtered_detail_embeddings = query_estimate_llm.filter_project_groups(
+            project_groups,
+            name_embeddings,
+            detail_embeddings,
+            empty,
+        )
         self.assertTrue(filtered.empty)
-        self.assertEqual(filtered_embeddings.shape[0], 0)
+        self.assertEqual(filtered_name_embeddings.shape[0], 0)
+        self.assertEqual(filtered_detail_embeddings.shape[0], 0)
+
+    def test_project_weights_validate_and_normalize(self):
+        self.assertEqual(query_estimate_llm.normalize_project_weights(2.0, 1.0), (2.0 / 3.0, 1.0 / 3.0))
+        self.assertEqual(query_estimate_llm.normalize_project_weights(0.85, 0.15), (0.85, 0.15))
+        with self.assertRaisesRegex(ValueError, "必须大于等于 0"):
+            query_estimate_llm.normalize_project_weights(-0.1, 1.0)
+        with self.assertRaisesRegex(ValueError, "不能同时为 0"):
+            query_estimate_llm.normalize_project_weights(0.0, 0.0)
 
     def test_score_project_groups_and_expand_samples_by_source_row_id(self):
         samples = self.sample_frame()
@@ -349,15 +383,29 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         duplicate["cost_item_name"] = "基层处理"
         samples = pd.concat([samples, pd.DataFrame([duplicate])], ignore_index=True)
         project_groups = self.project_groups_frame()
-        embeddings = np.array([[1.0, 0.0], [0.6, 0.4], [0.0, 1.0]], dtype=np.float32)
+        name_embeddings = np.array([[0.8, 0.2], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+        detail_embeddings = np.array([[1.0, 0.0], [0.0, 1.0], [0.9, 0.1]], dtype=np.float32)
 
-        selected = query_estimate_llm.score_project_groups(project_groups, embeddings, np.array([1.0, 0.0], dtype=np.float32), 1)
+        selected = query_estimate_llm.score_project_groups(
+            project_groups,
+            name_embeddings,
+            detail_embeddings,
+            np.array([1.0, 0.0], dtype=np.float32),
+            1,
+            0.5,
+            0.5,
+        )
         matches = query_estimate_llm.expand_matched_samples(samples, selected)
 
         self.assertEqual(selected["source_row_id"].tolist(), [2])
         self.assertEqual(selected["project_rank"].tolist(), [1])
+        self.assertAlmostEqual(float(selected["project_name_score"].iloc[0]), 0.8)
+        self.assertAlmostEqual(float(selected["project_detail_score"].iloc[0]), 1.0)
+        self.assertAlmostEqual(float(selected["project_score"].iloc[0]), 0.9)
         self.assertEqual(matches["item_row_id"].tolist(), ["2-1", "2-2"])
-        self.assertIn("group_text", matches.columns)
+        self.assertIn("project_name_score", matches.columns)
+        self.assertIn("project_detail_score", matches.columns)
+        self.assertNotIn("group_text", matches.columns)
 
     def test_recommend_items_aggregate_and_estimate_totals(self):
         samples = self.sample_frame()
@@ -370,9 +418,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         samples = pd.concat([samples, pd.DataFrame([duplicate])], ignore_index=True)
         matched_projects = pd.DataFrame(
             [
-                {"source_row_id": 2, "project_rank": 1, "project_score": 0.9, "group_text": "屋面"},
-                {"source_row_id": 5, "project_rank": 2, "project_score": 0.8, "group_text": "屋面2"},
-                {"source_row_id": 4, "project_rank": 3, "project_score": 0.7, "group_text": "管道"},
+                {"source_row_id": 2, "project_rank": 1, "project_score": 0.9, "project_name_score": 0.95, "project_detail_score": 0.6},
+                {"source_row_id": 5, "project_rank": 2, "project_score": 0.8, "project_name_score": 0.85, "project_detail_score": 0.5},
+                {"source_row_id": 4, "project_rank": 3, "project_score": 0.7, "project_name_score": 0.4, "project_detail_score": 0.9},
             ]
         )
         matches = query_estimate_llm.expand_matched_samples(samples, matched_projects)
@@ -430,12 +478,77 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(pipe["本次估算金额中位数"], 3000.0)
         self.assertEqual(pipe["来源清单行"], "4-1")
 
+    def test_recommend_items_display_formats_empty_unit_without_trailing_slash(self):
+        recommend_items = pd.DataFrame(
+            [
+                {
+                    "序号": 1,
+                    "一级分类": "其他",
+                    "二级分类": "",
+                    "维修状态": "维修",
+                    "清单项名称": "零星维修",
+                    "项目特征/施工工艺": "",
+                    "单位": "",
+                    "历史工程量最小值": 12.0,
+                    "历史工程量中位数": 12.0,
+                    "历史工程量最大值": 12.0,
+                    "本次估算金额最小值": 13590.0,
+                    "本次估算金额中位数": 13590.0,
+                    "本次估算金额最大值": 13590.0,
+                    "历史综合单价最小值": 27.18,
+                    "历史综合单价中位数": 27.18,
+                    "历史综合单价最大值": 27.18,
+                    "历史总价最小值": 6678.97,
+                    "历史总价中位数": 6678.97,
+                    "历史总价最大值": 6678.97,
+                    "其中包含人工单价最小值": 3.58,
+                    "其中包含人工单价中位数": 3.58,
+                    "其中包含人工单价最大值": 3.58,
+                    "其中包含机械单价最小值": 0.06,
+                    "其中包含机械单价中位数": 0.06,
+                    "其中包含机械单价最大值": 0.06,
+                    "来源清单行": "1-1",
+                    "历史样本数": 1,
+                }
+            ]
+        )
+
+        structured = query_estimate_llm.recommend_items_for_output(recommend_items, display=False)
+        display = query_estimate_llm.recommend_items_for_output(recommend_items, display=True)
+
+        self.assertEqual(structured.loc[0, "历史工程量最小值"], 12.0)
+        self.assertEqual(structured.loc[0, "历史综合单价最小值"], 27.18)
+        self.assertEqual(display.loc[0, "历史工程量最小值"], "12.00")
+        self.assertEqual(display.loc[0, "历史综合单价最小值"], "27.18 元")
+        self.assertEqual(display.loc[0, "其中包含人工单价最小值"], "3.58 元")
+        self.assertEqual(display.loc[0, "其中包含机械单价最小值"], "0.06 元")
+        self.assertEqual(display.loc[0, "历史总价最小值"], "6678.97 元")
+        self.assertEqual(display.loc[0, "本次估算金额中位数"], "13590.00 元")
+
     def test_write_query_result_workbook_has_two_sheets_and_debug_toggle(self):
         samples = self.sample_frame()
         matched_projects = pd.DataFrame(
             [
-                {"source_row_id": 2, "project_rank": 1, "project_score": 0.9, "group_text": "debug group text"},
-                {"source_row_id": 4, "project_rank": 2, "project_score": 0.8, "group_text": "pipe debug text"},
+                {
+                    "source_row_id": 2,
+                    "project_rank": 1,
+                    "project_score": 0.9,
+                    "project_name_score": 0.95,
+                    "project_detail_score": 0.6,
+                    "工程名称": "屋面漏水维修工程",
+                    "project_name_text": "屋面漏水维修工程",
+                    "project_detail_text": "屋面卷材防水 3mm SBS",
+                },
+                {
+                    "source_row_id": 4,
+                    "project_rank": 2,
+                    "project_score": 0.8,
+                    "project_name_score": 0.4,
+                    "project_detail_score": 0.9,
+                    "工程名称": "管道维修工程",
+                    "project_name_text": "管道维修工程",
+                    "project_detail_text": "管道更换",
+                },
             ]
         )
         matches = query_estimate_llm.expand_matched_samples(samples, matched_projects)
@@ -457,7 +570,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             workbook = openpyxl.load_workbook(output_path, data_only=True)
             self.assertEqual(workbook.sheetnames, ["recommend_items", "matches"])
             recommend_sheet = workbook["recommend_items"]
-            self.assertEqual(recommend_sheet.freeze_panes, "A4")
+            self.assertIsNone(recommend_sheet.freeze_panes)
             self.assertEqual(recommend_sheet.cell(row=1, column=1).value, "查询内容")
             self.assertEqual(recommend_sheet.cell(row=1, column=2).value, "500平米屋面防水，浙江省嘉兴市，一年内")
             self.assertEqual(recommend_sheet.cell(row=2, column=1).value, "解析结果")
@@ -474,13 +587,31 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             self.assertNotIn("工程名称", match_headers)
             self.assertNotIn("project_description", match_headers)
             self.assertNotIn("group_text", match_headers)
+            self.assertIn("project_name_score", match_headers)
+            self.assertIn("project_detail_score", match_headers)
             recommend_column = {header: index for index, header in enumerate(recommend_headers, start=1)}
             self.assertEqual(recommend_sheet.cell(row=4, column=recommend_column["单位"]).value, "m²")
-            self.assertEqual(recommend_sheet.cell(row=4, column=recommend_column["历史工程量最小值"]).value, "100.00 m²")
-            self.assertEqual(recommend_sheet.cell(row=4, column=recommend_column["历史综合单价最小值"]).value, "80.00 元/m²")
-            self.assertEqual(recommend_sheet.cell(row=4, column=recommend_column["本次估算金额中位数"]).value, "40000.00 元")
+            self.assertEqual(recommend_sheet.cell(row=4, column=recommend_column["历史工程量最小值"]).value, 100)
+            self.assertEqual(recommend_sheet.cell(row=4, column=recommend_column["历史综合单价最小值"]).value, 80)
+            self.assertEqual(recommend_sheet.cell(row=4, column=recommend_column["本次估算金额中位数"]).value, 40000)
             self.assertIn(recommend_sheet.cell(row=5, column=recommend_column["历史综合单价中位数"]).value, ("", None))
             self.assertIn(recommend_sheet.cell(row=5, column=recommend_column["其中包含机械单价中位数"]).value, ("", None))
+            workbook.close()
+
+            display_path = Path(tmpdir) / "query_result_display.xlsx"
+            query_estimate_llm.write_query_result_workbook(
+                display_path,
+                parsed,
+                recommended,
+                matches,
+                include_debug_text=False,
+                display=True,
+            )
+            workbook = openpyxl.load_workbook(display_path, data_only=True)
+            display_sheet = workbook["recommend_items"]
+            self.assertEqual(display_sheet.cell(row=4, column=recommend_column["历史工程量最小值"]).value, "100.00 m²")
+            self.assertEqual(display_sheet.cell(row=4, column=recommend_column["历史综合单价最小值"]).value, "80.00 元/m²")
+            self.assertEqual(display_sheet.cell(row=4, column=recommend_column["本次估算金额中位数"]).value, "40000.00 元")
             workbook.close()
 
             debug_path = Path(tmpdir) / "query_result_debug.xlsx"
@@ -490,7 +621,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             workbook.close()
 
         self.assertIn("工程名称", debug_headers)
-        self.assertIn("group_text", debug_headers)
+        self.assertIn("project_name_text", debug_headers)
+        self.assertIn("project_detail_text", debug_headers)
+        self.assertNotIn("group_text", debug_headers)
         self.assertNotIn("project_description", debug_headers)
 
     def test_legacy_query_entrypoint_removed_and_readme_points_to_official_script(self):
