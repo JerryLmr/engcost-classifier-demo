@@ -152,54 +152,39 @@ index_meta.json
 
 构建索引阶段可使用 sentence-transformers 默认设备策略；如果本机环境可用 GPU，可让构建过程使用 GPU 加速。
 
-### 5. LLM 自然语言估价实验
+### 5. 自然语言造价查询
 
-示例：用户只输入口语化维修需求，系统先用 `classify_project_standard(raw_text)` 做标准目录分类，再用原始输入 `raw_text` 检索同目录历史工程，聚合这些工程中的清单项组合，再由 answer planner 基于 `recommended_items` 规划展示分组，最后用程序模板渲染自然语言总结。
+示例：用户只输入口语化维修需求，系统调用本地 LLM 将 `--text` 解析为结构化 `ParsedQuery`，再由程序执行 project group embedding 检索、location / consultation_time 硬过滤、历史样本展开和推荐清单项聚合。
 
 ```bash
 backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
   --index-dir outputs/cost_item_index \
-  --text "屋面漏水维修工程" \
-  --output outputs/estimate_llm_roof_leak.xlsx \
+  --text "屋面漏水，想做3mm SBS防水，面积大概500平，参考嘉兴一年内的造价" \
+  --output outputs/cost_estimate_result.xlsx \
   --overwrite
 ```
 
 输出文件：
 
 ```bash
-outputs/estimate_llm_roof_leak.xlsx
+outputs/cost_estimate_result.xlsx
 ```
 
 其中：
 
-- `answer` sheet：面向最终问答形态的自然语言总结，由程序模板按 `answer_plan` 渲染，价格和估算金额只来自 `recommended_items`。
-- `summary` sheet：原始输入、标准目录分类结果、同目录工程数量、推荐清单项数量、识别工程量、可计算清单项数、是否自动合计和 warning。
-- `answer_plan` sheet：answer planner 的展示计划，记录每个候选项的展示分组、处理方式、相近做法归并和排除/提示信息，便于复核最终 answer 结构。
-- `matched_projects` sheet：召回的相似历史工程，用于复核工程级证据来源。
-- `recommended_items` sheet：主结果，按同目录历史工程中的清单项签名聚合，展示出现次数、支持工程数、支持率和综合/人工/机械单价分位数。
+- `recommend_items` sheet：领导展示主表，按相似工程展开后的历史清单项聚合，展示工程量、综合单价、历史总价、人工单价、机械单价和估算总价区间。
+- `matches` sheet：内部追溯表，展示相似工程展开后的清单样本行。默认不输出历史工程名称、历史项目描述和 `group_text`；需要调试明文时加 `--include-debug-text`。
 
 所有输出默认不覆盖；如需覆盖已有结果，请显式传入 `--overwrite`。
 
 说明：
 
-- 用户不需要提供 `catalog_id`；`catalog_id` 来自 `classify_project_standard(raw_text)`。
-- 当前脚本是结构化 RAG 单轮查询；检索对象是历史工程和清单项样本，不是普通文档。
-- 主链路为“工程组召回 → 展开 source_row_id 下清单项 → 聚合 recommended_items → answer_plan → 程序模板 answer”。
-- `matched_projects` 是召回的相似历史工程，`recommended_items` 是从相似工程展开并聚合得到的候选清单项。
-- `answer_plan` 是基于 `recommended_items` 的展示规划，不等于完整候选池或最终报价清单。
-- `answer_plan.section_title` 是 LLM planner 根据本次 `recommended_items` 生成的 answer 展示分组标题，不是固定枚举，也不能作为稳定业务分类字段使用。
-- `answer_plan.plan_action` 是 planner 决策的核心字段；判断一个 item 最终如何处理，应优先看 `plan_action`。
-- 判断一个 item 在最终 answer 中放在哪一段，看 `answer_plan.section_title`。
-- `debug_item_matches` 已移出默认结果，因为它属于全库单项 embedding 调试，不是当前主链路证据。
-- item/project/full 三路清单级 embedding 已从 query 主链路移除。
-- 查询阶段 embedding 模型固定使用 CPU，并在生成模板 answer 前释放 embedding model；这样可以避免和 LM Studio 抢 GPU/显存。
-- LLM answer planner 只做语义归并、业务分组和展示选择；不重新检索向量库，不新增清单项，不输出价格，不直接生成最终 answer 正文。
-- 当前 answer 只负责基于 `answer_plan` 和 `recommended_items` 总结，不负责标准目录分类，不新增未出现的清单项，不编造价格。
-- 如果样本库缺少同标准目录历史工程，系统会提示样本不足，不强行用 CP/CF 前缀相同的其它目录给价格。
-- 价格参考来自 `recommended_items` 中的同类历史工程清单项聚合结果，仅用于维修项目初案估算参考。
-- 如果用户输入含简单工程量，系统会对单位一致且有综合单价分位数的清单项做“综合单价 × 工程量”的 P25-P75 简单参考金额计算。
-- 单项金额估算可以展示，但当前不自动合计总价；部分清单项可能属于替代做法、重复候选或条件措施项，需要用户确认适用项后再汇总。
-- 后续多轮状态中，LLM 可用于理解用户补充信息和选择适用清单项；用户确认后，再由程序基于 selected_items 计算合计参考金额。
+- LLM 只负责解析 `semantic_query_text`、`quantity`、`unit`、`location_hint`、`time_range_type`，不参与价格估算，不生成 answer，不推荐清单。
+- 程序会校验并归一化 LLM 输出；LLM 失败时回退为原始 `--text` 检索，不中断查询。
+- `location` 和 `consultation_time` 是结构化硬过滤条件，不参与 embedding；过滤后无结果时会输出空的 `recommend_items` 和 `matches`。
+- 主链路为“ParsedQuery → project group 召回 → 展开 source_row_id 下清单样本 → 聚合 recommend_items”。
+- 如果解析出用户工程量且单位与推荐项 `unit_normalized` 一致，估算总价按“用户工程量 × 历史综合单价区间”计算；否则展示历史样本总价范围。
+- 查询阶段 embedding 模型固定使用 CPU，避免和 LM Studio 抢 GPU/显存。
 
 ### 6. 文件提交说明
 

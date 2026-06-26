@@ -21,14 +21,6 @@ MANAGED_OUTPUT_FILES = [
     "index_meta.json",
 ]
 
-LEGACY_OUTPUT_FILES = [
-    "item_embeddings.npy",
-    "project_embeddings.npy",
-    "full_embeddings.npy",
-    "item_similarity_embeddings.npy",
-    "item_context_embeddings.npy",
-]
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="构建已审定清单样本 embedding 索引")
@@ -77,18 +69,8 @@ def safe_text(value: Any) -> str:
     return str(value).strip()
 
 
-def text_column(samples: pd.DataFrame, column: str) -> pd.Series:
-    if column not in samples.columns:
-        return pd.Series([""] * len(samples), index=samples.index, dtype=str)
-    return samples[column].fillna("").astype(str).str.strip()
-
-
 def join_parts(parts: list[str], separator: str = " ") -> str:
     return separator.join(part for part in parts if part).strip()
-
-
-def add_embedding_text_columns(samples: pd.DataFrame) -> pd.DataFrame:
-    return samples.copy()
 
 
 PROJECT_GROUP_COLUMNS = [
@@ -219,7 +201,7 @@ def write_index(
     meta: dict[str, Any],
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    for name in MANAGED_OUTPUT_FILES + LEGACY_OUTPUT_FILES:
+    for name in MANAGED_OUTPUT_FILES:
         path = output_dir / name
         if path.exists() and path.is_file():
             path.unlink()
