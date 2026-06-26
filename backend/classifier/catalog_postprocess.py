@@ -79,6 +79,7 @@ def postprocess_item_selection(
         is_composite=True if has_other_concrete_secondary else item_selection.is_composite,
         needs_review=True,
         reason=_append_reason(item_selection.reason, PROMOTE_REASON),
+        project_name_text=item_selection.project_name_text,
         invalid_after_retry=item_selection.invalid_after_retry,
     )
 
@@ -116,5 +117,6 @@ def roof_leak_postprocess(
         is_composite=True if secondary_ids else item_selection.is_composite,
         needs_review=True,
         reason=_append_reason(item_selection.reason, ROOF_LEAK_REASON),
+        project_name_text=item_selection.project_name_text,
         invalid_after_retry=item_selection.invalid_after_retry,
     )

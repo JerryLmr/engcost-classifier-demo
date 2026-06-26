@@ -88,6 +88,7 @@ def _out_of_scope_result(
     return fallback_result(
         project_name,
         "；".join([item_selection.reason, *decision.reason_suffixes]),
+        project_name_text=item_selection.project_name_text,
         is_composite=decision.is_composite,
         secondary_catalog_ids=list(decision.secondary_catalog_ids),
         is_emergency=is_emergency_project(project_name),
@@ -120,6 +121,7 @@ def _classify_project_full_catalog(
             is_composite=item_selection.is_composite,
             needs_review=True,
             reason=f"LLM returned invalid catalog_id: {item_selection.catalog_id}",
+            project_name_text=item_selection.project_name_text,
             invalid_after_retry=item_selection.invalid_after_retry,
         )
         return _out_of_scope_result(project_name, normalized, alias_result, invalid_selection)

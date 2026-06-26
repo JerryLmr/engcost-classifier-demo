@@ -18,6 +18,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from classifier.llm_client import LLMServiceError, request_llm_json  # noqa: E402
+from classifier.semantic_prompt import SEMANTIC_PROJECT_TEXT_RULES  # noqa: E402
 
 
 TIME_RANGE_DAYS = {
@@ -301,7 +302,7 @@ def build_parse_query_prompt(query: str) -> str:
 只允许输出 JSON，不要解释，不要 Markdown。
 
 字段固定为：
-- semantic_query_text: 用于语义检索的工程内容。去掉面积、地点、时间、参考造价等查询条件，但保留维修对象、材料、工艺、厚度、规格等工程语义。例如 3mm SBS 防水不能删除。
+- semantic_query_text: 用户 query 中抽取出的“用于相似项目检索的工程语义文本”。必须和历史项目侧 project_name_text 使用同一套抽取口径。
 - quantity: 用户提到的工程量数字，没有则 null。
 - unit: 用户提到的单位，统一成 m²、m、项、台、套、次、个等，没有则 null。
 - location_hint: 用户提到的地点词，没有则 null。
@@ -312,6 +313,9 @@ def build_parse_query_prompt(query: str) -> str:
 不要输出目录分类。
 不要输出 catalog_id。
 不要输出 answer。
+
+semantic_query_text 抽取规则：
+{SEMANTIC_PROJECT_TEXT_RULES}
 
 用户查询：{query}
 """.strip()

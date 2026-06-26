@@ -10,6 +10,9 @@ import pandas as pd
 
 
 REQUIRED_COLUMNS = [
+    "source_row_id",
+    "工程名称",
+    "project_name_text",
     "cost_item_name",
     "project_description",
 ]
@@ -23,6 +26,7 @@ MANAGED_OUTPUT_FILES = [
     "project_group_embeddings.npy",
     "index_meta.json",
 ]
+PROJECT_GROUP_DEBUG_FILE = "cost_item_project_groups.xlsx"
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,6 +43,9 @@ def validate_output_dir(output_dir: Path, overwrite: bool) -> None:
     if output_dir.exists() and not output_dir.is_dir():
         raise ValueError(f"输出路径不是目录: {output_dir}")
     existing = [name for name in MANAGED_OUTPUT_FILES if (output_dir / name).exists()]
+    debug_output = output_dir.parent / PROJECT_GROUP_DEBUG_FILE
+    if debug_output.exists():
+        existing.append(str(debug_output))
     if existing and not overwrite:
         raise ValueError(
             "输出已存在，请加 --overwrite 或更换输出目录: "
@@ -79,6 +86,7 @@ def join_parts(parts: list[str], separator: str = " ") -> str:
 PROJECT_GROUP_COLUMNS = [
     "source_row_id",
     "工程名称",
+    "project_name_text",
     "catalog_id",
     "一级分类",
     "二级分类",
@@ -86,7 +94,6 @@ PROJECT_GROUP_COLUMNS = [
     "标准对象",
     "consultation_time",
     "location",
-    "project_name_text",
     "project_detail_text",
     "item_count",
 ]
@@ -96,7 +103,14 @@ def build_project_groups(samples: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for source_row_id, group in samples.groupby("source_row_id", sort=False, dropna=False):
         first = group.iloc[0]
-        project_name_text = safe_text(first.get("工程名称"))
+        project_name = safe_text(first.get("工程名称"))
+        project_name_text = safe_text(first.get("project_name_text"))
+        if not project_name_text:
+            print(
+                f"[WARN] source_row_id={source_row_id} project_name_text 为空，已回退为原始工程名称",
+                flush=True,
+            )
+            project_name_text = project_name
         item_summaries: list[str] = []
         seen: set[str] = set()
         for _index, item in group.iterrows():
@@ -115,7 +129,8 @@ def build_project_groups(samples: pd.DataFrame) -> pd.DataFrame:
         rows.append(
             {
                 "source_row_id": source_row_id,
-                "工程名称": project_name_text,
+                "工程名称": project_name,
+                "project_name_text": project_name_text,
                 "catalog_id": safe_text(first.get("catalog_id")),
                 "一级分类": safe_text(first.get("一级分类")),
                 "二级分类": safe_text(first.get("二级分类")),
@@ -123,7 +138,6 @@ def build_project_groups(samples: pd.DataFrame) -> pd.DataFrame:
                 "标准对象": safe_text(first.get("标准对象")),
                 "consultation_time": safe_text(first.get("consultation_time")),
                 "location": safe_text(first.get("location")),
-                "project_name_text": project_name_text,
                 "project_detail_text": project_detail_text,
                 "item_count": int(len(group)),
             }
@@ -186,8 +200,8 @@ def build_index_meta(
             "project_detail_embeddings": "project_detail_embeddings.npy",
         },
         "field_descriptions": {
-            "project_name_text": "工程名称文本，用于 source_row_id 工程名称召回",
-            "project_detail_text": "工程下清单项名称和项目特征文本，用于 source_row_id 工程明细召回",
+            "project_name_text": "batch_classify 阶段从原始工程名称抽取出的项目级语义文本，用于项目主召回。",
+            "project_detail_text": "工程下清单项名称和项目特征拼接文本，用于施工工艺/清单细节辅助召回。",
             "unit_price": "综合单价，查询阶段用于参考区间计算",
             "labor_unit_price": "人工单价，查询阶段用于参考区间计算",
             "machinery_unit_price": "机械单价，查询阶段用于参考区间计算",
@@ -210,6 +224,7 @@ def write_index(
             path.unlink()
     samples.to_parquet(output_dir / "samples.parquet", index=False)
     project_groups.to_parquet(output_dir / "project_groups.parquet", index=False)
+    project_groups.to_excel(output_dir.parent / PROJECT_GROUP_DEBUG_FILE, index=False)
     np.save(output_dir / "project_name_embeddings.npy", project_name_embeddings)
     np.save(output_dir / "project_detail_embeddings.npy", project_detail_embeddings)
     (output_dir / "index_meta.json").write_text(

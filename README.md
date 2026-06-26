@@ -1,6 +1,6 @@
 ## 已审定清单样本库与初案估价流程
 
-本流程用于将 OCR 识别出的已审定维修项目资料转为清单级样本库，并基于相似清单检索给新维修初案提供参考价格区间。
+本流程用于将 OCR 识别出的已审定维修项目资料转为清单级样本库，并基于相似历史工程召回给新维修初案提供参考价格区间。
 
 当前流程不用于判断“异常 / 违规 / 不合理”，只输出相似样本和参考区间。
 
@@ -58,6 +58,7 @@ excel_outputs/classified_projects.xlsx
 
 ```text
 工程名称
+project_name_text
 catalog_id
 一级分类
 二级分类
@@ -76,6 +77,8 @@ sub_item_project_rows
 consultation_time
 location
 ```
+
+其中 `project_name_text` 是 batch 分类阶段从原始工程名称抽取出的项目级语义文本，用于后续相似工程主召回。抽取时会去掉地点、时间、面积、金额、小区名、业主单位、地址、楼栋号、编号和参考造价等非工程语义，保留维修对象、部位、故障/病害、维修动作、材料、工艺和规格。
 
 ### 3. 展开清单级样本
 
@@ -103,6 +106,7 @@ source_row_id + sub_item_project_rows 中的 seq
 ```text
 file_name
 工程名称
+project_name_text
 sub_project_id
 catalog_id
 一级分类
@@ -149,13 +153,21 @@ project_detail_embeddings.npy
 index_meta.json
 ```
 
+同时生成便于人工检查的工程组调试表：
+
+```bash
+outputs/cost_item_project_groups.xlsx
+```
+
+索引阶段不再调用 LLM 清洗工程名称，只读取样本中的 `project_name_text`。如果该字段为空，会打印 warning 并回退为原始 `工程名称`。`project_detail_text` 由同一历史工程下的 `cost_item_name + project_description` 去重拼接，不拼入工程名称。
+
 这些文件是运行产物，不需要提交 Git。
 
 构建索引阶段可使用 sentence-transformers 默认设备策略；如果本机环境可用 GPU，可让构建过程使用 GPU 加速。
 
 ### 5. 自然语言造价查询
 
-示例：用户只输入口语化维修需求，系统调用本地 LLM 将 `--text` 解析为结构化 `ParsedQuery`，再由程序执行 project group embedding 检索、location / consultation_time 硬过滤、历史样本展开和推荐清单项聚合。
+示例：用户只输入口语化维修需求，系统调用本地 LLM 将 `--text` 解析为结构化 `ParsedQuery`，再由程序执行 project group 双路 embedding 检索、location / consultation_time 硬过滤、历史工程下样本展开和推荐清单项聚合。
 
 ```bash
 backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
@@ -180,10 +192,10 @@ outputs/cost_estimate_result.xlsx
 
 说明：
 
-- LLM 只负责解析 `semantic_query_text`、`quantity`、`unit`、`location_hint`、`time_range_type`，不参与价格估算，不生成 answer，不推荐清单。
+- LLM 只负责解析 `semantic_query_text`、`quantity`、`unit`、`location_hint`、`time_range_type`，不参与价格估算，不生成 answer，不推荐清单。`semantic_query_text` 与分类阶段 `project_name_text` 使用同一套工程语义抽取口径。
 - 程序会校验并归一化 LLM 输出；LLM 失败时回退为原始 `--text` 检索，不中断查询。
 - `location` 和 `consultation_time` 是结构化硬过滤条件，不参与 embedding；过滤后无结果时会输出空的 `recommend_items` 和 `matches`。
-- 主链路为“ParsedQuery → 双路 project group embedding 加权召回 → 展开 source_row_id 下清单样本 → 聚合 recommend_items”。
+- 主链路为“ParsedQuery → 双路 project group embedding 加权召回 → 展开 source_row_id 下清单样本 → 聚合 recommend_items”，不加一级分类过滤。
 - 查询召回只使用 LLM 解析出的单一 `semantic_query_text`，同时计算工程名称和工程明细两路 embedding 相似度；默认权重为 `--project-name-weight 0.85`、`--project-detail-weight 0.15`，权重和不为 1 时会自动归一化。
 - 如果解析出用户工程量且单位与推荐项 `unit_normalized` 一致，估算总价按“用户工程量 × 历史综合单价区间”计算；否则展示历史样本总价范围。
 - 查询阶段 embedding 模型固定使用 CPU，避免和 LM Studio 抢 GPU/显存。

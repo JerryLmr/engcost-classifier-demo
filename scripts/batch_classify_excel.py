@@ -17,6 +17,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 RESULT_HEADERS = [
     "工程名称",
+    "project_name_text",
     "catalog_id",
     "一级分类",
     "二级分类",
@@ -35,6 +36,8 @@ RESULT_HEADERS = [
     "consultation_time",
     "location",
 ]
+
+CLASSIFICATION_CACHE_VERSION = "classification_with_project_name_text_v1"
 
 EXCEL_SUFFIXES = {".xlsx", ".xlsm"}
 OCR_HEADERS = [
@@ -171,6 +174,7 @@ def _write_result_row(
 ) -> None:
     values = [
         result.get("project_name", ""),
+        result.get("project_name_text", ""),
         result.get("catalog_id", ""),
         result.get("category", ""),
         result.get("item", ""),
@@ -191,6 +195,25 @@ def _write_result_row(
     ]
     for column, value in enumerate(values, start=1):
         worksheet.cell(row=row, column=column, value=value)
+
+
+def _classification_cache_key(project_text: str) -> str:
+    return f"{CLASSIFICATION_CACHE_VERSION}:{project_text}"
+
+
+def _ensure_project_name_text(result: dict[str, object], project_text: str, path: Path, source_row: int) -> dict[str, object]:
+    project_name_text = _cell_text(result.get("project_name_text"))
+    if project_name_text:
+        return result
+
+    print(
+        f"[WARN] {path.name}:{source_row} classification result missing project_name_text; "
+        "fallback to original 工程名称",
+        flush=True,
+    )
+    updated = dict(result)
+    updated["project_name_text"] = project_text
+    return updated
 
 
 def classify_workbook(
@@ -232,8 +255,9 @@ def classify_workbook(
             output_rows += 1
             continue
 
-        if project_text in classification_cache:
-            result = classification_cache[project_text]
+        cache_key = _classification_cache_key(project_text)
+        if cache_key in classification_cache:
+            result = classification_cache[cache_key]
             cache_hit_count += 1
             print(f"[CACHE] {path.name}:{source_row} {project_text[:80]}", flush=True)
         else:
@@ -242,7 +266,8 @@ def classify_workbook(
             result = classify_project_func(project_text)
             if result.get("pipeline_status") == "llm_service_error":
                 raise RuntimeError(f"LLM 服务连接失败，已停止处理当前文件。失败行: {source_row}")
-            classification_cache[project_text] = result
+            result = _ensure_project_name_text(result, project_text, path, source_row)
+            classification_cache[cache_key] = result
             classify_call_count += 1
 
             print(

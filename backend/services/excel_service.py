@@ -9,6 +9,7 @@ from services.standard_classifier import classify_project_standard
 
 RESULT_HEADERS = [
     "工程名称",
+    "project_name_text",
     "catalog_id",
     "一级分类",
     "二级分类",
@@ -30,6 +31,7 @@ def _bool_text(value: object) -> str:
 def _write_result_row(worksheet, row: int, result: dict[str, object]) -> None:
     values = [
         result["project_name"],
+        result.get("project_name_text") or result["project_name"],
         result["catalog_id"],
         result["category"],
         result["item"],

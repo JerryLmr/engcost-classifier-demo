@@ -129,6 +129,7 @@ def selected_result(
         "termite_related": termite_related,
         "needs_review": decision.needs_review,
         "reason": "；".join(part for part in reason_parts if part),
+        "project_name_text": item_selection.project_name_text,
         "pipeline_status": "ok",
     }
 
@@ -137,6 +138,7 @@ def fallback_result(
     project_name: str,
     reason: str,
     *,
+    project_name_text: str = "",
     is_composite: bool = False,
     secondary_catalog_ids: Sequence[str] | None = None,
     is_emergency: bool = False,
@@ -166,5 +168,6 @@ def fallback_result(
         "termite_related": termite_related,
         "needs_review": True,
         "reason": reason,
+        "project_name_text": project_name_text,
         "pipeline_status": pipeline_status,
     }

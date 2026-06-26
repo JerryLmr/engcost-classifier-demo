@@ -49,6 +49,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "source_row_id": 2,
                     "item_row_id": "2-1",
                     "工程名称": "屋面漏水维修工程",
+                    "project_name_text": "屋面漏水维修",
                     "sub_project_id": "SP1",
                     "catalog_id": "CP-002-03",
                     "一级分类": "屋面",
@@ -76,6 +77,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "source_row_id": 3,
                     "item_row_id": "3-1",
                     "工程名称": "外墙维修工程",
+                    "project_name_text": "外墙维修",
                     "sub_project_id": "SP2",
                     "catalog_id": "CP-003-01",
                     "一级分类": "外墙面",
@@ -103,6 +105,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "source_row_id": 4,
                     "item_row_id": "4-1",
                     "工程名称": "管道维修工程",
+                    "project_name_text": "管道维修",
                     "sub_project_id": "SP3",
                     "catalog_id": "CF-015-04",
                     "一级分类": "给排水系统",
@@ -142,7 +145,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "标准对象": "共用部位",
                     "consultation_time": "2026-03-01",
                     "location": "浙江省嘉兴市",
-                    "project_name_text": "屋面漏水维修工程",
+                    "project_name_text": "屋面漏水维修",
                     "project_detail_text": "屋面卷材防水 3mm SBS",
                     "item_count": 1,
                 },
@@ -156,7 +159,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "标准对象": "共用部位",
                     "consultation_time": "2024-01-01",
                     "location": "浙江省杭州市",
-                    "project_name_text": "外墙维修工程",
+                    "project_name_text": "外墙维修",
                     "project_detail_text": "外墙防水",
                     "item_count": 1,
                 },
@@ -170,7 +173,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "标准对象": "共用设施设备",
                     "consultation_time": "2026-02-01",
                     "location": "浙江省嘉兴市",
-                    "project_name_text": "管道维修工程",
+                    "project_name_text": "管道维修",
                     "project_detail_text": "管道更换",
                     "item_count": 1,
                 },
@@ -223,12 +226,100 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertNotIn("group_text", project_groups.columns)
         roof = project_groups[project_groups["source_row_id"] == 2].iloc[0]
         self.assertEqual(roof["工程名称"], "屋面漏水维修工程")
-        self.assertEqual(roof["project_name_text"], "屋面漏水维修工程")
+        self.assertEqual(roof["project_name_text"], "屋面漏水维修")
         self.assertEqual(roof["catalog_id"], "CP-002-03")
         self.assertEqual(roof["item_count"], 2)
         self.assertIn("屋面卷材防水 3.0mm SBS 沥青防水卷材", roof["project_detail_text"])
         self.assertIn("防水层拆除 拆除原屋面防水层", roof["project_detail_text"])
         self.assertNotIn("屋面漏水维修工程", roof["project_detail_text"])
+
+    def test_build_project_groups_falls_back_when_project_name_text_empty(self):
+        samples = self.sample_frame()
+        samples.loc[samples["source_row_id"] == 2, "project_name_text"] = ""
+
+        project_groups = build_index.build_project_groups(samples)
+
+        roof = project_groups[project_groups["source_row_id"] == 2].iloc[0]
+        self.assertEqual(roof["工程名称"], "屋面漏水维修工程")
+        self.assertEqual(roof["project_name_text"], "屋面漏水维修工程")
+
+    def test_build_samples_propagates_project_name_text(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "classified.xlsx"
+            workbook = openpyxl.Workbook()
+            worksheet = workbook.active
+            headers = [
+                "file_name",
+                "工程名称",
+                "project_name_text",
+                "consultation_project_name",
+                "renovation_content",
+                "catalog_id",
+                "一级分类",
+                "二级分类",
+                "维修状态",
+                "标准对象",
+                "是否复合工程",
+                "复合目录",
+                "是否紧急维修",
+                "是否白蚁相关",
+                "是否建议复核",
+                "分类依据",
+                "consultation_time",
+                "location",
+                "sub_item_project_rows",
+            ]
+            worksheet.append(headers)
+            worksheet.append(
+                [
+                    "source.pdf",
+                    "嘉兴某小区12幢屋面渗漏维修工程",
+                    "屋面渗漏维修",
+                    "嘉兴某小区12幢屋面",
+                    "渗漏维修工程",
+                    "CP-002-03",
+                    "屋面",
+                    "防水层",
+                    "维修",
+                    "共用部位",
+                    "否",
+                    "",
+                    "否",
+                    "否",
+                    "否",
+                    "测试",
+                    "2026-01-01",
+                    "浙江省嘉兴市",
+                    '[{"seq": 1, "cost_item_name": "屋面卷材防水", "project_description": "3mm SBS", "unit": "平方米", "quantity": 10, "unit_price": 80}]',
+                ]
+            )
+            workbook.save(input_path)
+
+            samples, errors = build_samples_script.build_samples(input_path)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0]["工程名称"], "嘉兴某小区12幢屋面渗漏维修工程")
+        self.assertEqual(samples[0]["project_name_text"], "屋面渗漏维修")
+
+    def test_write_index_outputs_project_groups_debug_workbook(self):
+        samples = self.sample_frame()
+        project_groups = build_index.build_project_groups(samples)
+        embeddings = np.ones((len(project_groups), 2), dtype=np.float32)
+        meta = build_index.build_index_meta(Path("samples.xlsx"), "demo-model", len(samples), 2)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "index"
+            build_index.write_index(samples, project_groups, embeddings, embeddings, output_dir, meta)
+
+            debug_path = Path(tmpdir) / "cost_item_project_groups.xlsx"
+            self.assertTrue(debug_path.exists())
+            workbook = openpyxl.load_workbook(debug_path, data_only=True)
+            worksheet = workbook.active
+            headers = [worksheet.cell(row=1, column=column).value for column in range(1, worksheet.max_column + 1)]
+            workbook.close()
+
+        self.assertEqual(headers, build_index.PROJECT_GROUP_COLUMNS)
 
     def test_build_samples_validate_paths_requires_overwrite_for_existing_output(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -313,6 +404,15 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(parsed.unit, "m²")
         self.assertEqual(parsed.location, "浙江省嘉兴市")
         self.assertEqual((parsed.consultation_time_to - parsed.consultation_time_from).days, 365)
+
+    def test_query_prompt_uses_shared_semantic_extraction_rules(self):
+        prompt = query_estimate_llm.build_parse_query_prompt("屋面漏水，500平，参考嘉兴一年内")
+
+        self.assertIn("semantic_query_text", prompt)
+        self.assertIn("用于相似项目检索的工程语义文本", prompt)
+        self.assertIn("不要简单复制一级分类、二级分类、维修状态", prompt)
+        self.assertNotIn("project_query_text", prompt)
+        self.assertNotIn("detail_query_text", prompt)
 
     def test_parse_query_requirements_falls_back_on_llm_failure(self):
         with patch.object(query_estimate_llm, "request_llm_json", side_effect=query_estimate_llm.LLMServiceError("down")):
@@ -536,7 +636,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "project_name_score": 0.95,
                     "project_detail_score": 0.6,
                     "工程名称": "屋面漏水维修工程",
-                    "project_name_text": "屋面漏水维修工程",
+                    "project_name_text": "屋面漏水维修",
                     "project_detail_text": "屋面卷材防水 3mm SBS",
                 },
                 {
@@ -546,7 +646,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "project_name_score": 0.4,
                     "project_detail_score": 0.9,
                     "工程名称": "管道维修工程",
-                    "project_name_text": "管道维修工程",
+                    "project_name_text": "管道维修",
                     "project_detail_text": "管道更换",
                 },
             ]

@@ -13,6 +13,7 @@ from classifier.settings import (
     LMSTUDIO_MODEL,
     LMSTUDIO_RESPONSE_FORMAT,
 )
+from classifier.semantic_prompt import SEMANTIC_PROJECT_TEXT_RULES
 from classifier.standard_catalog_loader import OUT_OF_SCOPE_ID, StandardCatalogItem, get_standard_catalog_by_id
 
 
@@ -27,6 +28,7 @@ class ItemSelection:
     is_composite: bool
     needs_review: bool
     reason: str
+    project_name_text: str = ""
     invalid_after_retry: bool = False
 
 
@@ -237,13 +239,19 @@ catalog_id | 标准对象 | 一级分类 | 二级分类 | 可选状态
 12. reason 不超过 40 个汉字。
 13. 只输出 JSON，不要自然语言段落。
 
+同时抽取 project_name_text。project_name_text 是从原始工程名称中抽取出的“用于相似项目检索的工程语义文本”，不是分类理由，不是一级分类/二级分类/维修状态拼接，不要写成目录路径，不要补充工程名称中没有的信息。
+
+project_name_text 抽取规则：
+{SEMANTIC_PROJECT_TEXT_RULES}
+
 JSON 字段固定为：
 {{
   "catalog_id": "...",
   "secondary_catalog_ids": [],
   "is_composite": false,
   "needs_review": false,
-  "reason": "..."
+  "reason": "...",
+  "project_name_text": "..."
 }}
 """.strip()
 
@@ -329,6 +337,7 @@ def _validate_full_catalog_item_selection(content: Dict[str, Any]) -> ItemSelect
         is_composite=is_composite,
         needs_review=needs_review,
         reason=reason.strip() or "模型未提供目录选择依据",
+        project_name_text=str(content.get("project_name_text") or "").strip(),
     )
 
 
@@ -377,6 +386,7 @@ def llm_select_catalog_item_from_full_catalog(
         is_composite=False,
         needs_review=True,
         reason=reason,
+        project_name_text="",
         invalid_after_retry=True,
     )
 

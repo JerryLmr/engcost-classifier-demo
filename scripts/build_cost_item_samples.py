@@ -22,6 +22,7 @@ from classifier.unit_normalizer import normalize_unit  # noqa: E402
 PROJECT_HEADERS = [
     "file_name",
     "工程名称",
+    "project_name_text",
     "consultation_project_name",
     "renovation_content",
     "catalog_id",
@@ -44,6 +45,7 @@ SAMPLE_HEADERS = [
     "item_row_id",
     "file_name",
     "工程名称",
+    "project_name_text",
     "consultation_project_name",
     "renovation_content",
     "sub_project_id",
@@ -189,6 +191,7 @@ def raw_row_summary(row_values: dict[str, str]) -> str:
     summary = {
         "file_name": row_values.get("file_name", ""),
         "工程名称": row_values.get("工程名称", ""),
+        "project_name_text": row_values.get("project_name_text", ""),
         "consultation_project_name": row_values.get("consultation_project_name", ""),
         "renovation_content": row_values.get("renovation_content", ""),
         "catalog_id": row_values.get("catalog_id", ""),
@@ -334,8 +337,9 @@ def build_samples(input_path: Path) -> tuple[list[dict[str, Any]], list[dict[str
     worksheet = workbook.active
     header_map = load_header_map(worksheet)
 
-    if "sub_item_project_rows" not in header_map:
-        raise ValueError("输入 Excel 缺少 sub_item_project_rows 列")
+    missing_required = [header for header in ("sub_item_project_rows", "project_name_text") if header not in header_map]
+    if missing_required:
+        raise ValueError(f"输入 Excel 缺少必要列: {', '.join(missing_required)}")
 
     samples: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
