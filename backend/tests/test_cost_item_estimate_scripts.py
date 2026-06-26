@@ -379,18 +379,54 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         recommended = query_estimate_llm.aggregate_recommend_items(matches, parsed)
 
-        self.assertEqual(recommended["cost_item_name"].tolist()[:2], ["屋面卷材防水", "管道更换"])
+        self.assertEqual(recommended.columns.tolist(), query_estimate_llm.RECOMMENDED_ITEM_COLUMNS)
+        self.assertEqual(
+            recommended.columns.tolist(),
+            [
+                "序号",
+                "一级分类",
+                "二级分类",
+                "维修状态",
+                "清单项名称",
+                "项目特征/施工工艺",
+                "单位",
+                "样本数",
+                "历史工程量最小值",
+                "历史工程量中位数",
+                "历史工程量最大值",
+                "本次估算金额最小值",
+                "本次估算金额中位数",
+                "本次估算金额最大值",
+                "历史综合单价最小值",
+                "历史综合单价中位数",
+                "历史综合单价最大值",
+                "历史总价最小值",
+                "历史总价中位数",
+                "历史总价最大值",
+                "其中包含人工单价最小值",
+                "其中包含人工单价中位数",
+                "其中包含人工单价最大值",
+                "其中包含机械单价最小值",
+                "其中包含机械单价中位数",
+                "其中包含机械单价最大值",
+                "来源清单行",
+            ],
+        )
+        self.assertEqual(recommended["清单项名称"].tolist()[:2], ["屋面卷材防水", "管道更换"])
+        self.assertEqual(recommended.columns.get_loc("项目特征/施工工艺"), recommended.columns.get_loc("清单项名称") + 1)
+        self.assertEqual(recommended.columns.get_loc("单位"), recommended.columns.get_loc("项目特征/施工工艺") + 1)
+        self.assertNotIn("project_description", recommended.columns)
         roof = recommended.iloc[0]
-        self.assertEqual(roof["recommend_rank"], 1)
-        self.assertEqual(roof["sample_count"], 2)
-        self.assertEqual(roof["unit_price_min"], 80.0)
-        self.assertEqual(roof["unit_price_median"], 100.0)
-        self.assertEqual(roof["unit_price_max"], 120.0)
-        self.assertEqual(roof["estimated_total_median"], 50000.0)
-        self.assertEqual(roof["estimate_basis"], "按用户工程量 × 历史综合单价估算")
-        pipe = recommended[recommended["cost_item_name"] == "管道更换"].iloc[0]
-        self.assertEqual(pipe["estimated_total_median"], 3000.0)
-        self.assertEqual(pipe["estimate_basis"], "单位不一致，展示历史样本总价范围")
+        self.assertEqual(roof["序号"], 1)
+        self.assertEqual(roof["项目特征/施工工艺"], "3.0mm SBS 沥青防水卷材")
+        self.assertEqual(roof["样本数"], 2)
+        self.assertEqual(roof["历史综合单价最小值"], 80.0)
+        self.assertEqual(roof["历史综合单价中位数"], 100.0)
+        self.assertEqual(roof["历史综合单价最大值"], 120.0)
+        self.assertEqual(roof["本次估算金额中位数"], 50000.0)
+        pipe = recommended[recommended["清单项名称"] == "管道更换"].iloc[0]
+        self.assertEqual(pipe["本次估算金额中位数"], 3000.0)
+        self.assertEqual(pipe["来源清单行"], "4-1")
 
     def test_write_query_result_workbook_has_two_sheets_and_debug_toggle(self):
         samples = self.sample_frame()
@@ -406,7 +442,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             query_estimate_llm.write_query_result_workbook(output_path, recommended, matches, include_debug_text=False)
             workbook = openpyxl.load_workbook(output_path, data_only=True)
             self.assertEqual(workbook.sheetnames, ["recommend_items", "matches"])
+            recommend_headers = [
+                workbook["recommend_items"].cell(row=1, column=column).value
+                for column in range(1, workbook["recommend_items"].max_column + 1)
+            ]
             match_headers = [workbook["matches"].cell(row=1, column=column).value for column in range(1, workbook["matches"].max_column + 1)]
+            self.assertIn("项目特征/施工工艺", recommend_headers)
+            self.assertNotIn("project_description", recommend_headers)
             self.assertNotIn("工程名称", match_headers)
             self.assertNotIn("project_description", match_headers)
             self.assertNotIn("group_text", match_headers)
@@ -419,8 +461,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             workbook.close()
 
         self.assertIn("工程名称", debug_headers)
-        self.assertIn("project_description", debug_headers)
         self.assertIn("group_text", debug_headers)
+        self.assertNotIn("project_description", debug_headers)
 
     def test_legacy_query_entrypoint_removed_and_readme_points_to_official_script(self):
         legacy_name = "query_cost_" "item_estimate.py"

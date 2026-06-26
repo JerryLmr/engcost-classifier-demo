@@ -27,39 +27,33 @@ TIME_RANGE_DAYS = {
 }
 
 RECOMMENDED_ITEM_COLUMNS = [
-    "recommend_rank",
-    "cost_item_name",
-    "unit",
-    "unit_normalized",
-    "sample_count",
-    "catalog_id",
+    "序号",
     "一级分类",
     "二级分类",
     "维修状态",
-    "标准对象",
-    "是否复合工程",
-    "复合目录",
-    "quantity_min",
-    "quantity_median",
-    "quantity_max",
-    "unit_price_min",
-    "unit_price_median",
-    "unit_price_max",
-    "total_price_min",
-    "total_price_median",
-    "total_price_max",
-    "labor_unit_price_min",
-    "labor_unit_price_median",
-    "labor_unit_price_max",
-    "machinery_unit_price_min",
-    "machinery_unit_price_median",
-    "machinery_unit_price_max",
-    "estimated_total_min",
-    "estimated_total_median",
-    "estimated_total_max",
-    "estimate_basis",
-    "matched_source_row_ids",
-    "matched_item_row_ids",
+    "清单项名称",
+    "项目特征/施工工艺",
+    "单位",
+    "样本数",
+    "历史工程量最小值",
+    "历史工程量中位数",
+    "历史工程量最大值",
+    "本次估算金额最小值",
+    "本次估算金额中位数",
+    "本次估算金额最大值",
+    "历史综合单价最小值",
+    "历史综合单价中位数",
+    "历史综合单价最大值",
+    "历史总价最小值",
+    "历史总价中位数",
+    "历史总价最大值",
+    "其中包含人工单价最小值",
+    "其中包含人工单价中位数",
+    "其中包含人工单价最大值",
+    "其中包含机械单价最小值",
+    "其中包含机械单价中位数",
+    "其中包含机械单价最大值",
+    "来源清单行",
 ]
 
 MATCH_COLUMNS = [
@@ -89,29 +83,28 @@ MATCH_COLUMNS = [
 
 DEBUG_MATCH_COLUMNS = [
     "工程名称",
-    "project_description",
     "group_text",
 ]
 
 PRICE_COLUMNS = {
-    "quantity_min",
-    "quantity_median",
-    "quantity_max",
-    "unit_price_min",
-    "unit_price_median",
-    "unit_price_max",
-    "total_price_min",
-    "total_price_median",
-    "total_price_max",
-    "labor_unit_price_min",
-    "labor_unit_price_median",
-    "labor_unit_price_max",
-    "machinery_unit_price_min",
-    "machinery_unit_price_median",
-    "machinery_unit_price_max",
-    "estimated_total_min",
-    "estimated_total_median",
-    "estimated_total_max",
+    "历史工程量最小值",
+    "历史工程量中位数",
+    "历史工程量最大值",
+    "本次估算金额最小值",
+    "本次估算金额中位数",
+    "本次估算金额最大值",
+    "历史综合单价最小值",
+    "历史综合单价中位数",
+    "历史综合单价最大值",
+    "历史总价最小值",
+    "历史总价中位数",
+    "历史总价最大值",
+    "其中包含人工单价最小值",
+    "其中包含人工单价中位数",
+    "其中包含人工单价最大值",
+    "其中包含机械单价最小值",
+    "其中包含机械单价中位数",
+    "其中包含机械单价最大值",
     "project_score",
     "quantity",
     "unit_price",
@@ -538,59 +531,58 @@ def aggregate_recommend_items(matches: pd.DataFrame, parsed: ParsedQuery) -> pd.
 
     for _signature, group in matches.groupby(group_columns, sort=False, dropna=False):
         first = group.iloc[0]
+        unit = first_non_empty(group["unit"]) if "unit" in group.columns else ""
+        unit_normalized = cell_text(first.get("unit_normalized"))
         row: dict[str, Any] = {
-            "cost_item_name": cell_text(first.get("cost_item_name")),
-            "unit": first_non_empty(group["unit"]) if "unit" in group.columns else "",
-            "unit_normalized": cell_text(first.get("unit_normalized")),
-            "sample_count": int(len(group)),
+            "清单项名称": cell_text(first.get("cost_item_name")),
+            "项目特征/施工工艺": first_non_empty(group["project_description"]) if "project_description" in group.columns else "",
+            "单位": unit or unit_normalized,
+            "样本数": int(len(group)),
             "catalog_id": cell_text(first.get("catalog_id")),
             "一级分类": cell_text(first.get("一级分类")),
             "二级分类": cell_text(first.get("二级分类")),
             "维修状态": cell_text(first.get("维修状态")),
-            "标准对象": cell_text(first.get("标准对象")),
-            "是否复合工程": cell_text(first.get("是否复合工程")),
-            "复合目录": cell_text(first.get("复合目录")),
-            "matched_source_row_ids": ordered_join(group["source_row_id"]),
-            "matched_item_row_ids": ordered_join(group["item_row_id"]) if "item_row_id" in group.columns else "",
+            "unit_normalized": unit_normalized,
+            "来源清单行": ordered_join(group["item_row_id"]) if "item_row_id" in group.columns else "",
             "max_project_score": float(pd.to_numeric(group["project_score"], errors="coerce").max()),
         }
-        for column in [
-            "quantity",
-            "unit_price",
-            "total_price",
-            "labor_unit_price",
-            "machinery_unit_price",
-        ]:
-            row.update(range_stats(group, column))
+        row.update(rename_stats(range_stats(group, "quantity"), "quantity", "历史工程量"))
+        row.update(rename_stats(range_stats(group, "unit_price"), "unit_price", "历史综合单价"))
+        row.update(rename_stats(range_stats(group, "total_price"), "total_price", "历史总价"))
+        row.update(rename_stats(range_stats(group, "labor_unit_price"), "labor_unit_price", "其中包含人工单价"))
+        row.update(rename_stats(range_stats(group, "machinery_unit_price"), "machinery_unit_price", "其中包含机械单价"))
 
         if parsed.quantity is not None and parsed.unit and row["unit_normalized"] == parsed.unit:
-            row["estimated_total_min"] = multiply_or_none(row.get("unit_price_min"), parsed.quantity)
-            row["estimated_total_median"] = multiply_or_none(row.get("unit_price_median"), parsed.quantity)
-            row["estimated_total_max"] = multiply_or_none(row.get("unit_price_max"), parsed.quantity)
-            row["estimate_basis"] = "按用户工程量 × 历史综合单价估算"
+            row["本次估算金额最小值"] = multiply_or_none(row.get("历史综合单价最小值"), parsed.quantity)
+            row["本次估算金额中位数"] = multiply_or_none(row.get("历史综合单价中位数"), parsed.quantity)
+            row["本次估算金额最大值"] = multiply_or_none(row.get("历史综合单价最大值"), parsed.quantity)
         else:
-            row["estimated_total_min"] = row.get("total_price_min")
-            row["estimated_total_median"] = row.get("total_price_median")
-            row["estimated_total_max"] = row.get("total_price_max")
-            if parsed.quantity is not None and parsed.unit:
-                row["estimate_basis"] = "单位不一致，展示历史样本总价范围"
-            else:
-                row["estimate_basis"] = "未识别用户工程量，展示历史样本总价范围"
+            row["本次估算金额最小值"] = row.get("历史总价最小值")
+            row["本次估算金额中位数"] = row.get("历史总价中位数")
+            row["本次估算金额最大值"] = row.get("历史总价最大值")
         rows.append(row)
 
     recommended = pd.DataFrame(rows)
-    recommended["_has_unit_price"] = recommended["unit_price_median"].notna()
-    recommended["_has_total_price"] = recommended["total_price_median"].notna()
+    recommended["_has_unit_price"] = recommended["历史综合单价中位数"].notna()
+    recommended["_has_total_price"] = recommended["历史总价中位数"].notna()
     recommended = recommended.sort_values(
-        ["max_project_score", "sample_count", "_has_unit_price", "_has_total_price"],
+        ["max_project_score", "样本数", "_has_unit_price", "_has_total_price"],
         ascending=[False, False, False, False],
-    ).drop(columns=["max_project_score", "_has_unit_price", "_has_total_price"])
-    recommended.insert(0, "recommend_rank", range(1, len(recommended) + 1))
+    ).drop(columns=["max_project_score", "_has_unit_price", "_has_total_price", "catalog_id", "unit_normalized"])
+    recommended.insert(0, "序号", range(1, len(recommended) + 1))
 
     for column in RECOMMENDED_ITEM_COLUMNS:
         if column not in recommended.columns:
             recommended[column] = None
     return recommended[RECOMMENDED_ITEM_COLUMNS]
+
+
+def rename_stats(stats: dict[str, float | None], source_prefix: str, target_prefix: str) -> dict[str, float | None]:
+    return {
+        f"{target_prefix}最小值": stats.get(f"{source_prefix}_min"),
+        f"{target_prefix}中位数": stats.get(f"{source_prefix}_median"),
+        f"{target_prefix}最大值": stats.get(f"{source_prefix}_max"),
+    }
 
 
 def multiply_or_none(value: Any, quantity: float) -> float | None:
@@ -641,7 +633,7 @@ def apply_workbook_style(path: Path) -> None:
         for index, header in enumerate(headers, start=1):
             column_letter = worksheet.cell(row=1, column=index).column_letter
             width = 16
-            if header in {"cost_item_name", "estimate_basis", "matched_source_row_ids", "matched_item_row_ids"}:
+            if header in {"清单项名称", "项目特征/施工工艺", "来源清单行"}:
                 width = 28
             if header in DEBUG_MATCH_COLUMNS:
                 width = 36
