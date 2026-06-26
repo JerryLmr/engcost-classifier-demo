@@ -104,6 +104,19 @@ def make_ocr_workbook(rows: list[tuple[object, object, object, object, object, o
     return output.getvalue()
 
 
+def make_workbook_with_headers(headers: list[str], rows: list[list[object]]) -> bytes:
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    for column, header in enumerate(headers, start=1):
+        worksheet.cell(row=1, column=column, value=header)
+    for row_index, values in enumerate(rows, start=2):
+        for column, value in enumerate(values, start=1):
+            worksheet.cell(row=row_index, column=column, value=value)
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
 def make_classified_workbook(path: Path) -> None:
     workbook = openpyxl.Workbook()
     worksheet = workbook.active
@@ -674,6 +687,179 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             second_sheet = second_workbook.active
             self.assertEqual(second_sheet.cell(row=2, column=1).value, "小区屋面 防水维修")
             self.assertEqual(second_sheet.cell(row=2, column=14).value, "file-c.pdf")
+
+    def test_filter_required_ocr_rows_cli_splits_cleaned_and_removed_rows(self):
+        script = ROOT / "scripts" / "filter_required_ocr_rows.py"
+        headers = [
+            "row_label",
+            "file_name",
+            "consultation_project_name",
+            "consultation_time",
+            "renovation_content",
+            "sub_item_project_rows",
+            "location",
+            "note",
+        ]
+        rows = [
+            ["ok", "file-a.pdf", "屋面工程", "2026-01-01", "防水维修", "[]", "浙江省嘉兴市", "keep"],
+            ["missing-two", "file-b.pdf", "", "2026-01-02", "外墙维修", None, "浙江省嘉兴市", "remove"],
+            ["missing-two-more", " \n\t ", "电梯工程", "NaN", "钢丝绳更换", "[]", "浙江省嘉兴市", "remove"],
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / "ocr.xlsx"
+            clean_output = tmp_path / "cleaned.xlsx"
+            removed_output = tmp_path / "removed.xlsx"
+            input_file.write_bytes(make_workbook_with_headers(headers, rows))
+
+            run = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    str(input_file),
+                    "--clean-output",
+                    str(clean_output),
+                    "--removed-output",
+                    str(removed_output),
+                    "--overwrite",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertIn("[DONE] input rows: 3", run.stdout)
+            self.assertIn("[DONE] cleaned rows: 1", run.stdout)
+            self.assertIn("[DONE] removed rows: 2", run.stdout)
+            self.assertIn("  file_name: 1", run.stdout)
+            self.assertIn("  consultation_project_name: 1", run.stdout)
+            self.assertIn("  consultation_time: 1", run.stdout)
+            self.assertIn("  renovation_content: 0", run.stdout)
+            self.assertIn("  sub_item_project_rows: 1", run.stdout)
+            self.assertIn("  location: 0", run.stdout)
+
+            clean_workbook = openpyxl.load_workbook(clean_output, data_only=False)
+            clean_sheet = clean_workbook.active
+            clean_headers = [clean_sheet.cell(row=1, column=i).value for i in range(1, clean_sheet.max_column + 1)]
+            self.assertEqual(clean_headers, headers)
+            self.assertEqual(clean_sheet.max_row, 2)
+            self.assertEqual([clean_sheet.cell(row=2, column=i).value for i in range(1, 9)], rows[0])
+
+            removed_workbook = openpyxl.load_workbook(removed_output, data_only=False)
+            removed_sheet = removed_workbook.active
+            removed_headers = [
+                removed_sheet.cell(row=1, column=i).value for i in range(1, removed_sheet.max_column + 1)
+            ]
+            self.assertEqual(
+                removed_headers,
+                ["source_row_id", "missing_required_fields", "removed_reason"] + headers,
+            )
+            self.assertEqual(removed_sheet.max_row, 3)
+            self.assertEqual(removed_sheet.cell(row=2, column=1).value, 3)
+            self.assertEqual(
+                removed_sheet.cell(row=2, column=2).value,
+                "consultation_project_name,sub_item_project_rows",
+            )
+            self.assertEqual(removed_sheet.cell(row=2, column=3).value, "缺少必填 OCR 字段")
+            self.assertEqual(removed_sheet.cell(row=2, column=4).value, "missing-two")
+            self.assertEqual(removed_sheet.cell(row=3, column=1).value, 4)
+            self.assertEqual(removed_sheet.cell(row=3, column=2).value, "file_name,consultation_time")
+            self.assertEqual(removed_sheet.cell(row=3, column=4).value, "missing-two-more")
+
+    def test_filter_required_ocr_rows_empty_value_detection(self):
+        script = ROOT / "scripts" / "filter_required_ocr_rows.py"
+        spec = importlib.util.spec_from_file_location("filter_required_ocr_rows", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        empty_values = [None, "", "   ", "\n\t ", "null", "None", "nan", "NaN"]
+        for value in empty_values:
+            with self.subTest(value=value):
+                self.assertTrue(module.is_empty_required_value(value))
+        self.assertFalse(module.is_empty_required_value("0"))
+        self.assertFalse(module.is_empty_required_value(0))
+
+    def test_filter_required_ocr_rows_missing_headers_fail_without_outputs(self):
+        script = ROOT / "scripts" / "filter_required_ocr_rows.py"
+        headers = [
+            "file_name",
+            "consultation_project_name",
+            "consultation_time",
+            "renovation_content",
+            "sub_item_project_rows",
+        ]
+        rows = [["file-a.pdf", "屋面工程", "2026-01-01", "防水维修", "[]"]]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / "ocr.xlsx"
+            clean_output = tmp_path / "cleaned.xlsx"
+            removed_output = tmp_path / "removed.xlsx"
+            input_file.write_bytes(make_workbook_with_headers(headers, rows))
+
+            run = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    str(input_file),
+                    "--clean-output",
+                    str(clean_output),
+                    "--removed-output",
+                    str(removed_output),
+                    "--overwrite",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(run.returncode, 1)
+            self.assertIn("[ERROR] 输入 Excel 缺少必要列: location", run.stdout)
+            self.assertFalse(clean_output.exists())
+            self.assertFalse(removed_output.exists())
+
+    def test_filter_required_ocr_rows_requires_overwrite_for_existing_outputs(self):
+        script = ROOT / "scripts" / "filter_required_ocr_rows.py"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / "ocr.xlsx"
+            clean_output = tmp_path / "cleaned.xlsx"
+            removed_output = tmp_path / "removed.xlsx"
+            input_file.write_bytes(
+                make_ocr_workbook([("file-a.pdf", "屋面工程", "2026-01-01", "防水维修", "[]", "浙江省嘉兴市")])
+            )
+            clean_output.write_text("existing", encoding="utf-8")
+
+            run = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    str(input_file),
+                    "--clean-output",
+                    str(clean_output),
+                    "--removed-output",
+                    str(removed_output),
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(run.returncode, 1)
+            self.assertIn("[ERROR] 输出已存在，请加 --overwrite 或更换输出路径", run.stdout)
+            self.assertEqual(clean_output.read_text(encoding="utf-8"), "existing")
+            self.assertFalse(removed_output.exists())
 
     def test_batch_script_importable(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"

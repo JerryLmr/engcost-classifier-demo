@@ -4,7 +4,7 @@
 
 当前流程不用于判断“异常 / 违规 / 不合理”，只输出相似样本和参考区间。
 
-### 1. 输入文件
+### 1. 过滤 OCR 必填字段
 
 OCR 原始结果放在：
 
@@ -22,6 +22,25 @@ renovation_content
 sub_item_project_rows
 location
 ```
+
+先过滤缺少必填 OCR 字段的行：
+
+```bash
+backend/.venv/bin/python scripts/filter_required_ocr_rows.py \
+  excel_inputs/audit_ocr_export.xlsx \
+  --clean-output cleaned_inputs/ocr_required_cleaned.xlsx \
+  --removed-output outputs/ocr_required_removed.xlsx \
+  --overwrite
+```
+
+输出文件：
+
+```bash
+cleaned_inputs/ocr_required_cleaned.xlsx
+outputs/ocr_required_removed.xlsx
+```
+
+`cleaned_inputs/ocr_required_cleaned.xlsx` 只包含 6 个必填字段都不为空的行，后续 `batch_classify` 只处理该文件。`outputs/ocr_required_removed.xlsx` 保留被移除行和缺失字段原因，便于回查原始 OCR 数据。
 
 其中系统会自动生成：
 
@@ -43,7 +62,7 @@ curl --max-time 3 "$LMSTUDIO_BASE_URL/models"
 
 ```bash
 backend/.venv/bin/python scripts/batch_classify_excel.py \
-  excel_inputs/audit_ocr_export.xlsx \
+  cleaned_inputs/ocr_required_cleaned.xlsx \
   -o excel_outputs/classified_projects.xlsx \
   --overwrite
 ```
