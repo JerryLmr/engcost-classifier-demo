@@ -3,6 +3,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,8 @@ PROJECT_HEADERS = [
     "是否白蚁相关",
     "是否建议复核",
     "分类依据",
+    "consultation_time",
+    "location",
 ]
 
 SAMPLE_HEADERS = [
@@ -69,6 +72,8 @@ SAMPLE_HEADERS = [
     "machinery_unit_price",
     "item_similarity_text",
     "item_context_text",
+    "consultation_time",
+    "location",
     "source_json",
 ]
 
@@ -114,6 +119,32 @@ def cell_text(value: Any) -> str:
     return str(value).strip()
 
 
+DATE_TEXT_RE = re.compile(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+0{1,2}:0{2}:0{2}(?:\.0+)?)?$")
+
+
+def consultation_time_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+
+    text = str(value).strip()
+    if not text:
+        return ""
+
+    match = DATE_TEXT_RE.fullmatch(text)
+    if not match:
+        return text
+
+    year, month, day = (int(part) for part in match.groups())
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return text
+
+
 def load_header_map(worksheet) -> dict[str, int]:
     header_map: dict[str, int] = {}
     for column in range(1, worksheet.max_column + 1):
@@ -132,6 +163,13 @@ def get_cell(worksheet, header_map: dict[str, int], row: int, header: str) -> An
 
 def get_text(worksheet, header_map: dict[str, int], row: int, header: str) -> str:
     return cell_text(get_cell(worksheet, header_map, row, header))
+
+
+def get_project_header_text(worksheet, header_map: dict[str, int], row: int, header: str) -> str:
+    value = get_cell(worksheet, header_map, row, header)
+    if header == "consultation_time":
+        return consultation_time_text(value)
+    return cell_text(value)
 
 
 def build_project_name(project_name: str, consultation_project_name: str, renovation_content: str) -> str:
@@ -305,7 +343,7 @@ def build_samples(input_path: Path) -> tuple[list[dict[str, Any]], list[dict[str
     for source_row_id in range(2, worksheet.max_row + 1):
         raw_sub_item_rows = get_cell(worksheet, header_map, source_row_id, "sub_item_project_rows")
         row_values = {
-            header: get_text(worksheet, header_map, source_row_id, header)
+            header: get_project_header_text(worksheet, header_map, source_row_id, header)
             for header in PROJECT_HEADERS
         }
         row_values["工程名称"] = build_project_name(

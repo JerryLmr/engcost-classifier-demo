@@ -99,6 +99,8 @@ PROJECT_GROUP_COLUMNS = [
     "二级分类",
     "维修状态",
     "标准对象",
+    "consultation_time",
+    "location",
     "group_text",
     "item_count",
 ]
@@ -138,6 +140,8 @@ def build_project_groups(samples: pd.DataFrame) -> pd.DataFrame:
                 "二级分类": safe_text(first.get("二级分类")),
                 "维修状态": safe_text(first.get("维修状态")),
                 "标准对象": safe_text(first.get("标准对象")),
+                "consultation_time": safe_text(first.get("consultation_time")),
+                "location": safe_text(first.get("location")),
                 "group_text": join_parts([project_text, " ".join(item_summaries)], " "),
                 "item_count": int(len(group)),
             }

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import io
+import re
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 import openpyxl
@@ -30,14 +32,18 @@ RESULT_HEADERS = [
     "consultation_project_name",
     "renovation_content",
     "sub_item_project_rows",
+    "consultation_time",
+    "location",
 ]
 
 EXCEL_SUFFIXES = {".xlsx", ".xlsm"}
 OCR_HEADERS = [
     "file_name",
     "consultation_project_name",
+    "consultation_time",
     "renovation_content",
     "sub_item_project_rows",
+    "location",
 ]
 
 
@@ -85,6 +91,32 @@ def _cell_text(value: object) -> str:
     return str(value).strip()
 
 
+_DATE_TEXT_RE = re.compile(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+0{1,2}:0{2}:0{2}(?:\.0+)?)?$")
+
+
+def _consultation_time_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+
+    text = str(value).strip()
+    if not text:
+        return ""
+
+    match = _DATE_TEXT_RE.fullmatch(text)
+    if not match:
+        return text
+
+    year, month, day = (int(part) for part in match.groups())
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return text
+
+
 def _load_header_map(worksheet) -> dict[str, int]:
     header_map: dict[str, int] = {}
     for column in range(1, worksheet.max_column + 1):
@@ -105,41 +137,30 @@ def _get_text(worksheet, header_map: dict[str, int], row: int, header: str) -> s
     return _cell_text(_get_cell(worksheet, header_map, row, header))
 
 
-def _build_project_name(project_name: object, consultation_project_name: object, renovation_content: object) -> str:
-    existing_project_name = _cell_text(project_name)
-    if existing_project_name:
-        return existing_project_name
+def _build_project_name(consultation_project_name: object, renovation_content: object) -> str:
     return " ".join(
         part for part in [_cell_text(consultation_project_name), _cell_text(renovation_content)] if part
     ).strip()
 
 
-def _detect_project_name_column(header_map: dict[str, int]) -> int | None:
-    if "工程名称" in header_map:
-        return header_map["工程名称"]
-    return None
-
-
-def _validate_input_headers(header_map: dict[str, int], first_header: object) -> int | None:
-    project_name_column = _detect_project_name_column(header_map)
-    if project_name_column:
-        return project_name_column
-
+def _validate_input_headers(header_map: dict[str, int], first_header: object) -> None:
     missing_ocr_headers = [header for header in OCR_HEADERS if header not in header_map]
     if not missing_ocr_headers:
-        return None
+        return
 
     if first_header is None or str(first_header).strip() == "":
         raise ValueError("第一列表头不能为空")
     raise ValueError(
-        "输入 Excel 缺少 工程名称 列；若使用 OCR 原始表，必须包含字段: "
+        "新版 OCR 输入 Excel 必须包含字段: "
         + ", ".join(OCR_HEADERS)
         + f"。当前缺少: {', '.join(missing_ocr_headers)}"
     )
 
 
 def _read_ocr_values(worksheet, header_map: dict[str, int], row: int) -> dict[str, object]:
-    return {header: _get_cell(worksheet, header_map, row, header) for header in OCR_HEADERS}
+    values = {header: _get_cell(worksheet, header_map, row, header) for header in OCR_HEADERS}
+    values["consultation_time"] = _consultation_time_text(values.get("consultation_time"))
+    return values
 
 
 def _write_result_row(
@@ -165,6 +186,8 @@ def _write_result_row(
         ocr_values.get("consultation_project_name"),
         ocr_values.get("renovation_content"),
         ocr_values.get("sub_item_project_rows"),
+        ocr_values.get("consultation_time"),
+        ocr_values.get("location"),
     ]
     for column, value in enumerate(values, start=1):
         worksheet.cell(row=row, column=column, value=value)
@@ -181,7 +204,7 @@ def classify_workbook(
 
     first_header = source_sheet.cell(row=1, column=1).value
     header_map = _load_header_map(source_sheet)
-    project_name_column = _validate_input_headers(header_map, first_header)
+    _validate_input_headers(header_map, first_header)
 
     output_workbook = openpyxl.Workbook()
     output_sheet = output_workbook.active
@@ -197,15 +220,10 @@ def classify_workbook(
     output_row = 2
     for source_row in range(2, source_sheet.max_row + 1):
         ocr_values = _read_ocr_values(source_sheet, header_map, source_row)
-        if project_name_column:
-            project_name = source_sheet.cell(row=source_row, column=project_name_column).value
-            project_text = _cell_text(project_name)
-        else:
-            project_text = _build_project_name(
-                None,
-                ocr_values.get("consultation_project_name"),
-                ocr_values.get("renovation_content"),
-            )
+        project_text = _build_project_name(
+            ocr_values.get("consultation_project_name"),
+            ocr_values.get("renovation_content"),
+        )
         if not project_text:
             empty_project_name_rows += 1
             print(f"[WARN] {path.name}:{source_row} 工程名称为空，保留原始行但跳过分类", flush=True)

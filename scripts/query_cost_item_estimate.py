@@ -17,6 +17,8 @@ MATCH_COLUMNS = [
     "source_row_id",
     "item_row_id",
     "工程名称",
+    "consultation_time",
+    "location",
     "sub_project_id",
     "catalog_id",
     "一级分类",
@@ -42,6 +44,8 @@ SUMMARY_COLUMNS = [
     "context",
     "unit",
     "catalog_id",
+    "consultation_time",
+    "location",
     "quantity",
     "top_k",
     "matched_count",
@@ -78,6 +82,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--context", default="", help="工程上下文文本")
     parser.add_argument("--unit", default="", help="单位，优先按 unit_normalized 过滤")
     parser.add_argument("--catalog-id", default="", help="标准目录 id，优先按 catalog_id 过滤")
+    parser.add_argument("--consultation-time", default="", help="咨询时间，按 consultation_time 精确过滤")
+    parser.add_argument("--location", default="", help="地点，按 location 精确过滤")
     parser.add_argument("--quantity", type=float, default=None, help="估算数量")
     parser.add_argument("--top-k", type=int, default=10, help="输出相似样本数量")
     parser.add_argument("--output", default="", help="可选 xlsx 输出路径")
@@ -172,6 +178,8 @@ def build_candidate_mask(
     samples: pd.DataFrame,
     unit: str,
     catalog_id: str,
+    consultation_time: str,
+    location: str,
     min_candidates: int,
 ) -> tuple[np.ndarray, list[str]]:
     notes: list[str] = []
@@ -203,6 +211,21 @@ def build_candidate_mask(
             candidate_mask = current_pool
 
         mask = candidate_mask
+
+    for column, value, label in [
+        ("consultation_time", consultation_time, "consultation_time"),
+        ("location", location, "location"),
+    ]:
+        if not value:
+            continue
+        if column not in samples.columns:
+            notes.append(f"{label} 过滤字段缺失，未匹配到样本")
+            mask &= np.zeros(len(samples), dtype=bool)
+            continue
+        exact_mask = (safe_text_series(samples, column) == value).to_numpy()
+        mask &= exact_mask
+        if not mask.any():
+            notes.append(f"{label} 过滤无匹配")
 
     return mask, notes
 
@@ -275,6 +298,8 @@ def summarize_price_ranges(
     context: str,
     unit: str,
     catalog_id: str,
+    consultation_time: str,
+    location: str,
     quantity: float | None,
     top_k: int,
     filter_notes: list[str],
@@ -292,6 +317,8 @@ def summarize_price_ranges(
         "context": context,
         "unit": unit,
         "catalog_id": catalog_id,
+        "consultation_time": consultation_time,
+        "location": location,
         "quantity": quantity,
         "top_k": top_k,
         "matched_count": len(matches),
@@ -360,6 +387,8 @@ def run_query(
     context: str,
     unit: str,
     catalog_id: str,
+    consultation_time: str,
+    location: str,
     quantity: float | None,
     top_k: int,
     output: Path | None,
@@ -376,7 +405,14 @@ def run_query(
         context_weight,
         has_context,
     )
-    candidate_mask, filter_notes = build_candidate_mask(samples, unit, catalog_id, min_candidates)
+    candidate_mask, filter_notes = build_candidate_mask(
+        samples,
+        unit,
+        catalog_id,
+        consultation_time,
+        location,
+        min_candidates,
+    )
     filter_notes = weight_notes + filter_notes
 
     query_embedding = encode_query(model, query)
@@ -398,6 +434,8 @@ def run_query(
         context=context,
         unit=unit,
         catalog_id=catalog_id,
+        consultation_time=consultation_time,
+        location=location,
         quantity=quantity,
         top_k=top_k,
         filter_notes=filter_notes,
@@ -422,6 +460,8 @@ def main() -> int:
             context=args.context,
             unit=args.unit,
             catalog_id=args.catalog_id,
+            consultation_time=args.consultation_time,
+            location=args.location,
             quantity=args.quantity,
             top_k=args.top_k,
             output=output_path,

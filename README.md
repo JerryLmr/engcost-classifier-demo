@@ -12,13 +12,15 @@ OCR 原始结果放在：
 excel_inputs/audit_ocr_export.xlsx
 ```
 
-输入 Excel 需要包含 4 列：
+输入 Excel 需要包含 6 列：
 
 ```text
 file_name
 consultation_project_name
+consultation_time
 renovation_content
 sub_item_project_rows
+location
 ```
 
 其中系统会自动生成：
@@ -71,6 +73,8 @@ file_name
 consultation_project_name
 renovation_content
 sub_item_project_rows
+consultation_time
+location
 ```
 
 ### 3. 展开清单级样本
@@ -115,6 +119,8 @@ labor_unit_price
 machinery_unit_price
 item_similarity_text
 item_context_text
+consultation_time
+location
 ```
 
 ### 4. 构建 embedding 索引
@@ -194,7 +200,6 @@ outputs/estimate_llm_roof_leak.xlsx
 - 如果用户输入含简单工程量，系统会对单位一致且有综合单价分位数的清单项做“综合单价 × 工程量”的 P25-P75 简单参考金额计算。
 - 单项金额估算可以展示，但当前不自动合计总价；部分清单项可能属于替代做法、重复候选或条件措施项，需要用户确认适用项后再汇总。
 - 后续多轮状态中，LLM 可用于理解用户补充信息和选择适用清单项；用户确认后，再由程序基于 selected_items 计算合计参考金额。
-
 
 ### 6. 文件提交说明
 
