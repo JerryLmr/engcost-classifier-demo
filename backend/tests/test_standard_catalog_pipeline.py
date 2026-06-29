@@ -813,8 +813,8 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertEqual(calls, ["A小区屋面维修工程-15幢-1101"])
             self.assertEqual(len(cache), 1)
             self.assertEqual(
-                module._classification_cache_key("屋面维修", "A小区屋面维修工程-15幢-1101"),
-                module._classification_cache_key("屋面维修", "A小区屋面维修工程-15幢-1102"),
+                module._classification_cache_key("A小区屋面维修工程", "屋面维修", "A小区屋面维修工程-15幢-1101"),
+                module._classification_cache_key("A小区屋面维修工程", "屋面维修", "A小区屋面维修工程-15幢-1102"),
             )
 
             workbook = openpyxl.load_workbook(output_file)
@@ -826,8 +826,8 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertEqual(worksheet.cell(row=3, column=1).value, "A小区屋面维修工程-15幢-1102")
             self.assertEqual(worksheet.cell(row=2, column=17).value, "A小区屋面维修工程-15幢-1101")
             self.assertEqual(worksheet.cell(row=3, column=17).value, "A小区屋面维修工程-15幢-1102")
-            self.assertEqual(worksheet.cell(row=2, column=21).value, "A小区屋面维修工程")
-            self.assertEqual(worksheet.cell(row=3, column=21).value, "A小区屋面维修工程")
+            self.assertEqual(worksheet.cell(row=2, column=21).value, "A小区屋面维修工程幢")
+            self.assertEqual(worksheet.cell(row=3, column=21).value, "A小区屋面维修工程幢")
 
     def test_batch_script_display_name_prefixes_consultation_when_needed(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"
@@ -884,7 +884,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             worksheet = workbook.active
             self.assertEqual(worksheet.cell(row=2, column=1).value, "A小区屋面维修工程-15幢-1101")
             self.assertEqual(worksheet.cell(row=2, column=17).value, "15幢-1101")
-            self.assertEqual(worksheet.cell(row=2, column=21).value, "A小区屋面维修工程")
+            self.assertEqual(worksheet.cell(row=2, column=21).value, "A小区屋面维修工程幢")
 
     def test_batch_script_uses_unit_project_name_for_cache_and_logs_only(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"
@@ -946,17 +946,18 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertEqual(calls, ["单项工程-安装"])
             log_text = text_stdout.getvalue()
             self.assertIn(unit_project_name, log_text)
-            self.assertIn(f"cache_subject={unit_project_name}", log_text)
+            cache_subject = "平湖滨水广场消火栓主管漏水泵房压力下降及更换消防报警主机项目单项工程安装"
+            self.assertIn(f"cache_subject={cache_subject}", log_text)
             self.assertNotIn("[ROW ] input.xlsx:2 单项工程-安装 cache_subject=单项工程-安装", log_text)
 
             workbook = openpyxl.load_workbook(output_file)
             worksheet = workbook.active
             self.assertEqual(worksheet.cell(row=2, column=1).value, unit_project_name)
             self.assertEqual(worksheet.cell(row=2, column=17).value, "单项工程-安装")
-            self.assertEqual(worksheet.cell(row=2, column=21).value, unit_project_name)
+            self.assertEqual(worksheet.cell(row=2, column=21).value, cache_subject)
             self.assertNotEqual(worksheet.cell(row=2, column=21).value, "单项工程-安装")
 
-    def test_batch_script_cache_subject_normalizes_position_numbers_conservatively(self):
+    def test_batch_script_cache_subject_uses_aggressive_cache_only_normalize(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
@@ -965,39 +966,62 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         spec.loader.exec_module(module)
 
         self.assertFalse(hasattr(module, "_display_project_name"))
+        self.assertFalse(hasattr(module, "normalize_sub_project_id_for_cache"))
         self.assertEqual(
-            module._classification_cache_key.__code__.co_varnames[:2],
-            ("renovation_content", "unit_project_name"),
+            module._classification_cache_key.__code__.co_varnames[:3],
+            ("consultation_project_name", "renovation_content", "unit_project_name"),
         )
         self.assertEqual(
-            module._classification_cache_subject("锦绣庄园屋面维修工程-15幢-1101"),
-            "锦绣庄园屋面维修工程",
+            module._classification_cache_subject("10KV高压柜维修"),
+            module.normalize_for_cache_subject("10KV高压柜维修"),
+        )
+        self.assertEqual(module.normalize_for_cache_subject("10KV高压柜维修"), "KV高压柜维修")
+        self.assertEqual(module.normalize_for_cache_subject("DN100消防管道"), "DN消防管道")
+        self.assertEqual(module.normalize_for_cache_subject(""), "")
+        self.assertEqual(module.normalize_for_cache_subject(None), "")
+        self.assertEqual(
+            module.normalize_for_cache_subject("平湖市香堤绿都消防防火门更新更换维修工程-1#"),
+            module.normalize_for_cache_subject("平湖市香堤绿都消防防火门更新更换维修工程-2#"),
         )
         self.assertEqual(
-            module._classification_cache_subject("锦绣庄园屋面维修工程-15幢-1001、1002"),
-            "锦绣庄园屋面维修工程",
+            module.normalize_for_cache_subject("平湖市香堤绿都消防防火门更新更换维修工程-10#"),
+            module.normalize_for_cache_subject("平湖市香堤绿都消防防火门更新更换维修工程-11#-11#"),
         )
         self.assertEqual(
-            module._classification_cache_subject("锦绣庄园屋面维修工程-15幢-1001,1002室"),
-            "锦绣庄园屋面维修工程",
+            module.normalize_for_cache_subject("东升南区屋顶墙面等漏水维修工程-25年第二批-1幢"),
+            "东升南区屋顶墙面等漏水维修工程年第二批幢",
         )
         self.assertEqual(
-            module._classification_cache_subject("锦绣庄园屋面维修工程-15幢-1001，1002室"),
-            "锦绣庄园屋面维修工程",
+            module.normalize_for_cache_subject("东升南区屋顶墙面等漏水维修工程-25年第二批-1幢"),
+            module.normalize_for_cache_subject("东升南区屋顶墙面等漏水维修工程-25年第二批-79幢"),
         )
-        self.assertEqual(module._classification_cache_subject("15幢屋面维修"), "屋面维修")
-        self.assertEqual(module._classification_cache_subject("16幢屋面维修"), "屋面维修")
+        self.assertEqual(
+            module.normalize_for_cache_subject("池海小区屋顶墙面等维修工程-26年第一批-28#"),
+            module.normalize_for_cache_subject("池海小区屋顶墙面等维修工程-26年第一批-31#-31-3-502"),
+        )
         self.assertNotEqual(
-            module._classification_cache_subject("15幢屋面维修"),
-            module._classification_cache_subject("16幢外墙维修"),
+            module.normalize_for_cache_subject("商城路面及地下室维保工程-路面"),
+            module.normalize_for_cache_subject("商城路面及地下室维保工程-地下室"),
         )
         self.assertEqual(
-            module._classification_cache_key("屋面维修", "锦绣庄园屋面维修工程-15幢-1101"),
-            module._classification_cache_key("屋面维修", "锦绣庄园屋面维修工程-15幢-1001、1002"),
+            module._classification_cache_key(
+                "锦绣庄园屋面维修工程",
+                "屋面维修",
+                "锦绣庄园屋面维修工程-15幢-1101",
+            ),
+            module._classification_cache_key(
+                "锦绣庄园屋面维修工程",
+                "屋面维修",
+                "锦绣庄园屋面维修工程-16幢-1102",
+            ),
         )
         self.assertNotEqual(
-            module._classification_cache_key("屋面维修", "15幢屋面维修"),
-            module._classification_cache_key("屋面维修", "16幢外墙维修"),
+            module._classification_cache_key("甲小区", "屋面维修", "锦绣庄园屋面维修工程-15幢-1101"),
+            module._classification_cache_key("乙小区", "屋面维修", "锦绣庄园屋面维修工程-15幢-1101"),
+        )
+        self.assertNotEqual(
+            module._classification_cache_key("锦绣庄园屋面维修工程", "屋面维修", "15幢屋面维修"),
+            module._classification_cache_key("锦绣庄园屋面维修工程", "外墙维修", "15幢屋面维修"),
         )
         self.assertEqual(
             module._build_unit_project_name(
@@ -1020,11 +1044,6 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             ),
             "平湖滨水广场消火栓主管漏水，泵房压力下降及更换消防报警主机项目-单项工程-安装",
         )
-        self.assertEqual(
-            module._classification_cache_subject("福泰花苑屋顶漏水维修工程-7幢"),
-            module._classification_cache_subject("福泰花苑屋顶漏水维修工程-8幢"),
-        )
-
         units = module._group_classification_units(
             {
                 "consultation_project_name": "福泰花苑屋顶漏水维修工程",
@@ -1046,6 +1065,166 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         )
         self.assertEqual(units[0]["unit_project_name"], "福泰花苑屋顶漏水维修工程-7幢")
         self.assertEqual(units[0]["ocr_values"]["unit_project_name"], "福泰花苑屋顶漏水维修工程-7幢")
+
+    def test_batch_script_aggressive_cache_hits_numbered_fire_door_groups_without_rewriting_fields(self):
+        script = ROOT / "scripts" / "batch_classify_excel.py"
+        spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        consultation_name = "平湖市香堤绿都消防防火门更新更换维修工程"
+        renovation_content = "防火门更新更换"
+        subjects = [
+            f"{consultation_name}-1#",
+            f"{consultation_name}-2#",
+            f"{consultation_name}-10#",
+            f"{consultation_name}-11#-11#",
+        ]
+        rows = [
+            {
+                "page_no": 1,
+                "seq": index,
+                "sub_project_id": subject,
+                "project_code": f"F{index}",
+                "project_name": f"防火门更换{index}",
+                "total_price": index * 100,
+            }
+            for index, subject in enumerate(subjects, start=1)
+        ]
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        def fake_classify(project_text: str, **kwargs) -> dict[str, object]:
+            calls.append((project_text, kwargs))
+            return {
+                "project_name": project_text,
+                "project_name_text": "防火门更新更换",
+                "catalog_id": "CF-010-00",
+                "category": "消防系统",
+                "item": "防火门",
+                "pipeline_status": "ok",
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / "fire-door.xlsx"
+            output_file = tmp_path / "output.xlsx"
+            input_file.write_bytes(
+                make_ocr_workbook(
+                    [
+                        (
+                            "fire-door.pdf",
+                            consultation_name,
+                            "2026-01-01",
+                            renovation_content,
+                            json.dumps(rows, ensure_ascii=False),
+                            "浙江省嘉兴市",
+                        )
+                    ]
+                )
+            )
+
+            text_stdout = StringIO()
+            with redirect_stdout(text_stdout):
+                stats = module.classify_workbook(input_file, output_file, fake_classify, {})
+
+            self.assertEqual(stats, (1, 3, 4, 0))
+            self.assertEqual([call[0] for call in calls], [subjects[0]])
+            self.assertEqual(calls[0][1]["consultation_project_name"], consultation_name)
+            self.assertEqual(calls[0][1]["item_summary"], ["防火门更换1"])
+
+            cache_subject = module.normalize_for_cache_subject(subjects[0])
+            self.assertEqual(cache_subject, consultation_name)
+            log_text = text_stdout.getvalue()
+            self.assertIn(f"[ROW ] fire-door.xlsx:2 {subjects[0]} cache_subject={cache_subject}", log_text)
+            self.assertIn(f"[CACHE] fire-door.xlsx:2 {subjects[1]} cache_subject={cache_subject}", log_text)
+            self.assertIn(f"[CACHE] fire-door.xlsx:2 {subjects[2]} cache_subject={cache_subject}", log_text)
+            self.assertIn(f"[CACHE] fire-door.xlsx:2 {subjects[3]} cache_subject={cache_subject}", log_text)
+
+            workbook = openpyxl.load_workbook(output_file)
+            worksheet = workbook.active
+            self.assertEqual(worksheet.max_row, 5)
+            for row_index, subject in enumerate(subjects, start=2):
+                self.assertEqual(worksheet.cell(row=row_index, column=1).value, subject)
+                self.assertEqual(worksheet.cell(row=row_index, column=15).value, consultation_name)
+                self.assertEqual(worksheet.cell(row=row_index, column=16).value, renovation_content)
+                self.assertEqual(worksheet.cell(row=row_index, column=17).value, subject)
+                self.assertEqual(worksheet.cell(row=row_index, column=21).value, cache_subject)
+                output_items = json.loads(worksheet.cell(row=row_index, column=18).value)
+                self.assertEqual(output_items[0]["sub_project_id"], subject)
+                self.assertEqual(output_items[0]["project_name"], f"防火门更换{row_index - 1}")
+
+    def test_batch_script_aggressive_cache_keeps_semantically_different_subjects_separate(self):
+        script = ROOT / "scripts" / "batch_classify_excel.py"
+        spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        consultation_name = "商城路面及地下室维保工程"
+        renovation_content = "维保工程"
+        rows = [
+            {
+                "page_no": 1,
+                "seq": 1,
+                "sub_project_id": "路面",
+                "project_code": "LM001",
+                "project_name": "路面维修",
+                "total_price": 100,
+            },
+            {
+                "page_no": 1,
+                "seq": 2,
+                "sub_project_id": "地下室",
+                "project_code": "DXS001",
+                "project_name": "地下室维修",
+                "total_price": 200,
+            },
+        ]
+        calls: list[str] = []
+
+        def fake_classify(project_text: str, **_kwargs) -> dict[str, object]:
+            calls.append(project_text)
+            return {
+                "project_name": project_text,
+                "project_name_text": project_text,
+                "catalog_id": f"ID-{len(calls)}",
+                "category": "一级",
+                "item": "二级",
+                "pipeline_status": "ok",
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / "mall.xlsx"
+            output_file = tmp_path / "output.xlsx"
+            input_file.write_bytes(
+                make_ocr_workbook(
+                    [
+                        (
+                            "mall.pdf",
+                            consultation_name,
+                            "2026-01-01",
+                            renovation_content,
+                            json.dumps(rows, ensure_ascii=False),
+                            "浙江省嘉兴市",
+                        )
+                    ]
+                )
+            )
+
+            stats = module.classify_workbook(input_file, output_file, fake_classify, {})
+
+            self.assertEqual(stats, (2, 0, 2, 0))
+            self.assertEqual(calls, ["路面", "地下室"])
+
+            workbook = openpyxl.load_workbook(output_file)
+            worksheet = workbook.active
+            self.assertEqual(worksheet.cell(row=2, column=1).value, f"{consultation_name}-路面")
+            self.assertEqual(worksheet.cell(row=3, column=1).value, f"{consultation_name}-地下室")
+            self.assertNotEqual(worksheet.cell(row=2, column=21).value, worksheet.cell(row=3, column=21).value)
 
     def test_batch_script_strips_only_trailing_group_project_codes(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"
@@ -1118,6 +1297,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         consultation_name = "龙漱湾悦居消防维修工程"
         polluted_sub_project_id = "单项工程-安装-10-2-37-12-3-60-10-1-60-10-1-62-10-2-39-9-1-25"
         unit_project_name = f"{consultation_name}-单项工程-安装"
+        cache_subject = "龙漱湾悦居消防维修工程单项工程安装"
         project_codes = ["10-2-39", "10-1-62", "10-1-60", "12-3-60", "9-1-25", "10-2-37"]
         rows = [
             {
@@ -1171,7 +1351,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
 
             log_text = text_stdout.getvalue()
             self.assertIn(
-                f"[ROW ] ocr_2.xlsx:2 {unit_project_name} cache_subject={unit_project_name}",
+                f"[ROW ] ocr_2.xlsx:2 {unit_project_name} cache_subject={cache_subject}",
                 log_text,
             )
             for code in ("10-2-37", "12-3-60", "9-1-25"):
@@ -1181,7 +1361,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             worksheet = workbook.active
             self.assertEqual(worksheet.cell(row=2, column=1).value, unit_project_name)
             self.assertEqual(worksheet.cell(row=2, column=17).value, "单项工程-安装")
-            self.assertEqual(worksheet.cell(row=2, column=21).value, unit_project_name)
+            self.assertEqual(worksheet.cell(row=2, column=21).value, cache_subject)
 
             output_items = json.loads(worksheet.cell(row=2, column=18).value)
             self.assertTrue(all(item["sub_project_id"] == "单项工程-安装" for item in output_items))

@@ -124,28 +124,22 @@ def norm_text(value: object) -> str:
     return re.sub(r"\s+", "", s).strip()
 
 
-def normalize_sub_project_id_for_cache(value: object) -> str:
+def normalize_for_cache_subject(value: object) -> str:
     s = norm_text(value)
     if not s:
         return ""
 
-    room_list = r"\d{2,5}(?:[、,，]\d{2,5})*(?:室|户|号)?"
-
-    s = re.sub(
-        r"[-_－—]?\d+(?:幢|栋|号楼|#楼)"
-        r"(?:[-_－—]?\d+单元)?"
-        rf"(?:[-_－—]?{room_list})?$",
-        "",
-        s,
-    )
-    s = re.sub(rf"[-_－—]?{room_list}$", "", s)
-    s = re.sub(r"\d+(?:幢|栋|号楼|#楼)$", "", s)
-    s = re.sub(r"^\d+(?:幢|栋|号楼|#楼)[-_－—]?", "", s)
-    return s.strip("-_－— ")
+    s = re.sub(r"\d+", "", s)
+    s = re.sub(r"[#＃_\-－—~～/／\\.,，、:：;；()（）\[\]【】{}<>《》+*×$]", "", s)
+    return s.strip()
 
 
-def _classification_cache_subject(value: object) -> str:
-    return normalize_sub_project_id_for_cache(value) or norm_text(value)
+def _classification_cache_subject(unit_project_name: object) -> str:
+    return normalize_for_cache_subject(unit_project_name)
+
+
+def _display_match_text(value: object) -> str:
+    return re.sub(r"[-_－—]+", "", norm_text(value))
 
 
 def _build_unit_project_name(consultation_project_name: object, sub_project_id: object) -> str:
@@ -155,9 +149,11 @@ def _build_unit_project_name(consultation_project_name: object, sub_project_id: 
     if consultation_name and subject:
         if subject.startswith(consultation_name):
             return subject
-        consultation_base = normalize_sub_project_id_for_cache(consultation_name)
-        subject_base = normalize_sub_project_id_for_cache(subject)
-        if consultation_base and subject_base and consultation_base == subject_base:
+        consultation_base = _display_match_text(consultation_name)
+        subject_base = _display_match_text(subject)
+        if consultation_base and subject_base and (
+            subject_base.startswith(consultation_base) or consultation_base.startswith(subject_base)
+        ):
             return subject
         return f"{consultation_name}-{subject}"
 
@@ -475,12 +471,15 @@ def _write_result_row(
 
 
 def _classification_cache_key(
+    consultation_project_name: object,
     renovation_content: object,
     unit_project_name: object,
 ) -> str:
     cache_subject = _classification_cache_subject(unit_project_name)
     raw_key = (
-        norm_text(renovation_content)
+        norm_text(consultation_project_name)
+        + "|"
+        + norm_text(renovation_content)
         + "|"
         + cache_subject
     )
@@ -558,6 +557,7 @@ def classify_workbook(
             cache_subject = _classification_cache_subject(unit_project_name)
             ocr_values["cache_subject"] = cache_subject
             cache_key = _classification_cache_key(
+                ocr_values.get("consultation_project_name"),
                 ocr_values.get("renovation_content"),
                 unit_project_name,
             )
