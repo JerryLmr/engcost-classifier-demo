@@ -38,6 +38,7 @@ RESULT_HEADERS = [
     "sub_item_project_rows",
     "consultation_time",
     "location",
+    "cache_subject",
 ]
 
 CLASSIFICATION_CACHE_VERSION = "classification_by_sub_project_v1"
@@ -121,6 +122,28 @@ def _cell_text(value: object) -> str:
 def norm_text(value: object) -> str:
     s = "" if value is None else str(value)
     return re.sub(r"\s+", "", s).strip()
+
+
+def normalize_sub_project_id_for_cache(value: object) -> str:
+    s = norm_text(value)
+    if not s:
+        return ""
+
+    s = re.sub(
+        r"[-_－—]?\d+(?:幢|栋|号楼|#楼)"
+        r"(?:[-_－—]?\d+单元)?"
+        r"(?:[-_－—]?\d{2,5}(?:室|户|号)?)?$",
+        "",
+        s,
+    )
+    s = re.sub(r"[-_－—]?\d{2,5}(?:室|户|号)$", "", s)
+    s = re.sub(r"\d+(?:幢|栋|号楼|#楼)$", "", s)
+    s = re.sub(r"^\d+(?:幢|栋|号楼|#楼)[-_－—]?", "", s)
+    return s.strip("-_－— ")
+
+
+def _classification_cache_subject(clean_sub_project_id: object) -> str:
+    return normalize_sub_project_id_for_cache(clean_sub_project_id) or norm_text(clean_sub_project_id)
 
 
 def clean_sub_project_id(value: object, project_code: object | None = None) -> str:
@@ -348,6 +371,18 @@ def _read_ocr_values(worksheet, header_map: dict[str, int], row: int) -> dict[st
     return values
 
 
+def _display_project_name(ocr_values: dict[str, object]) -> str:
+    consultation_name = _cell_text(ocr_values.get("consultation_project_name"))
+    sub_project_id = _cell_text(ocr_values.get("sub_project_id"))
+
+    if consultation_name and sub_project_id:
+        if sub_project_id.startswith(consultation_name):
+            return sub_project_id
+        return f"{consultation_name}-{sub_project_id}"
+
+    return consultation_name or sub_project_id
+
+
 def _write_result_row(
     worksheet,
     row: int,
@@ -355,7 +390,7 @@ def _write_result_row(
     ocr_values: dict[str, object],
 ) -> None:
     values = [
-        result.get("project_name", ""),
+        _display_project_name(ocr_values),
         result.get("project_name_text", ""),
         result.get("catalog_id", ""),
         result.get("category", ""),
@@ -375,6 +410,7 @@ def _write_result_row(
         ocr_values.get("sub_item_project_rows"),
         ocr_values.get("consultation_time"),
         ocr_values.get("location"),
+        ocr_values.get("cache_subject"),
     ]
     for column, value in enumerate(values, start=1):
         worksheet.cell(row=row, column=column, value=value)
@@ -385,12 +421,13 @@ def _classification_cache_key(
     renovation_content: object,
     clean_sub_project_id: object,
 ) -> str:
+    cache_subject = _classification_cache_subject(clean_sub_project_id)
     raw_key = (
         norm_text(consultation_project_name)
         + "|"
         + norm_text(renovation_content)
         + "|"
-        + norm_text(clean_sub_project_id)
+        + cache_subject
     )
     return f"{CLASSIFICATION_CACHE_VERSION}:{hashlib.sha256(raw_key.encode('utf-8')).hexdigest()}"
 
@@ -462,6 +499,8 @@ def classify_workbook(
             if classify_subject == "未分组":
                 empty_project_name_rows += 1
 
+            cache_subject = _classification_cache_subject(classify_subject)
+            ocr_values["cache_subject"] = cache_subject
             cache_key = _classification_cache_key(
                 ocr_values.get("consultation_project_name"),
                 ocr_values.get("renovation_content"),
@@ -470,9 +509,17 @@ def classify_workbook(
             if cache_key in classification_cache:
                 result = classification_cache[cache_key]
                 cache_hit_count += 1
-                print(f"[CACHE] {path.name}:{first_source_row} {classify_subject[:80]}", flush=True)
+                print(
+                    f"[CACHE] {path.name}:{first_source_row} "
+                    f"{classify_subject[:80]} cache_subject={cache_subject[:80]}",
+                    flush=True,
+                )
             else:
-                print(f"[ROW ] {path.name}:{first_source_row} {classify_subject[:80]}", flush=True)
+                print(
+                    f"[ROW ] {path.name}:{first_source_row} "
+                    f"{classify_subject[:80]} cache_subject={cache_subject[:80]}",
+                    flush=True,
+                )
 
                 result = classify_project_func(
                     classify_subject,
