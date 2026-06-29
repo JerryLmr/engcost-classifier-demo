@@ -129,14 +129,16 @@ def normalize_sub_project_id_for_cache(value: object) -> str:
     if not s:
         return ""
 
+    room_list = r"\d{2,5}(?:[、,，]\d{2,5})*(?:室|户|号)?"
+
     s = re.sub(
         r"[-_－—]?\d+(?:幢|栋|号楼|#楼)"
         r"(?:[-_－—]?\d+单元)?"
-        r"(?:[-_－—]?\d{2,5}(?:室|户|号)?)?$",
+        rf"(?:[-_－—]?{room_list})?$",
         "",
         s,
     )
-    s = re.sub(r"[-_－—]?\d{2,5}(?:室|户|号)$", "", s)
+    s = re.sub(rf"[-_－—]?{room_list}$", "", s)
     s = re.sub(r"\d+(?:幢|栋|号楼|#楼)$", "", s)
     s = re.sub(r"^\d+(?:幢|栋|号楼|#楼)[-_－—]?", "", s)
     return s.strip("-_－— ")
@@ -377,6 +379,10 @@ def _display_project_name(ocr_values: dict[str, object]) -> str:
 
     if consultation_name and sub_project_id:
         if sub_project_id.startswith(consultation_name):
+            return sub_project_id
+        consultation_base = normalize_sub_project_id_for_cache(consultation_name)
+        sub_base = normalize_sub_project_id_for_cache(sub_project_id)
+        if consultation_base and sub_base and consultation_base == sub_base:
             return sub_project_id
         return f"{consultation_name}-{sub_project_id}"
 

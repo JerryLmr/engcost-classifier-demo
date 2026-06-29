@@ -184,8 +184,9 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             ["阀门"],
             ["alias辅助扩展词（不能直接决定分类）：阀门"],
         )
-        self.assertIn("catalog_id | 标准对象 | 一级分类 | 二级分类 | 可选状态", prompt)
+        self.assertIn("catalog_id | 标准对象 | 一级分类 | 二级分类 | 目录属性 | 可选状态", prompt)
         self.assertIn("CF-015-05 | 共用设施设备 | 给排水系统", prompt)
+        self.assertIn("标准项", prompt)
         self.assertIn("报审项目名称：报审项目名称", prompt)
         self.assertIn("本次分类对象：减压阀更换", prompt)
         self.assertIn("清单摘要", prompt)
@@ -196,6 +197,38 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertNotIn("状态依据", prompt)
         self.assertNotIn("候选目录：", prompt)
         self.assertNotIn("renovation_content", prompt)
+
+    def test_full_catalog_prompt_marks_unspecified_items_as_fallback_and_sorts_them_last(self):
+        catalog_by_id = get_standard_catalog_by_id()
+        catalog = [
+            catalog_by_id["CF-018-00"],
+            catalog_by_id["CF-018-02"],
+            catalog_by_id["CF-018-09"],
+            catalog_by_id["CF-018-10"],
+            catalog_by_id["CF-018-12"],
+            catalog_by_id["CF-015-05"],
+        ]
+        prompt = build_full_catalog_item_selection_prompt(
+            "平湖市碧水云天监控改造",
+            "平湖市碧水云天监控改造-安装",
+            catalog,
+            ["摄像头", "网络录像机", "交换机", "监控硬盘", "光纤收发器", "电梯网桥"],
+        )
+
+        self.assertIn("catalog_id | 标准对象 | 一级分类 | 二级分类 | 目录属性 | 可选状态", prompt)
+        self.assertIn("CF-018-00 | 共用设施设备 | 弱电系统 | 未明确具体子项 | 内部扩展项", prompt)
+        self.assertIn("CF-015-05 | 共用设施设备 | 给排水系统", prompt)
+        self.assertIn("标准项", prompt)
+        self.assertIn("最具体可匹配原则", prompt)
+        self.assertIn("兜底项，不是泛化首选项", prompt)
+        self.assertIn("只有在无法从“本次分类对象”和“清单摘要”判断任何具体二级对象时", prompt)
+        self.assertNotIn("如果只能判断一级系统，且标准目录里存在“未明确具体子项”，可以选择该项", prompt)
+        self.assertIn("本次分类对象：平湖市碧水云天监控改造-安装", prompt)
+        self.assertNotIn("cache_subject", prompt)
+
+        unspecified_index = prompt.index("CF-018-00 | 共用设施设备 | 弱电系统 | 未明确具体子项")
+        for item_id in ("CF-018-02", "CF-018-09", "CF-018-10", "CF-018-12"):
+            self.assertLess(prompt.index(f"{item_id} | 共用设施设备 | 弱电系统"), unspecified_index)
 
     @patch(
         "classifier.llm_client.request_llm_json",
@@ -861,12 +894,20 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         spec.loader.exec_module(module)
 
         self.assertEqual(
-            module._classification_cache_subject("A小区屋面维修工程-15幢-1101"),
-            "A小区屋面维修工程",
+            module._classification_cache_subject("锦绣庄园屋面维修工程-15幢-1101"),
+            "锦绣庄园屋面维修工程",
         )
         self.assertEqual(
-            module._classification_cache_subject("A小区屋面维修工程-15幢-1102"),
-            "A小区屋面维修工程",
+            module._classification_cache_subject("锦绣庄园屋面维修工程-15幢-1001、1002"),
+            "锦绣庄园屋面维修工程",
+        )
+        self.assertEqual(
+            module._classification_cache_subject("锦绣庄园屋面维修工程-15幢-1001,1002室"),
+            "锦绣庄园屋面维修工程",
+        )
+        self.assertEqual(
+            module._classification_cache_subject("锦绣庄园屋面维修工程-15幢-1001，1002室"),
+            "锦绣庄园屋面维修工程",
         )
         self.assertEqual(module._classification_cache_subject("15幢屋面维修"), "屋面维修")
         self.assertEqual(module._classification_cache_subject("16幢屋面维修"), "屋面维修")
@@ -875,12 +916,21 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             module._classification_cache_subject("16幢外墙维修"),
         )
         self.assertEqual(
-            module._classification_cache_key("A小区", "屋面维修", "A小区屋面维修工程-15幢-1101"),
-            module._classification_cache_key("A小区", "屋面维修", "A小区屋面维修工程-15幢-1102"),
+            module._classification_cache_key("锦绣庄园", "屋面维修", "锦绣庄园屋面维修工程-15幢-1101"),
+            module._classification_cache_key("锦绣庄园", "屋面维修", "锦绣庄园屋面维修工程-15幢-1001、1002"),
         )
         self.assertNotEqual(
             module._classification_cache_key("A小区", "屋面维修", "15幢屋面维修"),
             module._classification_cache_key("A小区", "屋面维修", "16幢外墙维修"),
+        )
+        self.assertEqual(
+            module._display_project_name(
+                {
+                    "consultation_project_name": "锦绣庄园屋面维修工程15幢",
+                    "sub_project_id": "锦绣庄园屋面维修工程-15幢-1101",
+                }
+            ),
+            "锦绣庄园屋面维修工程-15幢-1101",
         )
 
     def test_batch_script_merges_ocr_pages_cleans_sub_project_and_filters_summary(self):

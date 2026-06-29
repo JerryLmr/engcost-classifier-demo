@@ -200,9 +200,25 @@ def request_llm_json(
 
 
 def compact_catalog_prompt_label(item: StandardCatalogItem) -> str:
+    item_group = getattr(item, "item_group", "") or "标准项"
     return (
         f"{item.id} | {item.standard_group} | {item.category} | {item.item} | "
-        f"{'/'.join(item.allowed_statuses)}"
+        f"{item_group} | {'/'.join(item.allowed_statuses)}"
+    )
+
+
+def _is_unspecified_catalog_item(item: StandardCatalogItem) -> bool:
+    item_group = getattr(item, "item_group", "") or ""
+    return item.item == "未明确具体子项" or item_group == "内部扩展项" or "未明确" in item.item
+
+
+def _catalog_prompt_sort_key(item: StandardCatalogItem) -> tuple[str, str, bool, str, str]:
+    return (
+        item.standard_group,
+        item.category,
+        _is_unspecified_catalog_item(item),
+        item.item,
+        item.id,
     )
 
 
@@ -213,7 +229,10 @@ def build_full_catalog_item_selection_prompt(
     item_summary: Sequence[str] | str | None = None,
     context_hints: Sequence[str] | None = None,
 ) -> str:
-    catalog_lines = "\n".join(compact_catalog_prompt_label(item) for item in catalog_items)
+    catalog_lines = "\n".join(
+        compact_catalog_prompt_label(item)
+        for item in sorted(catalog_items, key=_catalog_prompt_sort_key)
+    )
     hint_lines = "\n".join(f"- {hint}" for hint in context_hints or [] if hint)
     hint_section = f"\n辅助提示（只作理解文本，不得替代标准目录判断）：\n{hint_lines}\n" if hint_lines else ""
 
@@ -241,7 +260,7 @@ def build_full_catalog_item_selection_prompt(
 {hint_section}
 
 完整 compact 标准目录：
-catalog_id | 标准对象 | 一级分类 | 二级分类 | 可选状态
+catalog_id | 标准对象 | 一级分类 | 二级分类 | 目录属性 | 可选状态
 {catalog_lines}
 
 分类判断规则：
@@ -254,10 +273,15 @@ catalog_id | 标准对象 | 一级分类 | 二级分类 | 可选状态
 7. 你必须先阅读全部一级分类和二级分类，再从完整标准目录中选择最合适的一个 catalog_id。
 8. 只能从完整标准目录中选择 catalog_id，不得创造目录外分类。
 9. 如果本次分类对象能对应到标准目录中的共用部位、共用设施设备维修对象，不要返回 OUT_OF_SCOPE。
-10. 如果只能判断一级系统，且标准目录里存在“未明确具体子项”，可以选择该项，并设置 needs_review=true。
-11. 如果文本包含咨询、设计、检测、维保、审计等服务词，但同时有明确维修对象，应选择该维修对象，并设置 needs_review=true，不要直接 OUT_OF_SCOPE。
-12. 只有完全没有共用部位/共用设施设备维修对象时，才返回 OUT_OF_SCOPE。
-13. alias、动作词、复核提示、辅助提示只作为辅助理解，不能直接决定 catalog_id。
+10. 必须遵守“最具体可匹配原则”：如果“本次分类对象”或“清单摘要”中出现了具体维修对象、设备、构件、材料、系统部件，且完整标准目录中存在对应具体二级目录，必须优先选择具体二级目录。
+11. “未明确具体子项”或“内部扩展项”是兜底项，不是泛化首选项。只有当本次分类对象和清单摘要都无法对应任何具体二级目录时，才可以选择。
+12. 只有在无法从“本次分类对象”和“清单摘要”判断任何具体二级对象时，才可以选择“未明确具体子项”或“内部扩展项”，并必须设置 needs_review=true。
+13. 不得因为一个项目包含多个同一系统下的设备，就直接选择“未明确具体子项”。应该选择最能代表主维修对象的具体二级目录，并在确实存在多个并列对象时，用 secondary_catalog_ids 表示其它具体目录，同时设置 needs_review=true。
+14. 如果清单摘要中多个具体对象都属于同一个一级系统，应优先从该一级系统下选择最具体、最核心的二级目录，而不是选择该一级系统的“未明确具体子项”。
+15. 如果最终选择“未明确具体子项”或“内部扩展项”，reason 必须说明为什么没有任何具体二级目录适配，例如“未见更具体目录”，并设置 needs_review=true。
+16. 如果文本包含咨询、设计、检测、维保、审计等服务词，但同时有明确维修对象，应选择该维修对象，并设置 needs_review=true，不要直接 OUT_OF_SCOPE。
+17. 只有完全没有共用部位/共用设施设备维修对象时，才返回 OUT_OF_SCOPE。
+18. alias、动作词、复核提示、辅助提示只作为辅助理解，不能直接决定 catalog_id。
 
 复合项目规则：
 1. 当前流程已经按 sub_project_id 拆分，本次通常只应输出一个主 catalog_id。
