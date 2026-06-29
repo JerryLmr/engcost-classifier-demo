@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Sequence
 
 from classifier import llm_client
 from classifier.alias_matcher import TextAliasResult, match_aliases
@@ -97,7 +97,9 @@ def _out_of_scope_result(
 
 
 def _classify_project_full_catalog(
-    project_name: str,
+    consultation_project_name: str,
+    classify_subject: str,
+    item_summary: Sequence[str] | str | None,
     normalized: NormalizedProjectText,
     alias_result: TextAliasResult,
     context_hints: list[str],
@@ -105,13 +107,15 @@ def _classify_project_full_catalog(
     catalog = load_standard_catalog()
     catalog_by_id = {item.id: item for item in catalog}
     item_selection = llm_client.llm_select_catalog_item_from_full_catalog(
-        project_name,
+        consultation_project_name,
+        classify_subject,
         catalog,
+        item_summary,
         context_hints,
     )
-    item_selection = postprocess_item_selection(project_name, item_selection, catalog_by_id)
+    item_selection = postprocess_item_selection(classify_subject, item_selection, catalog_by_id)
     if item_selection.catalog_id == OUT_OF_SCOPE_ID:
-        return _out_of_scope_result(project_name, normalized, alias_result, item_selection)
+        return _out_of_scope_result(classify_subject, normalized, alias_result, item_selection)
 
     selected_item = catalog_by_id.get(item_selection.catalog_id)
     if selected_item is None:
@@ -124,10 +128,10 @@ def _classify_project_full_catalog(
             project_name_text=item_selection.project_name_text,
             invalid_after_retry=item_selection.invalid_after_retry,
         )
-        return _out_of_scope_result(project_name, normalized, alias_result, invalid_selection)
+        return _out_of_scope_result(classify_subject, normalized, alias_result, invalid_selection)
 
     return _selected_catalog_result(
-        project_name,
+        classify_subject,
         normalized,
         alias_result,
         item_selection,
@@ -135,26 +139,39 @@ def _classify_project_full_catalog(
     )
 
 
-def classify_project_standard(project_name: str) -> dict[str, Any]:
+def classify_project_standard(
+    classify_subject: str,
+    consultation_project_name: str = "",
+    item_summary: Sequence[str] | str | None = None,
+) -> dict[str, Any]:
     try:
-        normalized = normalize_project_text(project_name)
+        subject = str(classify_subject or "").strip()
+        consultation_name = str(consultation_project_name or "").strip() or subject
+        normalized = normalize_project_text(subject)
         alias_result = match_aliases(normalized)
         context_hints = _context_hints(normalized, alias_result)
-        return _classify_project_full_catalog(project_name, normalized, alias_result, context_hints)
+        return _classify_project_full_catalog(
+            consultation_name,
+            subject,
+            item_summary,
+            normalized,
+            alias_result,
+            context_hints,
+        )
     except llm_client.LLMServiceError as exc:
         return fallback_result(
-            project_name,
+            str(classify_subject or "").strip(),
             f"分类失败：{exc}",
-            is_emergency=is_emergency_project(project_name),
-            termite_related=is_termite_related(project_name, OUT_OF_SCOPE_ID),
+            is_emergency=is_emergency_project(classify_subject),
+            termite_related=is_termite_related(classify_subject, OUT_OF_SCOPE_ID),
             pipeline_status="llm_service_error",
         )
     except Exception as exc:  # noqa: BLE001
         reason = f"分类失败：{exc}"
         return fallback_result(
-            project_name,
+            str(classify_subject or "").strip(),
             reason,
-            is_emergency=is_emergency_project(project_name),
-            termite_related=is_termite_related(project_name, OUT_OF_SCOPE_ID),
+            is_emergency=is_emergency_project(classify_subject),
+            termite_related=is_termite_related(classify_subject, OUT_OF_SCOPE_ID),
             pipeline_status="fallback",
         )

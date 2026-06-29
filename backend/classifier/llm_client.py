@@ -207,39 +207,84 @@ def compact_catalog_prompt_label(item: StandardCatalogItem) -> str:
 
 
 def build_full_catalog_item_selection_prompt(
-    project_name: str,
+    consultation_project_name: str,
+    classify_subject: str,
     catalog_items: Sequence[StandardCatalogItem],
+    item_summary: Sequence[str] | str | None = None,
     context_hints: Sequence[str] | None = None,
 ) -> str:
     catalog_lines = "\n".join(compact_catalog_prompt_label(item) for item in catalog_items)
     hint_lines = "\n".join(f"- {hint}" for hint in context_hints or [] if hint)
     hint_section = f"\n辅助提示（只作理解文本，不得替代标准目录判断）：\n{hint_lines}\n" if hint_lines else ""
-    return f"""
-你是物业工程标准目录分类助手。请读取完整 compact 标准目录，判断工程名称对应的标准目录。
 
-工程名称：{project_name}
+    if isinstance(item_summary, str):
+        item_summary_text = item_summary.strip()
+    else:
+        item_summary_text = "\n".join(
+            f"{idx}. {name}"
+            for idx, name in enumerate(item_summary or [], start=1)
+            if str(name).strip()
+        )
+
+    item_summary_section = (
+        f"\n清单摘要（只用于辅助判断本次分类对象，不参与缓存 key）：\n{item_summary_text}\n"
+        if item_summary_text
+        else ""
+    )
+
+    return f"""
+你是物业工程标准目录分类助手。请读取完整 compact 标准目录，判断“本次分类对象”对应的标准目录。
+
+报审项目名称：{consultation_project_name}
+本次分类对象：{classify_subject}
+{item_summary_section}
 {hint_section}
 
 完整 compact 标准目录：
 catalog_id | 标准对象 | 一级分类 | 二级分类 | 可选状态
 {catalog_lines}
 
-输出要求：
-1. 只能从完整标准目录中选择一个 catalog_id，或者 OUT_OF_SCOPE。
-2. 如果工程名称能对应到标准目录中的共用部位、共用设施设备维修对象，不要返回 OUT_OF_SCOPE。
-3. 如果有具体对象，优先选择具体二级目录。
-4. 如果多个对象并列，主对象放 catalog_id，其它对象放 secondary_catalog_ids，并设置 is_composite=true 或 needs_review=true。
-5. 如果只能判断一级系统，且标准目录里存在“未明确具体子项”，可以选择该项，并设置 needs_review=true。
-6. 如果文本包含咨询、设计、检测、维保、审计等服务词，但同时有明确维修对象，应选择该对象并设置 needs_review=true，不要直接 OUT。
-7. 只有完全没有共用部位/共用设施设备维修对象时，才返回 OUT_OF_SCOPE。
-8. alias、动作词、复核提示只作为辅助理解，不能直接决定 catalog_id。
-9. 不要输出思考过程。
-10. 不要输出 <think>。
-11. 不要输出 markdown。
-12. reason 不超过 40 个汉字。
-13. 只输出 JSON，不要自然语言段落。
+分类判断规则：
+1. “本次分类对象”是本次要分类的工程对象，必须优先围绕它判断。
+2. “报审项目名称”只作为背景信息，不是本次分类对象。
+3. “清单摘要”只用于辅助判断本次分类对象实际涉及的维修对象，尤其用于“单项工程-安装”“单位工程”“安装工程”等笼统对象。
+4. 如果“本次分类对象”很具体，例如“屋面渗漏维修”“外墙渗漏维修”“防火门维修”“塑胶跑道维修”，应优先依据本次分类对象判断。
+5. 如果“本次分类对象”很笼统，例如“单项工程-安装”“单位工程”“安装工程”，应主要依据清单摘要判断。
+6. 不要因为报审项目名称中包含多个部位，就把多个部位混在一起分类。
+7. 你必须先阅读全部一级分类和二级分类，再从完整标准目录中选择最合适的一个 catalog_id。
+8. 只能从完整标准目录中选择 catalog_id，不得创造目录外分类。
+9. 如果本次分类对象能对应到标准目录中的共用部位、共用设施设备维修对象，不要返回 OUT_OF_SCOPE。
+10. 如果只能判断一级系统，且标准目录里存在“未明确具体子项”，可以选择该项，并设置 needs_review=true。
+11. 如果文本包含咨询、设计、检测、维保、审计等服务词，但同时有明确维修对象，应选择该维修对象，并设置 needs_review=true，不要直接 OUT_OF_SCOPE。
+12. 只有完全没有共用部位/共用设施设备维修对象时，才返回 OUT_OF_SCOPE。
+13. alias、动作词、复核提示、辅助提示只作为辅助理解，不能直接决定 catalog_id。
 
-同时抽取 project_name_text。project_name_text 是从原始工程名称中抽取出的“用于相似项目检索的工程语义文本”，不是分类理由，不是一级分类/二级分类/维修状态拼接，不要写成目录路径，不要补充工程名称中没有的信息。
+复合项目规则：
+1. 当前流程已经按 sub_project_id 拆分，本次通常只应输出一个主 catalog_id。
+2. 如果“本次分类对象”本身仍然明确包含多个并列维修对象，主对象放 catalog_id，其它对象放 secondary_catalog_ids，并设置 is_composite=true 或 needs_review=true。
+3. 如果只是报审项目名称中包含多个对象，但本次分类对象是单一对象，不要设置 is_composite=true。
+
+输出要求：
+1. 只能输出 JSON，不要自然语言段落。
+2. 不要输出 markdown。
+3. 不要输出思考过程。
+4. 不要输出 <think>。
+5. reason 不超过 40 个汉字。
+6. catalog_id 必须是完整标准目录中的 catalog_id，或者 OUT_OF_SCOPE。
+7. secondary_catalog_ids 必须只包含完整标准目录中的 catalog_id。
+8. 如果 catalog_id=OUT_OF_SCOPE，secondary_catalog_ids 必须为空数组。
+
+同时抽取 project_name_text。
+
+project_name_text 是从“本次分类对象”中抽取出的用于相似项目检索的工程语义文本。
+如果“本次分类对象”过于笼统，例如“单项工程-安装”“单位工程”“安装工程”，则可以结合清单摘要抽取工程语义文本。
+project_name_text 不是分类理由，不是一级分类/二级分类/维修状态拼接，不要写成目录路径，不要补充输入中没有的信息。
+project_name_text 应尽量去掉楼幢号、批次号、项目名前缀等位置或批次信息，保留真正的维修对象语义。
+例如：
+- “屋面维修工程15幢” -> “屋面维修工程”
+- “16幢屋面渗漏维修” -> “屋面渗漏维修”
+- “卓越雅苑一期第一批公区维修工程-防火门维修” -> “防火门维修”
+- “单项工程-安装”，清单摘要包含监控摄像设备、录像设备、交换机、线缆 -> “监控系统安装”
 
 project_name_text 抽取规则：
 {SEMANTIC_PROJECT_TEXT_RULES}
@@ -364,11 +409,19 @@ def _validate_status_selection(content: Dict[str, Any], selected_item: StandardC
 
 
 def llm_select_catalog_item_from_full_catalog(
-    project_name: str,
+    consultation_project_name: str,
+    classify_subject: str,
     catalog_items: Sequence[StandardCatalogItem],
+    item_summary: Sequence[str] | str | None = None,
     context_hints: Sequence[str] | None = None,
 ) -> ItemSelection:
-    prompt = build_full_catalog_item_selection_prompt(project_name, catalog_items, context_hints)
+    prompt = build_full_catalog_item_selection_prompt(
+        consultation_project_name,
+        classify_subject,
+        catalog_items,
+        item_summary,
+        context_hints,
+    )
     last_error: Exception | None = None
     for _attempt in range(2):
         try:

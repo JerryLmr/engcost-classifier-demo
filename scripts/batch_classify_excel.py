@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import io
+import json
 import re
 import sys
 from datetime import date, datetime
@@ -32,12 +34,34 @@ RESULT_HEADERS = [
     "file_name",
     "consultation_project_name",
     "renovation_content",
+    "sub_project_id",
     "sub_item_project_rows",
     "consultation_time",
     "location",
 ]
 
-CLASSIFICATION_CACHE_VERSION = "classification_with_project_name_text_v1"
+CLASSIFICATION_CACHE_VERSION = "classification_by_sub_project_v1"
+
+EXCLUDE_EXACT_ITEM_NAMES = {
+    "脚手架搭拆",
+    "安全文明施工费",
+    "夜间施工增加费",
+    "二次搬运费",
+    "冬雨季施工增加费",
+    "已完工程及设备保护费",
+    "规费",
+    "税金",
+}
+
+EXCLUDE_NAME_KEYWORDS = [
+    "措施",
+    "规费",
+    "税金",
+    "合计",
+    "汇总",
+    "暂列金额",
+    "暂估价",
+]
 
 EXCEL_SUFFIXES = {".xlsx", ".xlsm"}
 OCR_HEADERS = [
@@ -94,6 +118,38 @@ def _cell_text(value: object) -> str:
     return str(value).strip()
 
 
+def norm_text(value: object) -> str:
+    s = "" if value is None else str(value)
+    return re.sub(r"\s+", "", s).strip()
+
+
+def clean_sub_project_id(value: object, project_code: object | None = None) -> str:
+    s = "" if value is None else str(value)
+    s = re.sub(r"\s+", "", s.strip())
+
+    if project_code:
+        code = re.escape(str(project_code).strip())
+        s = re.sub(rf"[-_－—]?{code}$", "", s)
+
+    s = re.sub(r"[-_－—]\d{9,12}$", "", s)
+    return s.strip("-_－— ")
+
+
+def is_classifiable_item(item: dict) -> bool:
+    name = str(item.get("project_name") or "").strip()
+    code = str(item.get("project_code") or "").strip()
+
+    if not name:
+        return False
+    if name in EXCLUDE_EXACT_ITEM_NAMES:
+        return False
+    if any(k in name for k in EXCLUDE_NAME_KEYWORDS):
+        return False
+    if name == "脚手架搭拆" and str(item.get("unit_price") or "").strip() == code:
+        return False
+    return True
+
+
 _DATE_TEXT_RE = re.compile(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+0{1,2}:0{2}:0{2}(?:\.0+)?)?$")
 
 
@@ -146,6 +202,132 @@ def _build_project_name(consultation_project_name: object, renovation_content: o
     ).strip()
 
 
+def _parse_sub_item_project_rows(raw_value: object) -> list[dict[str, object]]:
+    if raw_value is None or _cell_text(raw_value) == "":
+        return []
+    if isinstance(raw_value, list):
+        parsed = raw_value
+    elif isinstance(raw_value, tuple):
+        parsed = list(raw_value)
+    elif isinstance(raw_value, str):
+        try:
+            parsed = json.loads(raw_value.strip())
+        except json.JSONDecodeError:
+            return []
+    else:
+        return []
+
+    if not isinstance(parsed, list):
+        return []
+    return [dict(item) for item in parsed if isinstance(item, dict)]
+
+
+def _json_dumps(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _merge_key(ocr_values: dict[str, object]) -> tuple[str, str, str, str, str]:
+    return (
+        norm_text(ocr_values.get("file_name")),
+        norm_text(ocr_values.get("consultation_project_name")),
+        norm_text(ocr_values.get("consultation_time")),
+        norm_text(ocr_values.get("location")),
+        norm_text(ocr_values.get("renovation_content")),
+    )
+
+
+def _dedupe_key(item: dict[str, object]) -> tuple[str, str, str, str, str]:
+    return (
+        str(item.get("page_no", "")),
+        norm_text(item.get("seq")),
+        norm_text(item.get("project_code")),
+        norm_text(item.get("project_name")),
+        norm_text(item.get("total_price")),
+    )
+
+
+def _sort_value(value: object) -> tuple[int, float | str]:
+    text = norm_text(value)
+    if not text:
+        return (1, "")
+    try:
+        return (0, float(text))
+    except ValueError:
+        return (1, text)
+
+
+def _sort_key(item: dict[str, object]) -> tuple[tuple[int, float | str], tuple[int, float | str], str, str]:
+    return (
+        _sort_value(item.get("page_no")),
+        _sort_value(item.get("seq")),
+        norm_text(item.get("project_code")),
+        norm_text(item.get("project_name")),
+    )
+
+
+def _prepare_merged_items(items: list[dict[str, object]], fallback_subject: str) -> list[dict[str, object]]:
+    prepared: list[dict[str, object]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for item in sorted(items, key=_sort_key):
+        cleaned = clean_sub_project_id(item.get("sub_project_id"), item.get("project_code"))
+        updated = dict(item)
+        updated["sub_project_id"] = cleaned or fallback_subject or "未分组"
+        key = _dedupe_key(updated)
+        if key in seen:
+            continue
+        seen.add(key)
+        prepared.append(updated)
+    return prepared
+
+
+def _item_name(item: dict[str, object]) -> str:
+    return _cell_text(item.get("project_name") or item.get("cost_item_name"))
+
+
+def _group_classification_units(
+    ocr_values: dict[str, object],
+    items: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    fallback_subject = _cell_text(ocr_values.get("consultation_project_name")) or "未分组"
+    prepared_items = _prepare_merged_items(items, fallback_subject)
+    if not prepared_items:
+        return [
+            {
+                "ocr_values": {
+                    **ocr_values,
+                    "sub_project_id": fallback_subject,
+                    "sub_item_project_rows": "[]",
+                },
+                "classify_subject": fallback_subject,
+                "item_names": [],
+            }
+        ]
+
+    grouped_items: dict[str, list[dict[str, object]]] = {}
+    filtered_names: dict[str, list[str]] = {}
+    for item in prepared_items:
+        subject = _cell_text(item.get("sub_project_id")) or fallback_subject
+        grouped_items.setdefault(subject, []).append(item)
+        if is_classifiable_item(item):
+            name = _item_name(item)
+            if name:
+                filtered_names.setdefault(subject, []).append(name)
+
+    units: list[dict[str, object]] = []
+    for subject, group_items in grouped_items.items():
+        unit_ocr_values = dict(ocr_values)
+        unit_ocr_values["sub_project_id"] = subject
+        unit_ocr_values["sub_item_project_rows"] = _json_dumps(group_items)
+        units.append(
+            {
+                "ocr_values": unit_ocr_values,
+                "classify_subject": subject,
+                "item_names": filtered_names.get(subject, []),
+            }
+        )
+    return units
+
+
 def _validate_input_headers(header_map: dict[str, int], first_header: object) -> None:
     missing_ocr_headers = [header for header in OCR_HEADERS if header not in header_map]
     if not missing_ocr_headers:
@@ -189,6 +371,7 @@ def _write_result_row(
         ocr_values.get("file_name"),
         ocr_values.get("consultation_project_name"),
         ocr_values.get("renovation_content"),
+        ocr_values.get("sub_project_id"),
         ocr_values.get("sub_item_project_rows"),
         ocr_values.get("consultation_time"),
         ocr_values.get("location"),
@@ -197,8 +380,19 @@ def _write_result_row(
         worksheet.cell(row=row, column=column, value=value)
 
 
-def _classification_cache_key(project_text: str) -> str:
-    return f"{CLASSIFICATION_CACHE_VERSION}:{project_text}"
+def _classification_cache_key(
+    consultation_project_name: object,
+    renovation_content: object,
+    clean_sub_project_id: object,
+) -> str:
+    raw_key = (
+        norm_text(consultation_project_name)
+        + "|"
+        + norm_text(renovation_content)
+        + "|"
+        + norm_text(clean_sub_project_id)
+    )
+    return f"{CLASSIFICATION_CACHE_VERSION}:{hashlib.sha256(raw_key.encode('utf-8')).hexdigest()}"
 
 
 def _ensure_project_name_text(result: dict[str, object], project_text: str, path: Path, source_row: int) -> dict[str, object]:
@@ -241,47 +435,68 @@ def classify_workbook(
     empty_project_name_rows = 0
     output_rows = 0
     output_row = 2
+    merged_projects: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
     for source_row in range(2, source_sheet.max_row + 1):
         ocr_values = _read_ocr_values(source_sheet, header_map, source_row)
-        project_text = _build_project_name(
-            ocr_values.get("consultation_project_name"),
-            ocr_values.get("renovation_content"),
-        )
-        if not project_text:
-            empty_project_name_rows += 1
-            print(f"[WARN] {path.name}:{source_row} 工程名称为空，保留原始行但跳过分类", flush=True)
-            _write_result_row(output_sheet, output_row, {"project_name": ""}, ocr_values)
+        merge_key = _merge_key(ocr_values)
+        if merge_key not in merged_projects:
+            merged_projects[merge_key] = {
+                "ocr_values": ocr_values,
+                "items": [],
+                "source_rows": [],
+            }
+        merged_projects[merge_key]["items"].extend(_parse_sub_item_project_rows(ocr_values.get("sub_item_project_rows")))
+        merged_projects[merge_key]["source_rows"].append(source_row)
+
+    for merged_project in merged_projects.values():
+        base_ocr_values = merged_project["ocr_values"]
+        items = merged_project["items"]
+        source_rows = merged_project["source_rows"]
+        first_source_row = source_rows[0] if source_rows else 0
+        units = _group_classification_units(base_ocr_values, items)
+
+        for unit in units:
+            ocr_values = unit["ocr_values"]
+            classify_subject = _cell_text(unit["classify_subject"])
+            item_names = list(unit["item_names"])
+            if classify_subject == "未分组":
+                empty_project_name_rows += 1
+
+            cache_key = _classification_cache_key(
+                ocr_values.get("consultation_project_name"),
+                ocr_values.get("renovation_content"),
+                classify_subject,
+            )
+            if cache_key in classification_cache:
+                result = classification_cache[cache_key]
+                cache_hit_count += 1
+                print(f"[CACHE] {path.name}:{first_source_row} {classify_subject[:80]}", flush=True)
+            else:
+                print(f"[ROW ] {path.name}:{first_source_row} {classify_subject[:80]}", flush=True)
+
+                result = classify_project_func(
+                    classify_subject,
+                    consultation_project_name=_cell_text(ocr_values.get("consultation_project_name")),
+                    item_summary=item_names,
+                )
+                if result.get("pipeline_status") == "llm_service_error":
+                    raise RuntimeError(f"LLM 服务连接失败，已停止处理当前文件。失败行: {first_source_row}")
+                result = _ensure_project_name_text(result, classify_subject, path, first_source_row)
+                classification_cache[cache_key] = result
+                classify_call_count += 1
+
+                print(
+                    f"[DONE] {path.name}:{first_source_row} "
+                    f"{result.get('catalog_id')} "
+                    f"{result.get('category')} / {result.get('item')} "
+                    f"status={result.get('pipeline_status')}",
+                    flush=True,
+                )
+
+            _write_result_row(output_sheet, output_row, result, ocr_values)
             output_row += 1
             output_rows += 1
-            continue
-
-        cache_key = _classification_cache_key(project_text)
-        if cache_key in classification_cache:
-            result = classification_cache[cache_key]
-            cache_hit_count += 1
-            print(f"[CACHE] {path.name}:{source_row} {project_text[:80]}", flush=True)
-        else:
-            print(f"[ROW ] {path.name}:{source_row} {project_text[:80]}", flush=True)
-
-            result = classify_project_func(project_text)
-            if result.get("pipeline_status") == "llm_service_error":
-                raise RuntimeError(f"LLM 服务连接失败，已停止处理当前文件。失败行: {source_row}")
-            result = _ensure_project_name_text(result, project_text, path, source_row)
-            classification_cache[cache_key] = result
-            classify_call_count += 1
-
-            print(
-                f"[DONE] {path.name}:{source_row} "
-                f"{result.get('catalog_id')} "
-                f"{result.get('category')} / {result.get('item')} "
-                f"status={result.get('pipeline_status')}",
-                flush=True,
-            )
-
-        _write_result_row(output_sheet, output_row, result, ocr_values)
-        output_row += 1
-        output_rows += 1
-        processed += 1
+            processed += 1
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output = io.BytesIO()
