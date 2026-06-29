@@ -176,6 +176,36 @@ def clean_sub_project_id(value: object, project_code: object | None = None) -> s
     return s.strip("-_－— ")
 
 
+def _strip_trailing_project_codes(value: object, project_codes: set[str]) -> str:
+    s = norm_text(value)
+    if not s:
+        return ""
+
+    codes = sorted(
+        {norm_text(code) for code in project_codes if norm_text(code)},
+        key=len,
+        reverse=True,
+    )
+    if not codes:
+        return s
+
+    changed = True
+    while changed:
+        changed = False
+        for code in codes:
+            for sep in ("-", "_", "－", "—"):
+                suffix = sep + code
+                if s.endswith(suffix):
+                    s = s[: -len(suffix)]
+                    s = s.strip("-_－— ")
+                    changed = True
+                    break
+            if changed:
+                break
+
+    return s.strip("-_－— ")
+
+
 def is_classifiable_item(item: dict) -> bool:
     name = str(item.get("project_name") or "").strip()
     code = str(item.get("project_code") or "").strip()
@@ -309,8 +339,14 @@ def _sort_key(item: dict[str, object]) -> tuple[tuple[int, float | str], tuple[i
 def _prepare_merged_items(items: list[dict[str, object]], fallback_subject: str) -> list[dict[str, object]]:
     prepared: list[dict[str, object]] = []
     seen: set[tuple[str, str, str, str, str]] = set()
+    project_codes = {
+        norm_text(item.get("project_code"))
+        for item in items
+        if norm_text(item.get("project_code"))
+    }
     for item in sorted(items, key=_sort_key):
         cleaned = clean_sub_project_id(item.get("sub_project_id"), item.get("project_code"))
+        cleaned = _strip_trailing_project_codes(cleaned, project_codes)
         updated = dict(item)
         updated["sub_project_id"] = cleaned or fallback_subject or "未分组"
         key = _dedupe_key(updated)

@@ -1047,6 +1047,149 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertEqual(units[0]["unit_project_name"], "福泰花苑屋顶漏水维修工程-7幢")
         self.assertEqual(units[0]["ocr_values"]["unit_project_name"], "福泰花苑屋顶漏水维修工程-7幢")
 
+    def test_batch_script_strips_only_trailing_group_project_codes(self):
+        script = ROOT / "scripts" / "batch_classify_excel.py"
+        spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        project_codes = {"10-2-37", "12-3-60", "10-1-60", "10-1-62", "10-2-39", "9-1-25"}
+        self.assertEqual(
+            module._strip_trailing_project_codes(
+                "单项工程-安装-10-2-37-12-3-60-10-1-60-10-1-62-10-2-39-9-1-25",
+                project_codes,
+            ),
+            "单项工程-安装",
+        )
+        self.assertEqual(
+            module._strip_trailing_project_codes("单项工程-10-2-37-安装-12-3-60", project_codes),
+            "单项工程-10-2-37-安装",
+        )
+        self.assertEqual(
+            module._strip_trailing_project_codes("单项工程-安装-99-9-99", project_codes),
+            "单项工程-安装-99-9-99",
+        )
+
+        for separator in ("-", "_", "－", "—"):
+            self.assertEqual(
+                module._strip_trailing_project_codes(f"单项工程-安装{separator}10-2-37", project_codes),
+                "单项工程-安装",
+            )
+
+    def test_prepare_merged_items_strips_codes_from_whole_group(self):
+        script = ROOT / "scripts" / "batch_classify_excel.py"
+        spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        polluted_sub_project_id = "单项工程-安装-10-2-37-12-3-60-10-1-60-10-1-62-10-2-39-9-1-25"
+        items = [
+            {
+                "page_no": 1,
+                "seq": index,
+                "sub_project_id": polluted_sub_project_id,
+                "project_code": code,
+                "project_name": f"清单{index}",
+                "total_price": index * 100,
+            }
+            for index, code in enumerate(
+                ["10-2-39", "10-1-62", "10-1-60", "12-3-60", "9-1-25", "10-2-37"],
+                start=1,
+            )
+        ]
+
+        prepared = module._prepare_merged_items(items, "龙漱湾悦居消防维修工程")
+
+        self.assertEqual(len(prepared), 6)
+        self.assertTrue(all(item["sub_project_id"] == "单项工程-安装" for item in prepared))
+
+    def test_batch_script_cleans_ocr_project_code_pollution_from_cache_subject_and_rows(self):
+        script = ROOT / "scripts" / "batch_classify_excel.py"
+        spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        consultation_name = "龙漱湾悦居消防维修工程"
+        polluted_sub_project_id = "单项工程-安装-10-2-37-12-3-60-10-1-60-10-1-62-10-2-39-9-1-25"
+        unit_project_name = f"{consultation_name}-单项工程-安装"
+        project_codes = ["10-2-39", "10-1-62", "10-1-60", "12-3-60", "9-1-25", "10-2-37"]
+        rows = [
+            {
+                "page_no": 1,
+                "seq": index,
+                "sub_project_id": polluted_sub_project_id,
+                "project_code": code,
+                "project_name": f"消防维修清单{index}",
+                "total_price": index * 100,
+            }
+            for index, code in enumerate(project_codes, start=1)
+        ]
+        calls: list[str] = []
+
+        def fake_classify(project_text: str, **_kwargs) -> dict[str, object]:
+            calls.append(project_text)
+            return {
+                "project_name": project_text,
+                "project_name_text": "消防维修",
+                "catalog_id": "CF-028-00",
+                "category": "消防系统",
+                "item": "未明确具体子项",
+                "pipeline_status": "ok",
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / "ocr_2.xlsx"
+            output_file = tmp_path / "output.xlsx"
+            input_file.write_bytes(
+                make_ocr_workbook(
+                    [
+                        (
+                            "ocr_2.pdf",
+                            consultation_name,
+                            "2026-01-01",
+                            "消防维修",
+                            json.dumps(rows, ensure_ascii=False),
+                            "浙江省嘉兴市",
+                        )
+                    ]
+                )
+            )
+
+            text_stdout = StringIO()
+            with redirect_stdout(text_stdout):
+                stats = module.classify_workbook(input_file, output_file, fake_classify, {})
+
+            self.assertEqual(stats, (1, 0, 1, 0))
+            self.assertEqual(calls, ["单项工程-安装"])
+
+            log_text = text_stdout.getvalue()
+            self.assertIn(
+                f"[ROW ] ocr_2.xlsx:2 {unit_project_name} cache_subject={unit_project_name}",
+                log_text,
+            )
+            for code in ("10-2-37", "12-3-60", "9-1-25"):
+                self.assertNotIn(code, log_text)
+
+            workbook = openpyxl.load_workbook(output_file)
+            worksheet = workbook.active
+            self.assertEqual(worksheet.cell(row=2, column=1).value, unit_project_name)
+            self.assertEqual(worksheet.cell(row=2, column=17).value, "单项工程-安装")
+            self.assertEqual(worksheet.cell(row=2, column=21).value, unit_project_name)
+
+            output_items = json.loads(worksheet.cell(row=2, column=18).value)
+            self.assertTrue(all(item["sub_project_id"] == "单项工程-安装" for item in output_items))
+            for code in ("10-2-37", "12-3-60", "9-1-25"):
+                self.assertNotIn(code, worksheet.cell(row=2, column=1).value)
+                self.assertNotIn(code, worksheet.cell(row=2, column=17).value)
+                self.assertNotIn(code, worksheet.cell(row=2, column=21).value)
+
     def test_batch_script_merges_ocr_pages_cleans_sub_project_and_filters_summary(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
