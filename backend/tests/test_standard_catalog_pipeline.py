@@ -5,7 +5,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from io import BytesIO
+from io import BytesIO, StringIO
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -744,7 +745,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertEqual(second_sheet.cell(row=2, column=1).value, "小区屋面")
             self.assertEqual(second_sheet.cell(row=2, column=14).value, "file-c.pdf")
 
-    def test_batch_script_display_name_and_cache_subject_for_numbered_rooms(self):
+    def test_batch_script_unit_project_name_and_cache_subject_for_numbered_rooms(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
@@ -812,8 +813,8 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertEqual(calls, ["A小区屋面维修工程-15幢-1101"])
             self.assertEqual(len(cache), 1)
             self.assertEqual(
-                module._classification_cache_key("A小区屋面维修工程", "屋面维修", "A小区屋面维修工程-15幢-1101"),
-                module._classification_cache_key("A小区屋面维修工程", "屋面维修", "A小区屋面维修工程-15幢-1102"),
+                module._classification_cache_key("屋面维修", "A小区屋面维修工程-15幢-1101"),
+                module._classification_cache_key("屋面维修", "A小区屋面维修工程-15幢-1102"),
             )
 
             workbook = openpyxl.load_workbook(output_file)
@@ -883,7 +884,77 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             worksheet = workbook.active
             self.assertEqual(worksheet.cell(row=2, column=1).value, "A小区屋面维修工程-15幢-1101")
             self.assertEqual(worksheet.cell(row=2, column=17).value, "15幢-1101")
-            self.assertEqual(worksheet.cell(row=2, column=21).value, "15幢-1101")
+            self.assertEqual(worksheet.cell(row=2, column=21).value, "A小区屋面维修工程")
+
+    def test_batch_script_uses_unit_project_name_for_cache_and_logs_only(self):
+        script = ROOT / "scripts" / "batch_classify_excel.py"
+        spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        consultation_name = "平湖滨水广场消火栓主管漏水，泵房压力下降及更换消防报警主机项目"
+        unit_project_name = f"{consultation_name}-单项工程-安装"
+        calls: list[str] = []
+
+        def fake_classify(project_text: str, **_kwargs) -> dict[str, object]:
+            calls.append(project_text)
+            return {
+                "project_name": project_text,
+                "project_name_text": "消防报警主机安装",
+                "catalog_id": "CF-028-00",
+                "category": "消防系统",
+                "item": "未明确具体子项",
+                "pipeline_status": "ok",
+            }
+
+        rows = [
+            {
+                "page_no": 1,
+                "seq": 1,
+                "sub_project_id": "单项工程-安装",
+                "project_code": "030404035001",
+                "project_name": "消防报警主机",
+                "total_price": 100,
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / "input.xlsx"
+            output_file = tmp_path / "output.xlsx"
+            input_file.write_bytes(
+                make_ocr_workbook(
+                    [
+                        (
+                            "fire.pdf",
+                            consultation_name,
+                            "2026-01-01",
+                            "安装工程",
+                            json.dumps(rows, ensure_ascii=False),
+                            "浙江省嘉兴市",
+                        )
+                    ]
+                )
+            )
+
+            text_stdout = StringIO()
+            with redirect_stdout(text_stdout):
+                module.classify_workbook(input_file, output_file, fake_classify, {})
+
+            self.assertEqual(calls, ["单项工程-安装"])
+            log_text = text_stdout.getvalue()
+            self.assertIn(unit_project_name, log_text)
+            self.assertIn(f"cache_subject={unit_project_name}", log_text)
+            self.assertNotIn("[ROW ] input.xlsx:2 单项工程-安装 cache_subject=单项工程-安装", log_text)
+
+            workbook = openpyxl.load_workbook(output_file)
+            worksheet = workbook.active
+            self.assertEqual(worksheet.cell(row=2, column=1).value, unit_project_name)
+            self.assertEqual(worksheet.cell(row=2, column=17).value, "单项工程-安装")
+            self.assertEqual(worksheet.cell(row=2, column=21).value, unit_project_name)
+            self.assertNotEqual(worksheet.cell(row=2, column=21).value, "单项工程-安装")
 
     def test_batch_script_cache_subject_normalizes_position_numbers_conservatively(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"
@@ -893,6 +964,11 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertIsNotNone(spec.loader)
         spec.loader.exec_module(module)
 
+        self.assertFalse(hasattr(module, "_display_project_name"))
+        self.assertEqual(
+            module._classification_cache_key.__code__.co_varnames[:2],
+            ("renovation_content", "unit_project_name"),
+        )
         self.assertEqual(
             module._classification_cache_subject("锦绣庄园屋面维修工程-15幢-1101"),
             "锦绣庄园屋面维修工程",
@@ -916,22 +992,60 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             module._classification_cache_subject("16幢外墙维修"),
         )
         self.assertEqual(
-            module._classification_cache_key("锦绣庄园", "屋面维修", "锦绣庄园屋面维修工程-15幢-1101"),
-            module._classification_cache_key("锦绣庄园", "屋面维修", "锦绣庄园屋面维修工程-15幢-1001、1002"),
+            module._classification_cache_key("屋面维修", "锦绣庄园屋面维修工程-15幢-1101"),
+            module._classification_cache_key("屋面维修", "锦绣庄园屋面维修工程-15幢-1001、1002"),
         )
         self.assertNotEqual(
-            module._classification_cache_key("A小区", "屋面维修", "15幢屋面维修"),
-            module._classification_cache_key("A小区", "屋面维修", "16幢外墙维修"),
+            module._classification_cache_key("屋面维修", "15幢屋面维修"),
+            module._classification_cache_key("屋面维修", "16幢外墙维修"),
         )
         self.assertEqual(
-            module._display_project_name(
-                {
-                    "consultation_project_name": "锦绣庄园屋面维修工程15幢",
-                    "sub_project_id": "锦绣庄园屋面维修工程-15幢-1101",
-                }
+            module._build_unit_project_name(
+                "锦绣庄园屋面维修工程15幢",
+                "锦绣庄园屋面维修工程-15幢-1101",
             ),
             "锦绣庄园屋面维修工程-15幢-1101",
         )
+        self.assertEqual(
+            module._build_unit_project_name(
+                "福泰花苑屋顶漏水维修工程",
+                "福泰花苑屋顶漏水维修工程-7幢",
+            ),
+            "福泰花苑屋顶漏水维修工程-7幢",
+        )
+        self.assertEqual(
+            module._build_unit_project_name(
+                "平湖滨水广场消火栓主管漏水，泵房压力下降及更换消防报警主机项目",
+                "单项工程-安装",
+            ),
+            "平湖滨水广场消火栓主管漏水，泵房压力下降及更换消防报警主机项目-单项工程-安装",
+        )
+        self.assertEqual(
+            module._classification_cache_subject("福泰花苑屋顶漏水维修工程-7幢"),
+            module._classification_cache_subject("福泰花苑屋顶漏水维修工程-8幢"),
+        )
+
+        units = module._group_classification_units(
+            {
+                "consultation_project_name": "福泰花苑屋顶漏水维修工程",
+                "renovation_content": "屋顶漏水维修",
+                "file_name": "roof.pdf",
+                "consultation_time": "2026-01-01",
+                "location": "浙江省嘉兴市",
+            },
+            [
+                {
+                    "page_no": 1,
+                    "seq": 1,
+                    "sub_project_id": "福泰花苑屋顶漏水维修工程-7幢",
+                    "project_code": "0101",
+                    "project_name": "屋面防水",
+                    "total_price": 100,
+                }
+            ],
+        )
+        self.assertEqual(units[0]["unit_project_name"], "福泰花苑屋顶漏水维修工程-7幢")
+        self.assertEqual(units[0]["ocr_values"]["unit_project_name"], "福泰花苑屋顶漏水维修工程-7幢")
 
     def test_batch_script_merges_ocr_pages_cleans_sub_project_and_filters_summary(self):
         script = ROOT / "scripts" / "batch_classify_excel.py"

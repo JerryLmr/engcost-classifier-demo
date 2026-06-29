@@ -144,8 +144,24 @@ def normalize_sub_project_id_for_cache(value: object) -> str:
     return s.strip("-_－— ")
 
 
-def _classification_cache_subject(clean_sub_project_id: object) -> str:
-    return normalize_sub_project_id_for_cache(clean_sub_project_id) or norm_text(clean_sub_project_id)
+def _classification_cache_subject(value: object) -> str:
+    return normalize_sub_project_id_for_cache(value) or norm_text(value)
+
+
+def _build_unit_project_name(consultation_project_name: object, sub_project_id: object) -> str:
+    consultation_name = _cell_text(consultation_project_name)
+    subject = _cell_text(sub_project_id)
+
+    if consultation_name and subject:
+        if subject.startswith(consultation_name):
+            return subject
+        consultation_base = normalize_sub_project_id_for_cache(consultation_name)
+        subject_base = normalize_sub_project_id_for_cache(subject)
+        if consultation_base and subject_base and consultation_base == subject_base:
+            return subject
+        return f"{consultation_name}-{subject}"
+
+    return consultation_name or subject
 
 
 def clean_sub_project_id(value: object, project_code: object | None = None) -> str:
@@ -316,14 +332,20 @@ def _group_classification_units(
     fallback_subject = _cell_text(ocr_values.get("consultation_project_name")) or "未分组"
     prepared_items = _prepare_merged_items(items, fallback_subject)
     if not prepared_items:
+        unit_project_name = _build_unit_project_name(
+            ocr_values.get("consultation_project_name"),
+            fallback_subject,
+        )
         return [
             {
                 "ocr_values": {
                     **ocr_values,
                     "sub_project_id": fallback_subject,
                     "sub_item_project_rows": "[]",
+                    "unit_project_name": unit_project_name,
                 },
                 "classify_subject": fallback_subject,
+                "unit_project_name": unit_project_name,
                 "item_names": [],
             }
         ]
@@ -343,10 +365,16 @@ def _group_classification_units(
         unit_ocr_values = dict(ocr_values)
         unit_ocr_values["sub_project_id"] = subject
         unit_ocr_values["sub_item_project_rows"] = _json_dumps(group_items)
+        unit_project_name = _build_unit_project_name(
+            unit_ocr_values.get("consultation_project_name"),
+            subject,
+        )
+        unit_ocr_values["unit_project_name"] = unit_project_name
         units.append(
             {
                 "ocr_values": unit_ocr_values,
                 "classify_subject": subject,
+                "unit_project_name": unit_project_name,
                 "item_names": filtered_names.get(subject, []),
             }
         )
@@ -373,22 +401,6 @@ def _read_ocr_values(worksheet, header_map: dict[str, int], row: int) -> dict[st
     return values
 
 
-def _display_project_name(ocr_values: dict[str, object]) -> str:
-    consultation_name = _cell_text(ocr_values.get("consultation_project_name"))
-    sub_project_id = _cell_text(ocr_values.get("sub_project_id"))
-
-    if consultation_name and sub_project_id:
-        if sub_project_id.startswith(consultation_name):
-            return sub_project_id
-        consultation_base = normalize_sub_project_id_for_cache(consultation_name)
-        sub_base = normalize_sub_project_id_for_cache(sub_project_id)
-        if consultation_base and sub_base and consultation_base == sub_base:
-            return sub_project_id
-        return f"{consultation_name}-{sub_project_id}"
-
-    return consultation_name or sub_project_id
-
-
 def _write_result_row(
     worksheet,
     row: int,
@@ -396,7 +408,11 @@ def _write_result_row(
     ocr_values: dict[str, object],
 ) -> None:
     values = [
-        _display_project_name(ocr_values),
+        (
+            ocr_values.get("unit_project_name")
+            or ocr_values.get("sub_project_id")
+            or ocr_values.get("consultation_project_name")
+        ),
         result.get("project_name_text", ""),
         result.get("catalog_id", ""),
         result.get("category", ""),
@@ -423,15 +439,12 @@ def _write_result_row(
 
 
 def _classification_cache_key(
-    consultation_project_name: object,
     renovation_content: object,
-    clean_sub_project_id: object,
+    unit_project_name: object,
 ) -> str:
-    cache_subject = _classification_cache_subject(clean_sub_project_id)
+    cache_subject = _classification_cache_subject(unit_project_name)
     raw_key = (
-        norm_text(consultation_project_name)
-        + "|"
-        + norm_text(renovation_content)
+        norm_text(renovation_content)
         + "|"
         + cache_subject
     )
@@ -501,29 +514,29 @@ def classify_workbook(
         for unit in units:
             ocr_values = unit["ocr_values"]
             classify_subject = _cell_text(unit["classify_subject"])
+            unit_project_name = _cell_text(ocr_values.get("unit_project_name") or unit.get("unit_project_name"))
             item_names = list(unit["item_names"])
             if classify_subject == "未分组":
                 empty_project_name_rows += 1
 
-            cache_subject = _classification_cache_subject(classify_subject)
+            cache_subject = _classification_cache_subject(unit_project_name)
             ocr_values["cache_subject"] = cache_subject
             cache_key = _classification_cache_key(
-                ocr_values.get("consultation_project_name"),
                 ocr_values.get("renovation_content"),
-                classify_subject,
+                unit_project_name,
             )
             if cache_key in classification_cache:
                 result = classification_cache[cache_key]
                 cache_hit_count += 1
                 print(
                     f"[CACHE] {path.name}:{first_source_row} "
-                    f"{classify_subject[:80]} cache_subject={cache_subject[:80]}",
+                    f"{unit_project_name[:80]} cache_subject={cache_subject[:80]}",
                     flush=True,
                 )
             else:
                 print(
                     f"[ROW ] {path.name}:{first_source_row} "
-                    f"{classify_subject[:80]} cache_subject={cache_subject[:80]}",
+                    f"{unit_project_name[:80]} cache_subject={cache_subject[:80]}",
                     flush=True,
                 )
 
