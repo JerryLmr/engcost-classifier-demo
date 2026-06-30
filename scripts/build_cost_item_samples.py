@@ -148,28 +148,34 @@ def consultation_time_text(value: Any) -> str:
         return text
 
 
-def load_header_map(worksheet) -> dict[str, int]:
+def load_header_map_from_values(header_row: tuple[Any, ...]) -> dict[str, int]:
     header_map: dict[str, int] = {}
-    for column in range(1, worksheet.max_column + 1):
-        header = cell_text(worksheet.cell(row=1, column=column).value)
+    for index, value in enumerate(header_row):
+        header = cell_text(value)
         if header and header not in header_map:
-            header_map[header] = column
+            header_map[header] = index
     return header_map
 
 
-def get_cell(worksheet, header_map: dict[str, int], row: int, header: str) -> Any:
-    column = header_map.get(header)
-    if not column:
+def get_cell_from_row(
+    row_values: tuple[Any, ...],
+    header_map: dict[str, int],
+    header: str,
+) -> Any:
+    index = header_map.get(header)
+    if index is None:
         return None
-    return worksheet.cell(row=row, column=column).value
+    if index >= len(row_values):
+        return None
+    return row_values[index]
 
 
-def get_text(worksheet, header_map: dict[str, int], row: int, header: str) -> str:
-    return cell_text(get_cell(worksheet, header_map, row, header))
-
-
-def get_project_header_text(worksheet, header_map: dict[str, int], row: int, header: str) -> str:
-    value = get_cell(worksheet, header_map, row, header)
+def get_project_header_text_from_row(
+    row_values: tuple[Any, ...],
+    header_map: dict[str, int],
+    header: str,
+) -> str:
+    value = get_cell_from_row(row_values, header_map, header)
     if header == "consultation_time":
         return consultation_time_text(value)
     return cell_text(value)
@@ -295,15 +301,15 @@ def clean_text(value: Any) -> str:
     return cleaned
 
 
-def add_numeric_parse_errors(
-    errors: list[dict[str, Any]],
+def collect_numeric_parse_errors(
     source_row_id: int,
     seq_text: str,
     item: dict[str, Any],
     numeric_values: dict[str, float | None],
     raw_sub_item_rows: Any,
     row_summary: str,
-) -> None:
+) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
     for field, parsed_value in numeric_values.items():
         raw_value = item.get(field)
         if parsed_value is None and raw_value is not None and cell_text(raw_value) != "":
@@ -327,170 +333,195 @@ def add_numeric_parse_errors(
                 row_summary,
             )
         )
+    return errors
 
 
 def join_text(parts: list[str], separator: str) -> str:
     return separator.join(part for part in parts if part)
 
 
-def build_samples(input_path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    workbook = openpyxl.load_workbook(input_path, read_only=True, data_only=True)
-    worksheet = workbook.active
-    header_map = load_header_map(worksheet)
+def append_dict_row(worksheet, headers: list[str], row: dict[str, Any]) -> None:
+    worksheet.append([row.get(header) for header in headers])
 
-    missing_required = [header for header in ("sub_item_project_rows", "project_name_text") if header not in header_map]
-    if missing_required:
-        raise ValueError(f"输入 Excel 缺少必要列: {', '.join(missing_required)}")
 
-    samples: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
+def append_error(
+    errors_sheet,
+    source_row_id: int,
+    error_type: str,
+    error_message: str,
+    raw_sub_item_rows: Any,
+    row_summary: str,
+) -> None:
+    append_dict_row(
+        errors_sheet,
+        PARSE_ERROR_HEADERS,
+        make_error(
+            source_row_id,
+            error_type,
+            error_message,
+            raw_sub_item_rows,
+            row_summary,
+        ),
+    )
 
-    for source_row_id in range(2, worksheet.max_row + 1):
-        raw_sub_item_rows = get_cell(worksheet, header_map, source_row_id, "sub_item_project_rows")
-        row_values = {
-            header: get_project_header_text(worksheet, header_map, source_row_id, header)
-            for header in PROJECT_HEADERS
-        }
-        row_values["工程名称"] = build_project_name(
-            row_values["工程名称"],
-            row_values["consultation_project_name"],
-            row_values["renovation_content"],
-        )
-        row_summary = raw_row_summary(row_values)
 
-        item_rows, parse_error = parse_sub_item_rows(raw_sub_item_rows)
-        if parse_error:
-            errors.append(
-                make_error(
+def build_and_write_samples(input_path: Path, output_path: Path) -> tuple[int, int]:
+    input_workbook = openpyxl.load_workbook(input_path, read_only=True, data_only=True)
+    try:
+        worksheet = input_workbook.active
+        header_row = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
+        header_map = load_header_map_from_values(header_row)
+
+        missing_required = [
+            header for header in ("sub_item_project_rows", "project_name_text") if header not in header_map
+        ]
+        if missing_required:
+            raise ValueError(f"输入 Excel 缺少必要列: {', '.join(missing_required)}")
+
+        output_workbook = openpyxl.Workbook(write_only=True)
+        samples_sheet = output_workbook.create_sheet("samples")
+        errors_sheet = output_workbook.create_sheet("parse_errors")
+        samples_sheet.append(SAMPLE_HEADERS)
+        errors_sheet.append(PARSE_ERROR_HEADERS)
+
+        samples_count = 0
+        errors_count = 0
+
+        for source_row_id, row_values_tuple in enumerate(
+            worksheet.iter_rows(min_row=2, values_only=True),
+            start=2,
+        ):
+            raw_sub_item_rows = get_cell_from_row(row_values_tuple, header_map, "sub_item_project_rows")
+            row_values = {
+                header: get_project_header_text_from_row(row_values_tuple, header_map, header)
+                for header in PROJECT_HEADERS
+            }
+            row_values["工程名称"] = build_project_name(
+                row_values["工程名称"],
+                row_values["consultation_project_name"],
+                row_values["renovation_content"],
+            )
+            row_summary = raw_row_summary(row_values)
+
+            item_rows, parse_error = parse_sub_item_rows(raw_sub_item_rows)
+            if parse_error:
+                append_error(
+                    errors_sheet,
                     source_row_id,
                     "invalid_sub_item_project_rows",
                     parse_error,
                     raw_sub_item_rows,
                     row_summary,
                 )
-            )
-            continue
+                errors_count += 1
+                continue
 
-        if not item_rows:
-            errors.append(
-                make_error(
+            if not item_rows:
+                append_error(
+                    errors_sheet,
                     source_row_id,
                     "empty_sub_item_project_rows",
                     "sub_item_project_rows 数组为空",
                     raw_sub_item_rows,
                     row_summary,
                 )
-            )
-            continue
+                errors_count += 1
+                continue
 
-        for index, item in enumerate(item_rows, start=1):
-            if not isinstance(item, dict):
-                errors.append(
-                    make_error(
+            for index, item in enumerate(item_rows, start=1):
+                if not isinstance(item, dict):
+                    append_error(
+                        errors_sheet,
                         source_row_id,
                         "invalid_item_row",
                         f"清单行不是对象: index={index}, type={type(item).__name__}",
                         raw_sub_item_rows,
                         row_summary,
                     )
-                )
-                continue
+                    errors_count += 1
+                    continue
 
-            seq = item.get("seq")
-            if seq is None or cell_text(seq) == "":
-                seq = index
-                errors.append(
-                    make_error(
+                seq = item.get("seq")
+                if seq is None or cell_text(seq) == "":
+                    seq = index
+                    append_error(
+                        errors_sheet,
                         source_row_id,
                         "missing_seq",
                         f"清单行缺少 seq，已使用数组内序号: {index}",
                         raw_sub_item_rows,
                         row_summary,
                     )
-                )
-            seq_text = cell_text(seq)
+                    errors_count += 1
+                seq_text = cell_text(seq)
 
-            cost_item_name = cell_text(item.get("cost_item_name") or item.get("project_name"))
-            if not cost_item_name:
-                errors.append(
-                    make_error(
+                cost_item_name = cell_text(item.get("cost_item_name") or item.get("project_name"))
+                if not cost_item_name:
+                    append_error(
+                        errors_sheet,
                         source_row_id,
                         "missing_cost_item_name",
                         f"清单行缺少 cost_item_name/project_name: seq={seq_text}",
                         raw_sub_item_rows,
                         row_summary,
                     )
-                )
+                    errors_count += 1
 
-            project_description = cell_text(item.get("project_description"))
-            cleaned_description = clean_text(project_description)
-            unit = cell_text(item.get("unit"))
-            numeric_values = {field: parse_number(item.get(field)) for field in NUMERIC_FIELDS}
-            add_numeric_parse_errors(
-                errors,
-                source_row_id,
-                seq_text,
-                item,
-                numeric_values,
-                raw_sub_item_rows,
-                row_summary,
-            )
+                project_description = cell_text(item.get("project_description"))
+                cleaned_description = clean_text(project_description)
+                unit = cell_text(item.get("unit"))
+                numeric_values = {field: parse_number(item.get(field)) for field in NUMERIC_FIELDS}
+                for error in collect_numeric_parse_errors(
+                    source_row_id,
+                    seq_text,
+                    item,
+                    numeric_values,
+                    raw_sub_item_rows,
+                    row_summary,
+                ):
+                    append_dict_row(errors_sheet, PARSE_ERROR_HEADERS, error)
+                    errors_count += 1
 
-            sample = {
-                "source_row_id": source_row_id,
-                "item_row_id": f"{source_row_id}-{seq_text}",
-                **row_values,
-                "sub_project_id": cell_text(item.get("sub_project_id")) or row_values.get("sub_project_id", ""),
-                "seq": seq,
-                "cost_item_name": cost_item_name,
-                "project_description": project_description,
-                "unit": unit,
-                "unit_normalized": normalize_unit(unit),
-                "quantity": numeric_values["quantity"],
-                "unit_price": numeric_values["unit_price"],
-                "total_price": numeric_values["total_price"],
-                "labor_cost": numeric_values["labor_cost"],
-                "machinery_cost": numeric_values["machinery_cost"],
-                "labor_unit_price": divide_or_none(numeric_values["labor_cost"], numeric_values["quantity"]),
-                "machinery_unit_price": divide_or_none(
-                    numeric_values["machinery_cost"],
-                    numeric_values["quantity"],
-                ),
-                "item_similarity_text": join_text([cost_item_name, cleaned_description], "；"),
-                "item_context_text": join_text(
-                    [
-                        row_values["工程名称"],
-                        cell_text(item.get("sub_project_id")),
-                        cost_item_name,
-                        cleaned_description,
-                    ],
-                    " / ",
-                ),
-                "source_json": compact_json(item),
-            }
-            samples.append(sample)
+                sample = {
+                    "source_row_id": source_row_id,
+                    "item_row_id": f"{source_row_id}-{seq_text}",
+                    **row_values,
+                    "sub_project_id": cell_text(item.get("sub_project_id")) or row_values.get("sub_project_id", ""),
+                    "seq": seq,
+                    "cost_item_name": cost_item_name,
+                    "project_description": project_description,
+                    "unit": unit,
+                    "unit_normalized": normalize_unit(unit),
+                    "quantity": numeric_values["quantity"],
+                    "unit_price": numeric_values["unit_price"],
+                    "total_price": numeric_values["total_price"],
+                    "labor_cost": numeric_values["labor_cost"],
+                    "machinery_cost": numeric_values["machinery_cost"],
+                    "labor_unit_price": divide_or_none(numeric_values["labor_cost"], numeric_values["quantity"]),
+                    "machinery_unit_price": divide_or_none(
+                        numeric_values["machinery_cost"],
+                        numeric_values["quantity"],
+                    ),
+                    "item_similarity_text": join_text([cost_item_name, cleaned_description], "；"),
+                    "item_context_text": join_text(
+                        [
+                            row_values["工程名称"],
+                            cell_text(item.get("sub_project_id")),
+                            cost_item_name,
+                            cleaned_description,
+                        ],
+                        " / ",
+                    ),
+                    "source_json": compact_json(item),
+                }
+                append_dict_row(samples_sheet, SAMPLE_HEADERS, sample)
+                samples_count += 1
 
-    workbook.close()
-    return samples, errors
-
-
-def append_dict_rows(worksheet, headers: list[str], rows: list[dict[str, Any]]) -> None:
-    worksheet.append(headers)
-    for row in rows:
-        worksheet.append([row.get(header) for header in headers])
-
-
-def write_workbook(output_path: Path, samples: list[dict[str, Any]], errors: list[dict[str, Any]]) -> None:
-    workbook = openpyxl.Workbook()
-    samples_sheet = workbook.active
-    samples_sheet.title = "samples"
-    append_dict_rows(samples_sheet, SAMPLE_HEADERS, samples)
-
-    errors_sheet = workbook.create_sheet("parse_errors")
-    append_dict_rows(errors_sheet, PARSE_ERROR_HEADERS, errors)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_workbook.save(output_path)
+        return samples_count, errors_count
+    finally:
+        input_workbook.close()
 
 
 def validate_paths(input_path: Path, output_path: Path, overwrite: bool) -> None:
@@ -513,16 +544,15 @@ def main() -> int:
 
     try:
         validate_paths(input_path, output_path, args.overwrite)
-        samples, errors = build_samples(input_path)
-        write_workbook(output_path, samples, errors)
+        samples_count, errors_count = build_and_write_samples(input_path, output_path)
     except ValueError as exc:
         print(f"[ERROR] {exc}")
         return 1
 
     print(f"[DONE] 输入文件: {input_path}")
     print(f"[DONE] 输出文件: {output_path}")
-    print(f"[DONE] samples: {len(samples)}")
-    print(f"[DONE] parse_errors: {len(errors)}")
+    print(f"[DONE] samples: {samples_count}")
+    print(f"[DONE] parse_errors: {errors_count}")
     return 0
 
 

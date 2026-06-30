@@ -245,7 +245,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_build_samples_propagates_project_name_text(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            input_path = Path(tmpdir) / "classified.xlsx"
+            tmp_path = Path(tmpdir)
+            input_path = tmp_path / "classified.xlsx"
+            output_path = tmp_path / "samples.xlsx"
             workbook = openpyxl.Workbook()
             worksheet = workbook.active
             headers = [
@@ -295,12 +297,150 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             )
             workbook.save(input_path)
 
-            samples, errors = build_samples_script.build_samples(input_path)
+            samples_count, errors_count = build_samples_script.build_and_write_samples(input_path, output_path)
 
-        self.assertEqual(errors, [])
-        self.assertEqual(len(samples), 1)
-        self.assertEqual(samples[0]["工程名称"], "嘉兴某小区12幢屋面渗漏维修工程")
-        self.assertEqual(samples[0]["project_name_text"], "屋面渗漏维修")
+            output_workbook = openpyxl.load_workbook(output_path, data_only=True)
+            self.assertEqual(output_workbook.sheetnames, ["samples", "parse_errors"])
+            samples_sheet = output_workbook["samples"]
+            errors_sheet = output_workbook["parse_errors"]
+            sample_headers = [
+                samples_sheet.cell(row=1, column=column).value
+                for column in range(1, samples_sheet.max_column + 1)
+            ]
+            error_headers = [
+                errors_sheet.cell(row=1, column=column).value
+                for column in range(1, errors_sheet.max_column + 1)
+            ]
+            sample = {
+                header: samples_sheet.cell(row=2, column=index).value
+                for index, header in enumerate(sample_headers, start=1)
+            }
+            output_workbook.close()
+
+        self.assertEqual(samples_count, 1)
+        self.assertEqual(errors_count, 0)
+        self.assertEqual(sample_headers, build_samples_script.SAMPLE_HEADERS)
+        self.assertEqual(error_headers, build_samples_script.PARSE_ERROR_HEADERS)
+        self.assertEqual(sample["工程名称"], "嘉兴某小区12幢屋面渗漏维修工程")
+        self.assertEqual(sample["project_name_text"], "屋面渗漏维修")
+        self.assertEqual(sample["cost_item_name"], "屋面卷材防水")
+        self.assertEqual(sample["project_description"], "3mm SBS")
+        self.assertEqual(sample["unit"], "平方米")
+        self.assertEqual(sample["unit_normalized"], "m²")
+        self.assertEqual(sample["quantity"], 10)
+        self.assertEqual(sample["unit_price"], 80)
+        self.assertEqual(sample["item_similarity_text"], "屋面卷材防水；3mm SBS")
+        self.assertEqual(sample["item_context_text"], "嘉兴某小区12幢屋面渗漏维修工程 / 屋面卷材防水 / 3mm SBS")
+        self.assertIn('"cost_item_name": "屋面卷材防水"', sample["source_json"])
+
+    def test_build_samples_streaming_helpers_use_row_values(self):
+        header_map = build_samples_script.load_header_map_from_values(
+            ("file_name", "project_name_text", "sub_item_project_rows")
+        )
+
+        self.assertEqual(header_map, {"file_name": 0, "project_name_text": 1, "sub_item_project_rows": 2})
+        self.assertEqual(
+            build_samples_script.get_cell_from_row(("a.pdf", "屋面", "[]"), header_map, "file_name"),
+            "a.pdf",
+        )
+        self.assertIsNone(build_samples_script.get_cell_from_row(("a.pdf",), header_map, "sub_item_project_rows"))
+
+    def test_build_samples_streams_parse_errors_to_output_sheet(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            input_path = tmp_path / "classified.xlsx"
+            output_path = tmp_path / "samples.xlsx"
+            workbook = openpyxl.Workbook()
+            worksheet = workbook.active
+            headers = [
+                "file_name",
+                "工程名称",
+                "project_name_text",
+                "consultation_project_name",
+                "renovation_content",
+                "catalog_id",
+                "一级分类",
+                "二级分类",
+                "consultation_time",
+                "location",
+                "sub_item_project_rows",
+            ]
+            worksheet.append(headers)
+            worksheet.append(
+                [
+                    "bad-json.pdf",
+                    "坏 JSON 工程",
+                    "坏 JSON",
+                    "",
+                    "",
+                    "CP-000",
+                    "一级",
+                    "二级",
+                    "2026-01-01",
+                    "浙江省嘉兴市",
+                    "[not-json]",
+                ]
+            )
+            worksheet.append(
+                [
+                    "bad-number.pdf",
+                    "数值异常工程",
+                    "数值异常",
+                    "",
+                    "",
+                    "CP-001",
+                    "一级",
+                    "二级",
+                    "2026-01-02",
+                    "浙江省嘉兴市",
+                    '[{"seq": 1, "cost_item_name": "管道维修", "unit": "米", "quantity": 2, "unit_price": "abc"}]',
+                ]
+            )
+            workbook.save(input_path)
+
+            samples_count, errors_count = build_samples_script.build_and_write_samples(input_path, output_path)
+
+            output_workbook = openpyxl.load_workbook(output_path, data_only=True)
+            samples_sheet = output_workbook["samples"]
+            errors_sheet = output_workbook["parse_errors"]
+            error_headers = [
+                errors_sheet.cell(row=1, column=column).value
+                for column in range(1, errors_sheet.max_column + 1)
+            ]
+            error_rows = [
+                {
+                    header: errors_sheet.cell(row=row, column=index).value
+                    for index, header in enumerate(error_headers, start=1)
+                }
+                for row in range(2, errors_sheet.max_row + 1)
+            ]
+            samples_max_row = samples_sheet.max_row
+            output_workbook.close()
+
+        self.assertEqual(samples_count, 1)
+        self.assertEqual(errors_count, 3)
+        self.assertEqual(samples_max_row, 2)
+        self.assertEqual(error_headers, build_samples_script.PARSE_ERROR_HEADERS)
+        self.assertEqual(
+            [row["error_type"] for row in error_rows],
+            ["invalid_sub_item_project_rows", "invalid_numeric_field", "missing_unit_price"],
+        )
+        self.assertIn("JSON 解析失败", error_rows[0]["error_message"])
+        self.assertIn("field=unit_price", error_rows[1]["error_message"])
+
+    def test_build_samples_streaming_missing_required_headers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            input_path = tmp_path / "classified.xlsx"
+            output_path = tmp_path / "samples.xlsx"
+            workbook = openpyxl.Workbook()
+            worksheet = workbook.active
+            worksheet.append(["file_name", "sub_item_project_rows"])
+            worksheet.append(["source.pdf", "[]"])
+            workbook.save(input_path)
+
+            with self.assertRaisesRegex(ValueError, "输入 Excel 缺少必要列: project_name_text"):
+                build_samples_script.build_and_write_samples(input_path, output_path)
 
     def test_write_index_outputs_project_groups_debug_workbook(self):
         samples = self.sample_frame()
