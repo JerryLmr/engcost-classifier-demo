@@ -154,18 +154,12 @@ backend/.venv/bin/python scripts/build_cost_item_embedding_index.py \
 
 ```bash
 backend/.venv/bin/python scripts/build_cost_item_embedding_index.py \
-  --output-dir outputs/cost_item_index \
+  --output-dir embeddings \
   --model BAAI/bge-m3 \
   --overwrite
 ```
 
-输出目录：
-
-```text
-outputs/cost_item_index/
-```
-
-包含：
+`embeddings`中包含：
 
 ```text
 samples.parquet
@@ -173,12 +167,6 @@ project_groups.parquet
 project_name_embeddings.npy
 project_detail_embeddings.npy
 index_meta.json
-```
-
-同时生成便于人工检查的工程组调试表：
-
-```text
-outputs/cost_item_project_groups.xlsx
 ```
 
 索引阶段不再调用 LLM 清洗工程名称，只读取样本中的 `project_name_text`。如果该字段为空，会打印 warning 并回退为原始 `工程名称`。`project_detail_text` 由同一历史工程下的 `cost_item_name + project_description` 去重拼接，不拼入工程名称。
@@ -191,7 +179,7 @@ outputs/cost_item_project_groups.xlsx
 
 ```bash
 backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
-  --index-dir outputs/cost_item_index \
+  --index-dir embeddings \
   --text "屋面漏水，想做3mm SBS防水，面积大概500平，参考嘉兴一年内的造价" \
   --output outputs/cost_estimate_result.xlsx \
   --overwrite

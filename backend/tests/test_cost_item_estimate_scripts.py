@@ -470,7 +470,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "输入 Excel 缺少必要列: project_name_text"):
                 build_samples_script.build_and_write_samples(input_path, output_path)
 
-    def test_write_index_outputs_project_groups_debug_workbook(self):
+    def test_write_index_outputs_only_core_index_files(self):
         samples = self.sample_frame()
         project_groups = build_index.build_project_groups(samples)
         embeddings = np.ones((len(project_groups), 2), dtype=np.float32)
@@ -480,14 +480,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             output_dir = Path(tmpdir) / "index"
             build_index.write_index(samples, project_groups, embeddings, embeddings, output_dir, meta)
 
-            debug_path = Path(tmpdir) / "cost_item_project_groups.xlsx"
-            self.assertTrue(debug_path.exists())
-            workbook = openpyxl.load_workbook(debug_path, data_only=True)
-            worksheet = workbook.active
-            headers = [worksheet.cell(row=1, column=column).value for column in range(1, worksheet.max_column + 1)]
-            workbook.close()
-
-        self.assertEqual(headers, build_index.PROJECT_GROUP_COLUMNS)
+            debug_path = Path(tmpdir) / ("cost_item_" + "project_groups.xlsx")
+            self.assertFalse(debug_path.exists())
+            self.assertTrue((output_dir / "samples.parquet").exists())
+            self.assertTrue((output_dir / "project_groups.parquet").exists())
+            self.assertTrue((output_dir / "project_name_embeddings.npy").exists())
+            self.assertTrue((output_dir / "project_detail_embeddings.npy").exists())
+            self.assertTrue((output_dir / "index_meta.json").exists())
 
     def test_build_samples_validate_paths_requires_overwrite_for_existing_output(self):
         with tempfile.TemporaryDirectory() as tmpdir:

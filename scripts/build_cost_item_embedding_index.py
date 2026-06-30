@@ -26,7 +26,6 @@ MANAGED_OUTPUT_FILES = [
     "project_group_embeddings.npy",
     "index_meta.json",
 ]
-PROJECT_GROUP_DEBUG_FILE = "cost_item_project_groups.xlsx"
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,9 +48,6 @@ def validate_output_dir(output_dir: Path, overwrite: bool) -> None:
     existing = [name for name in MANAGED_OUTPUT_FILES if (output_dir / name).exists()]
     if output_dir.exists() and not overwrite:
         existing.append(str(output_dir))
-    debug_output = output_dir.parent / PROJECT_GROUP_DEBUG_FILE
-    if debug_output.exists():
-        existing.append(str(debug_output))
     if existing and not overwrite:
         raise ValueError(
             "输出已存在，请加 --overwrite 或更换输出目录: "
@@ -230,7 +226,6 @@ def write_index(
             path.unlink()
     samples.to_parquet(output_dir / "samples.parquet", index=False)
     project_groups.to_parquet(output_dir / "project_groups.parquet", index=False)
-    project_groups.to_excel(output_dir.parent / PROJECT_GROUP_DEBUG_FILE, index=False)
     np.save(output_dir / "project_name_embeddings.npy", project_name_embeddings)
     np.save(output_dir / "project_detail_embeddings.npy", project_detail_embeddings)
     (output_dir / "index_meta.json").write_text(

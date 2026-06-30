@@ -57,6 +57,8 @@ node_modules/
 *.bin
 *.gguf
 
+embeddings/
+
 outputs/
 excel_outputs/
 *.npy
