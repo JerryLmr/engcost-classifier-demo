@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
 import math
+import re
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,9 @@ REMOVED_PREFIX_HEADERS = [
 EXCEL_SUFFIXES = {".xlsx", ".xlsm"}
 EMPTY_TEXT_VALUES = {"null", "none", "nan"}
 REMOVED_REASON = "缺少必填 OCR 字段"
+_DATE_TEXT_RE = re.compile(
+    r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+\d{1,2}:\d{2}:\d{2}(?:\.0+)?)?$"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,6 +45,40 @@ def cell_text(value: object) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def normalize_consultation_time(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+
+    text = str(value).strip()
+    if not text:
+        return ""
+
+    text = text.replace("年", "-").replace("月", "-").replace("日", "")
+    text = text.replace("/", "-")
+
+    match = _DATE_TEXT_RE.fullmatch(text)
+    if not match:
+        return text
+
+    year, month, day = (int(part) for part in match.groups())
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return text
+
+
+def normalize_consultation_time_in_row(row_values: list[Any], header_map: dict[str, int]) -> list[Any]:
+    normalized_row_values = list(row_values)
+    time_column = header_map.get("consultation_time")
+    if time_column is not None and time_column < len(normalized_row_values):
+        normalized_row_values[time_column] = normalize_consultation_time(normalized_row_values[time_column])
+    return normalized_row_values
 
 
 def is_empty_required_value(value: object) -> bool:
@@ -141,6 +180,7 @@ def filter_required_ocr_rows(
     try:
         for source_row_id, row in enumerate(row_iter, start=2):
             row_values = normalize_row_length(list(row), expected_length)
+            normalized_row_values = normalize_consultation_time_in_row(row_values, header_map)
             input_rows += 1
 
             missing_fields: list[str] = []
@@ -159,12 +199,12 @@ def filter_required_ocr_rows(
                         source_row_id,
                         ",".join(missing_fields),
                         REMOVED_REASON,
-                        *row_values,
+                        *normalized_row_values,
                     ]
                 )
                 removed_rows += 1
             else:
-                clean_sheet.append(row_values)
+                clean_sheet.append(normalized_row_values)
                 cleaned_rows += 1
 
         clean_workbook.save(clean_output)

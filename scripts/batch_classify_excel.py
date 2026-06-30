@@ -245,8 +245,9 @@ def _consultation_time_text(value: object) -> str:
 
 def _load_header_map(worksheet) -> dict[str, int]:
     header_map: dict[str, int] = {}
-    for column in range(1, worksheet.max_column + 1):
-        header = _cell_text(worksheet.cell(row=1, column=column).value)
+    header_row = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
+    for column, raw_header in enumerate(header_row, start=1):
+        header = _cell_text(raw_header)
         if header and header not in header_map:
             header_map[header] = column
     return header_map
@@ -433,6 +434,22 @@ def _read_ocr_values(worksheet, header_map: dict[str, int], row: int) -> dict[st
     return values
 
 
+def _read_ocr_values_from_row(
+    row_values: tuple[object, ...],
+    header_map: dict[str, int],
+) -> dict[str, object]:
+    values: dict[str, object] = {}
+    for header in OCR_HEADERS:
+        column = header_map.get(header)
+        if not column:
+            values[header] = None
+        else:
+            index = column - 1
+            values[header] = row_values[index] if index < len(row_values) else None
+    values["consultation_time"] = _consultation_time_text(values.get("consultation_time"))
+    return values
+
+
 def _write_result_row(
     worksheet,
     row: int,
@@ -527,8 +544,13 @@ def classify_workbook(
     output_rows = 0
     output_row = 2
     merged_projects: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
-    for source_row in range(2, source_sheet.max_row + 1):
-        ocr_values = _read_ocr_values(source_sheet, header_map, source_row)
+    for source_row, row_values in enumerate(
+        source_sheet.iter_rows(min_row=2, values_only=True),
+        start=2,
+    ):
+        if not any(_cell_text(value) for value in row_values):
+            continue
+        ocr_values = _read_ocr_values_from_row(row_values, header_map)
         merge_key = _merge_key(ocr_values)
         if merge_key not in merged_projects:
             merged_projects[merge_key] = {
