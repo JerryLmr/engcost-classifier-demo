@@ -133,27 +133,50 @@ backend/.venv/bin/python scripts/merge_cost_item_sample_batches.py \
 
 ```text
 batch_id
+project_key
 stable_sample_id
 ```
 
 `batch_id` 负责来源追踪；`stable_sample_id` 负责样本去重。`stable_sample_id` 不使用 `project_code`，也不使用 `batch_id`，因此同一份 OCR 重复导入到不同批次时仍可去重。
+`source_row_id` 只在单个 batch 内有意义；跨 batch 后 query 统一使用 `project_key` 追溯和展开。
 
 ### 4. 构建 embedding 索引
 
 合并总样本后重建本地 embedding index：
 
 ```bash
-backend/.venv/bin/python scripts/build_cost_item_embedding_index.py \
-  --samples samples/cost_item_samples_all.xlsx \
-  --output-dir embeddings \
-  --model BAAI/bge-m3 \
-  --overwrite
+backend/.venv/bin/python scripts/build_cost_item_embedding_index.py
 ```
 
-`--samples` 默认就是 `samples/cost_item_samples_all.xlsx`，也可以省略：
+默认读取：
+
+```text
+samples/cost_item_samples_all.xlsx
+```
+
+默认输出到：
+
+```text
+embeddings/
+```
+
+默认模型：
+
+```text
+BAAI/bge-m3
+```
+
+如果目标索引目录已存在，脚本默认不覆盖；确认要重建时加：
+
+```bash
+backend/.venv/bin/python scripts/build_cost_item_embedding_index.py --overwrite
+```
+
+也可以按需传参覆盖默认值，例如：
 
 ```bash
 backend/.venv/bin/python scripts/build_cost_item_embedding_index.py \
+  --samples samples/cost_item_samples_all.xlsx \
   --output-dir embeddings \
   --model BAAI/bge-m3 \
   --overwrite
@@ -236,10 +259,7 @@ backend/.venv/bin/python scripts/merge_cost_item_sample_batches.py
 重建 embedding：
 
 ```bash
-backend/.venv/bin/python scripts/build_cost_item_embedding_index.py \
-  --output-dir embeddings \
-  --model BAAI/bge-m3 \
-  --overwrite
+backend/.venv/bin/python scripts/build_cost_item_embedding_index.py --overwrite
 ```
 
 新增 OCR 文件时，不需要人工合并 Excel。每批中间结果都会独立保留，便于检查、回滚和重跑。

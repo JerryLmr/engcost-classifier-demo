@@ -62,6 +62,8 @@ MATCH_COLUMNS = [
     "project_score",
     "project_name_score",
     "project_detail_score",
+    "project_key",
+    "batch_id",
     "source_row_id",
     "item_row_id",
     "consultation_time",
@@ -480,25 +482,26 @@ def expand_matched_samples(samples: pd.DataFrame, matched_projects: pd.DataFrame
     if matched_projects.empty:
         return pd.DataFrame(columns=[*MATCH_COLUMNS, *DEBUG_MATCH_COLUMNS])
 
+    if "project_key" not in samples.columns or "project_key" not in matched_projects.columns:
+        raise ValueError("samples 和 matched_projects 必须包含 project_key")
+
     project_columns = [
-        "source_row_id",
+        "project_key",
         "project_rank",
         "project_score",
         "project_name_score",
         "project_detail_score",
-        "工程名称",
-        "project_name_text",
         "project_detail_text",
     ]
     available_project_columns = [column for column in project_columns if column in matched_projects.columns]
     project_meta = matched_projects[available_project_columns].copy()
-    source_ids = project_meta["source_row_id"].tolist()
+    project_keys = project_meta["project_key"].tolist()
 
-    rows = samples[samples["source_row_id"].isin(source_ids)].copy()
+    rows = samples[samples["project_key"].isin(project_keys)].copy()
     if rows.empty:
         return pd.DataFrame(columns=[*MATCH_COLUMNS, *DEBUG_MATCH_COLUMNS])
-    rows = rows.merge(project_meta, on="source_row_id", how="left")
-    rows["_source_order"] = rows["source_row_id"].map({source_id: index for index, source_id in enumerate(source_ids)})
+    rows = rows.merge(project_meta, on="project_key", how="left")
+    rows["_source_order"] = rows["project_key"].map({project_key: index for index, project_key in enumerate(project_keys)})
     sort_columns = ["project_rank", "_source_order"]
     if "seq" in rows.columns:
         sort_columns.append("seq")
@@ -540,6 +543,17 @@ def first_non_empty(values: pd.Series) -> str:
     return ""
 
 
+def source_item_refs(group: pd.DataFrame) -> pd.Series:
+    if "project_key" not in group.columns or "item_row_id" not in group.columns:
+        return pd.Series(dtype=object)
+    return group.apply(
+        lambda row: "::".join(
+            part for part in [cell_text(row.get("project_key")), cell_text(row.get("item_row_id"))] if part
+        ),
+        axis=1,
+    )
+
+
 def aggregate_recommend_items(matches: pd.DataFrame, parsed: ParsedQuery) -> pd.DataFrame:
     if matches.empty:
         return pd.DataFrame(columns=RECOMMENDED_ITEM_COLUMNS)
@@ -563,7 +577,7 @@ def aggregate_recommend_items(matches: pd.DataFrame, parsed: ParsedQuery) -> pd.
             "二级分类": cell_text(first.get("二级分类")),
             "维修状态": cell_text(first.get("维修状态")),
             "unit_normalized": unit_normalized,
-            "来源清单行": ordered_join(group["item_row_id"]) if "item_row_id" in group.columns else "",
+            "来源清单行": ordered_join(source_item_refs(group)),
             "max_project_score": float(pd.to_numeric(group["project_score"], errors="coerce").max()),
         }
         row.update(rename_stats(range_stats(group, "quantity"), "quantity", "历史工程量"))

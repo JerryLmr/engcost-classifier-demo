@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
         default="samples/cost_item_samples_all.xlsx",
         help="已审定清单总样本 Excel 路径，默认 samples/cost_item_samples_all.xlsx",
     )
-    parser.add_argument("--output-dir", required=True, help="索引输出目录")
+    parser.add_argument("--output-dir", default="embeddings", help="索引输出目录，默认 embeddings")
     parser.add_argument("--model", default="BAAI/bge-m3", help="sentence-transformers 模型名")
     parser.add_argument("--batch-size", type=int, default=32, help="embedding 批大小")
     parser.add_argument("--overwrite", action="store_true", help="若索引输出文件已存在则覆盖")
@@ -70,6 +70,36 @@ def load_samples(samples_path: Path) -> pd.DataFrame:
     if missing:
         raise ValueError(f"samples sheet 缺少必要字段: {', '.join(missing)}")
 
+    return ensure_project_key(samples)
+
+
+def normalize_source_row_id(value: Any) -> str:
+    text = safe_text(value)
+    if text.endswith(".0"):
+        integer_text = text[:-2]
+        if integer_text.isdigit():
+            return integer_text
+    return text
+
+
+def build_project_key(batch_id: Any, source_row_id: Any) -> str:
+    batch_text = safe_text(batch_id)
+    source_text = normalize_source_row_id(source_row_id)
+    if not batch_text or not source_text:
+        raise ValueError("生成 project_key 需要 batch_id 和 source_row_id")
+    return f"{batch_text}::{source_text}"
+
+
+def ensure_project_key(samples: pd.DataFrame) -> pd.DataFrame:
+    if "project_key" in samples.columns:
+        return samples
+    if "batch_id" not in samples.columns or "source_row_id" not in samples.columns:
+        raise ValueError("旧样本缺少 project_key，且无法从 batch_id/source_row_id 临时生成")
+    samples = samples.copy()
+    samples["project_key"] = samples.apply(
+        lambda row: build_project_key(row.get("batch_id"), row.get("source_row_id")),
+        axis=1,
+    )
     return samples
 
 
@@ -86,7 +116,11 @@ def join_parts(parts: list[str], separator: str = " ") -> str:
 
 
 PROJECT_GROUP_COLUMNS = [
+    "project_key",
+    "batch_id",
     "source_row_id",
+    "consultation_time",
+    "location",
     "工程名称",
     "project_name_text",
     "catalog_id",
@@ -94,22 +128,22 @@ PROJECT_GROUP_COLUMNS = [
     "二级分类",
     "维修状态",
     "标准对象",
-    "consultation_time",
-    "location",
     "project_detail_text",
     "item_count",
 ]
 
 
 def build_project_groups(samples: pd.DataFrame) -> pd.DataFrame:
+    samples = ensure_project_key(samples)
     rows: list[dict[str, Any]] = []
-    for source_row_id, group in samples.groupby("source_row_id", sort=False, dropna=False):
+    for project_key, group in samples.groupby("project_key", sort=False, dropna=False):
         first = group.iloc[0]
+        source_row_id = first.get("source_row_id")
         project_name = safe_text(first.get("工程名称"))
         project_name_text = safe_text(first.get("project_name_text"))
         if not project_name_text:
             print(
-                f"[WARN] source_row_id={source_row_id} project_name_text 为空，已回退为原始工程名称",
+                f"[WARN] project_key={project_key} project_name_text 为空，已回退为原始工程名称",
                 flush=True,
             )
             project_name_text = project_name
@@ -130,7 +164,11 @@ def build_project_groups(samples: pd.DataFrame) -> pd.DataFrame:
 
         rows.append(
             {
+                "project_key": project_key,
+                "batch_id": safe_text(first.get("batch_id")),
                 "source_row_id": source_row_id,
+                "consultation_time": safe_text(first.get("consultation_time")),
+                "location": safe_text(first.get("location")),
                 "工程名称": project_name,
                 "project_name_text": project_name_text,
                 "catalog_id": safe_text(first.get("catalog_id")),
@@ -138,8 +176,6 @@ def build_project_groups(samples: pd.DataFrame) -> pd.DataFrame:
                 "二级分类": safe_text(first.get("二级分类")),
                 "维修状态": safe_text(first.get("维修状态")),
                 "标准对象": safe_text(first.get("标准对象")),
-                "consultation_time": safe_text(first.get("consultation_time")),
-                "location": safe_text(first.get("location")),
                 "project_detail_text": project_detail_text,
                 "item_count": int(len(group)),
             }

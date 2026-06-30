@@ -65,6 +65,17 @@ def norm(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def normalize_source_row_id(value: Any) -> str:
+    text = norm(value)
+    if re.fullmatch(r"\d+\.0+", text):
+        return text.split(".", 1)[0]
+    return text
+
+
+def build_project_key(batch_id: str, source_row_id: Any) -> str:
+    return f"{batch_id}::{normalize_source_row_id(source_row_id)}"
+
+
 def row_text(row: dict[str, Any], *headers: str) -> str:
     for header in headers:
         value = row.get(header)
@@ -154,7 +165,7 @@ def merge_batches(input_dir: Path, output_path: Path, report_path: Path) -> tupl
 
     output_workbook = openpyxl.Workbook(write_only=True)
     output_sheet = output_workbook.create_sheet("samples")
-    output_sheet.append([*base_headers, "batch_id", "stable_sample_id"])
+    output_sheet.append([*base_headers, "batch_id", "project_key", "stable_sample_id"])
 
     seen: dict[str, str] = {}
     report_rows: list[dict[str, str]] = []
@@ -175,7 +186,8 @@ def merge_batches(input_dir: Path, output_path: Path, report_path: Path) -> tupl
                     report_rows.append(make_report_row(stable_id, kept_batch_id, batch_id, row))
                     continue
                 seen[stable_id] = batch_id
-                output_sheet.append([*row_values, batch_id, stable_id])
+                project_key = build_project_key(batch_id, row.get("source_row_id"))
+                output_sheet.append([*row_values, batch_id, project_key, stable_id])
                 output_rows += 1
         finally:
             workbook.close()

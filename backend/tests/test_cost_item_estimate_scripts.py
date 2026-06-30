@@ -74,6 +74,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         return pd.DataFrame(
             [
                 {
+                    "project_key": "batch-a::2",
+                    "batch_id": "batch-a",
                     "source_row_id": 2,
                     "item_row_id": "2-1",
                     "工程名称": "屋面漏水维修工程",
@@ -102,6 +104,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "location": "浙江省嘉兴市",
                 },
                 {
+                    "project_key": "batch-a::3",
+                    "batch_id": "batch-a",
                     "source_row_id": 3,
                     "item_row_id": "3-1",
                     "工程名称": "外墙维修工程",
@@ -130,6 +134,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "location": "浙江省杭州市",
                 },
                 {
+                    "project_key": "batch-a::4",
+                    "batch_id": "batch-a",
                     "source_row_id": 4,
                     "item_row_id": "4-1",
                     "工程名称": "管道维修工程",
@@ -164,6 +170,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         return pd.DataFrame(
             [
                 {
+                    "project_key": "batch-a::2",
+                    "batch_id": "batch-a",
                     "source_row_id": 2,
                     "工程名称": "屋面漏水维修工程",
                     "catalog_id": "CP-002-03",
@@ -178,6 +186,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "item_count": 1,
                 },
                 {
+                    "project_key": "batch-a::3",
+                    "batch_id": "batch-a",
                     "source_row_id": 3,
                     "工程名称": "外墙维修工程",
                     "catalog_id": "CP-003-01",
@@ -192,6 +202,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "item_count": 1,
                 },
                 {
+                    "project_key": "batch-a::4",
+                    "batch_id": "batch-a",
                     "source_row_id": 4,
                     "工程名称": "管道维修工程",
                     "catalog_id": "CF-015-04",
@@ -237,7 +249,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertNotIn("item_text", meta["field_descriptions"])
         self.assertNotIn("item_embeddings", meta["files"])
 
-    def test_build_project_groups_aggregates_source_rows(self):
+    def test_build_project_groups_aggregates_project_keys(self):
         samples = self.sample_frame()
         duplicate = samples.iloc[0].copy()
         duplicate["item_row_id"] = "2-2"
@@ -245,20 +257,30 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         duplicate["project_description"] = "拆除原屋面防水层"
         duplicate["consultation_project_name"] = "不应拼接的咨询项目名"
         duplicate["renovation_content"] = "不应拼接的维修内容"
+        other_batch = samples.iloc[0].copy()
+        other_batch["project_key"] = "batch-b::2"
+        other_batch["batch_id"] = "batch-b"
+        other_batch["item_row_id"] = "2-1"
+        other_batch["cost_item_name"] = "另一批屋面维修"
+        other_batch["project_description"] = "不应混入 batch-a::2"
         samples = pd.concat([samples, pd.DataFrame([duplicate])], ignore_index=True)
+        samples = pd.concat([samples, pd.DataFrame([other_batch])], ignore_index=True)
 
         project_groups = build_index.build_project_groups(samples)
 
-        self.assertEqual(project_groups["source_row_id"].tolist(), [2, 3, 4])
+        self.assertEqual(project_groups["project_key"].tolist(), ["batch-a::2", "batch-a::3", "batch-a::4", "batch-b::2"])
         self.assertEqual(project_groups.columns.tolist(), build_index.PROJECT_GROUP_COLUMNS)
         self.assertNotIn("group_text", project_groups.columns)
-        roof = project_groups[project_groups["source_row_id"] == 2].iloc[0]
+        roof = project_groups[project_groups["project_key"] == "batch-a::2"].iloc[0]
+        self.assertEqual(roof["batch_id"], "batch-a")
+        self.assertEqual(roof["source_row_id"], 2)
         self.assertEqual(roof["工程名称"], "屋面漏水维修工程")
         self.assertEqual(roof["project_name_text"], "屋面漏水维修")
         self.assertEqual(roof["catalog_id"], "CP-002-03")
         self.assertEqual(roof["item_count"], 2)
         self.assertIn("屋面卷材防水 3.0mm SBS 沥青防水卷材", roof["project_detail_text"])
         self.assertIn("防水层拆除 拆除原屋面防水层", roof["project_detail_text"])
+        self.assertNotIn("另一批屋面维修", roof["project_detail_text"])
         self.assertNotIn("屋面漏水维修工程", roof["project_detail_text"])
 
     def test_build_project_groups_falls_back_when_project_name_text_empty(self):
@@ -267,7 +289,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         project_groups = build_index.build_project_groups(samples)
 
-        roof = project_groups[project_groups["source_row_id"] == 2].iloc[0]
+        roof = project_groups[project_groups["project_key"] == "batch-a::2"].iloc[0]
         self.assertEqual(roof["工程名称"], "屋面漏水维修工程")
         self.assertEqual(roof["project_name_text"], "屋面漏水维修工程")
 
@@ -512,15 +534,35 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             build_index.validate_output_dir(output_dir, overwrite=True)
 
     def test_build_index_parse_args_defaults_to_merged_samples(self):
-        with patch.object(
-            sys,
-            "argv",
-            ["build_cost_item_embedding_index.py", "--output-dir", "outputs/cost_item_index"],
-        ):
+        with patch.object(sys, "argv", ["build_cost_item_embedding_index.py"]):
             args = build_index.parse_args()
 
         self.assertEqual(args.samples, "samples/cost_item_samples_all.xlsx")
+        self.assertEqual(args.output_dir, "embeddings")
+        self.assertEqual(args.model, "BAAI/bge-m3")
+        self.assertFalse(args.overwrite)
+
+    def test_build_index_parse_args_allows_overriding_defaults(self):
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "build_cost_item_embedding_index.py",
+                "--samples",
+                "custom_samples.xlsx",
+                "--output-dir",
+                "outputs/cost_item_index",
+                "--model",
+                "demo-model",
+                "--overwrite",
+            ],
+        ):
+            args = build_index.parse_args()
+
+        self.assertEqual(args.samples, "custom_samples.xlsx")
         self.assertEqual(args.output_dir, "outputs/cost_item_index")
+        self.assertEqual(args.model, "demo-model")
+        self.assertTrue(args.overwrite)
 
     def test_build_index_validate_output_dir_requires_overwrite_for_existing_directory(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -569,8 +611,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_merge_samples_deduplicates_batches_and_writes_report(self):
         row = {
-            "source_row_id": 2,
-            "item_row_id": "2-1",
+            "source_row_id": 7.0,
+            "item_row_id": "7-1",
             "file_name": "source.pdf",
             "consultation_project_name": "嘉兴某小区屋面",
             "consultation_time": "2026-06-30",
@@ -617,8 +659,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             report_text = report_path.read_text(encoding="utf-8-sig")
 
         self.assertEqual((input_rows, output_rows, duplicate_rows), (3, 2, 1))
-        self.assertEqual(headers[-2:], ["batch_id", "stable_sample_id"])
+        self.assertEqual(headers[-3:], ["batch_id", "project_key", "stable_sample_id"])
         self.assertEqual([row["batch_id"] for row in rows], ["20260630_001", "20260701_001"])
+        self.assertEqual([row["project_key"] for row in rows], ["20260630_001::7", "20260701_001::7"])
         self.assertIn("20260630_001", report_text)
         self.assertIn("20260630_002", report_text)
 
@@ -781,7 +824,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             parsed,
         )
 
-        self.assertEqual(filtered["source_row_id"].tolist(), [2, 4])
+        self.assertEqual(filtered["project_key"].tolist(), ["batch-a::2", "batch-a::4"])
         self.assertEqual(filtered_name_embeddings.tolist(), [[1.0, 0.0], [0.0, 1.0]])
         np.testing.assert_allclose(filtered_detail_embeddings, np.array([[0.9, 0.1], [0.2, 0.8]], dtype=np.float32))
 
@@ -804,13 +847,19 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "不能同时为 0"):
             query_estimate_llm.normalize_project_weights(0.0, 0.0)
 
-    def test_score_project_groups_and_expand_samples_by_source_row_id(self):
+    def test_score_project_groups_and_expand_samples_by_project_key(self):
         samples = self.sample_frame()
         duplicate = samples.iloc[0].copy()
         duplicate["item_row_id"] = "2-2"
         duplicate["seq"] = 2
         duplicate["cost_item_name"] = "基层处理"
+        other_batch = samples.iloc[0].copy()
+        other_batch["project_key"] = "batch-b::2"
+        other_batch["batch_id"] = "batch-b"
+        other_batch["item_row_id"] = "2-1"
+        other_batch["cost_item_name"] = "另一批基层处理"
         samples = pd.concat([samples, pd.DataFrame([duplicate])], ignore_index=True)
+        samples = pd.concat([samples, pd.DataFrame([other_batch])], ignore_index=True)
         project_groups = self.project_groups_frame()
         name_embeddings = np.array([[0.8, 0.2], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
         detail_embeddings = np.array([[1.0, 0.0], [0.0, 1.0], [0.9, 0.1]], dtype=np.float32)
@@ -826,12 +875,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
         matches = query_estimate_llm.expand_matched_samples(samples, selected)
 
-        self.assertEqual(selected["source_row_id"].tolist(), [2])
+        self.assertEqual(selected["project_key"].tolist(), ["batch-a::2"])
         self.assertEqual(selected["project_rank"].tolist(), [1])
         self.assertAlmostEqual(float(selected["project_name_score"].iloc[0]), 0.8)
         self.assertAlmostEqual(float(selected["project_detail_score"].iloc[0]), 1.0)
         self.assertAlmostEqual(float(selected["project_score"].iloc[0]), 0.9)
         self.assertEqual(matches["item_row_id"].tolist(), ["2-1", "2-2"])
+        self.assertEqual(matches["project_key"].tolist(), ["batch-a::2", "batch-a::2"])
+        self.assertNotIn("另一批基层处理", matches["cost_item_name"].tolist())
         self.assertIn("project_name_score", matches.columns)
         self.assertIn("project_detail_score", matches.columns)
         self.assertNotIn("group_text", matches.columns)
@@ -840,6 +891,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         samples = self.sample_frame()
         samples.loc[0, "unit"] = "$ m^{2} $"
         duplicate = samples.iloc[0].copy()
+        duplicate["project_key"] = "batch-a::5"
         duplicate["source_row_id"] = 5
         duplicate["item_row_id"] = "5-1"
         duplicate["unit_price"] = 120
@@ -847,9 +899,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         samples = pd.concat([samples, pd.DataFrame([duplicate])], ignore_index=True)
         matched_projects = pd.DataFrame(
             [
-                {"source_row_id": 2, "project_rank": 1, "project_score": 0.9, "project_name_score": 0.95, "project_detail_score": 0.6},
-                {"source_row_id": 5, "project_rank": 2, "project_score": 0.8, "project_name_score": 0.85, "project_detail_score": 0.5},
-                {"source_row_id": 4, "project_rank": 3, "project_score": 0.7, "project_name_score": 0.4, "project_detail_score": 0.9},
+                {"project_key": "batch-a::2", "source_row_id": 2, "project_rank": 1, "project_score": 0.9, "project_name_score": 0.95, "project_detail_score": 0.6},
+                {"project_key": "batch-a::5", "source_row_id": 5, "project_rank": 2, "project_score": 0.8, "project_name_score": 0.85, "project_detail_score": 0.5},
+                {"project_key": "batch-a::4", "source_row_id": 4, "project_rank": 3, "project_score": 0.7, "project_name_score": 0.4, "project_detail_score": 0.9},
             ]
         )
         matches = query_estimate_llm.expand_matched_samples(samples, matched_projects)
@@ -903,9 +955,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(roof["历史综合单价中位数"], 100.0)
         self.assertEqual(roof["历史综合单价最大值"], 120.0)
         self.assertEqual(roof["本次估算金额中位数"], 50000.0)
+        self.assertEqual(roof["来源清单行"], "batch-a::2::2-1, batch-a::5::5-1")
         pipe = recommended[recommended["清单项名称"] == "管道更换"].iloc[0]
         self.assertEqual(pipe["本次估算金额中位数"], 3000.0)
-        self.assertEqual(pipe["来源清单行"], "4-1")
+        self.assertEqual(pipe["来源清单行"], "batch-a::4::4-1")
 
     def test_recommend_items_display_formats_empty_unit_without_trailing_slash(self):
         recommend_items = pd.DataFrame(
@@ -959,6 +1012,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         matched_projects = pd.DataFrame(
             [
                 {
+                    "project_key": "batch-a::2",
                     "source_row_id": 2,
                     "project_rank": 1,
                     "project_score": 0.9,
@@ -969,6 +1023,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "project_detail_text": "屋面卷材防水 3mm SBS",
                 },
                 {
+                    "project_key": "batch-a::4",
                     "source_row_id": 4,
                     "project_rank": 2,
                     "project_score": 0.8,
