@@ -4,7 +4,7 @@ import gc
 import json
 import sys
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -104,10 +104,10 @@ class ParsedQuery:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="自然语言维修工程造价查询入口")
-    parser.add_argument("--index-dir", required=True, help="索引目录")
+    parser.add_argument("--index-dir", default="embeddings", help="索引目录，默认 embeddings")
     parser.add_argument("--text", required=True, help="口语化维修需求")
     parser.add_argument("--top-k", type=int, default=20, help="召回的相似工程组数量")
-    parser.add_argument("--output", default="", help="可选 xlsx 输出路径")
+    parser.add_argument("--output", default=None, help="xlsx 输出路径，默认 query/YYYYMMDDHHMM.xlsx")
     parser.add_argument("--overwrite", action="store_true", help="若输出文件已存在则覆盖")
     parser.add_argument("--include-debug-text", action="store_true", help="matches 输出历史工程明文字段")
     parser.add_argument("--display", action="store_true", help="recommend_items 数值单元格拼接单位和金额单位")
@@ -119,6 +119,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--consultation-time-from", default="", help="高级覆盖：咨询时间起点 YYYY-MM-DD")
     parser.add_argument("--consultation-time-to", default="", help="高级覆盖：咨询时间终点 YYYY-MM-DD")
     return parser.parse_args()
+
+
+def default_query_output_path() -> Path:
+    return Path("query") / f"{datetime.now().strftime('%Y%m%d%H%M')}.xlsx"
 
 
 def validate_output_path(output_path: Path | None, overwrite: bool) -> None:
@@ -859,7 +863,8 @@ def print_terminal_summary(
 def main() -> int:
     args = parse_args()
     index_dir = Path(args.index_dir).expanduser().resolve()
-    output_path = Path(args.output).expanduser().resolve() if args.output else None
+    output_arg = Path(args.output) if args.output is not None else default_query_output_path()
+    output_path = output_arg.expanduser().resolve()
 
     try:
         validate_output_path(output_path, args.overwrite)

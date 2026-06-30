@@ -145,7 +145,7 @@ stable_sample_id
 ```bash
 backend/.venv/bin/python scripts/build_cost_item_embedding_index.py \
   --samples samples/cost_item_samples_all.xlsx \
-  --output-dir outputs/cost_item_index \
+  --output-dir embeddings \
   --model BAAI/bge-m3 \
   --overwrite
 ```
@@ -179,17 +179,32 @@ index_meta.json
 
 ```bash
 backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
+  --text "屋面漏水，想做3mm SBS防水，面积大概500平，参考嘉兴一年内的造价"
+```
+
+默认读取索引目录：
+
+```text
+embeddings/
+```
+
+默认输出文件：
+
+```text
+query/YYYYMMDDHHMM.xlsx
+```
+
+如果要指定其它索引目录或输出文件：
+
+```bash
+backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
   --index-dir embeddings \
   --text "屋面漏水，想做3mm SBS防水，面积大概500平，参考嘉兴一年内的造价" \
-  --output outputs/cost_estimate_result.xlsx \
+  --output query/test_result.xlsx \
   --overwrite
 ```
 
-输出文件：
-
-```text
-outputs/cost_estimate_result.xlsx
-```
+如果输出文件已存在，需要显式传 `--overwrite`。
 
 其中：
 
@@ -222,7 +237,7 @@ backend/.venv/bin/python scripts/merge_cost_item_sample_batches.py
 
 ```bash
 backend/.venv/bin/python scripts/build_cost_item_embedding_index.py \
-  --output-dir outputs/cost_item_index \
+  --output-dir embeddings \
   --model BAAI/bge-m3 \
   --overwrite
 ```
@@ -240,6 +255,8 @@ excel_outputs/
 cleaned_inputs/
 classified_outputs/
 samples/
+embeddings/
+query/
 outputs/
 *.xlsx
 *.csv
