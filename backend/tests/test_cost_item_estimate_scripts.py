@@ -31,6 +31,8 @@ def load_script_module(name: str, relative_path: str):
 
 
 build_samples_script = load_script_module("build_cost_item_samples", "scripts/build_cost_item_samples.py")
+run_ingest_batch = load_script_module("run_ingest_batch", "scripts/run_ingest_batch.py")
+merge_samples = load_script_module("merge_cost_item_sample_batches", "scripts/merge_cost_item_sample_batches.py")
 
 if np is not None and pd is not None:
     build_index = load_script_module("build_cost_item_embedding_index", "scripts/build_cost_item_embedding_index.py")
@@ -42,6 +44,32 @@ else:
 
 @unittest.skipIf(np is None or pd is None, "cost item estimate dependencies are not installed")
 class CostItemEstimateScriptTestCase(unittest.TestCase):
+    def write_sample_batch(self, path: Path, rows: list[dict[str, object]], sheet_name: str = "samples") -> None:
+        workbook = openpyxl.Workbook()
+        worksheet = workbook.active
+        worksheet.title = sheet_name
+        headers = [
+            "source_row_id",
+            "item_row_id",
+            "file_name",
+            "consultation_project_name",
+            "consultation_time",
+            "location",
+            "renovation_content",
+            "sub_project_id",
+            "seq",
+            "cost_item_name",
+            "project_description",
+            "unit",
+            "unit_normalized",
+            "quantity",
+        ]
+        worksheet.append(headers)
+        for row in rows:
+            worksheet.append([row.get(header) for header in headers])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        workbook.save(path)
+
     def sample_frame(self) -> pd.DataFrame:
         return pd.DataFrame(
             [
@@ -483,6 +511,168 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "输出已存在，请加 --overwrite"):
                 build_index.validate_output_dir(output_dir, overwrite=False)
             build_index.validate_output_dir(output_dir, overwrite=True)
+
+    def test_build_index_parse_args_defaults_to_merged_samples(self):
+        with patch.object(
+            sys,
+            "argv",
+            ["build_cost_item_embedding_index.py", "--output-dir", "outputs/cost_item_index"],
+        ):
+            args = build_index.parse_args()
+
+        self.assertEqual(args.samples, "samples/cost_item_samples_all.xlsx")
+        self.assertEqual(args.output_dir, "outputs/cost_item_index")
+
+    def test_build_index_validate_output_dir_requires_overwrite_for_existing_directory(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "index"
+            output_dir.mkdir()
+
+            with self.assertRaisesRegex(ValueError, "输出已存在，请加 --overwrite"):
+                build_index.validate_output_dir(output_dir, overwrite=False)
+            build_index.validate_output_dir(output_dir, overwrite=True)
+
+    def test_run_ingest_batch_parses_batch_id_from_filename(self):
+        input_path = Path("excel_inputs/audit_ocr_export_20260630_001.xlsx")
+
+        self.assertEqual(run_ingest_batch.infer_batch_id(input_path), "20260630_001")
+        self.assertEqual(run_ingest_batch.batch_id_from_args(input_path, "manual_001"), "manual_001")
+
+        with self.assertRaisesRegex(ValueError, "无法从文件名解析 batch_id"):
+            run_ingest_batch.infer_batch_id(Path("excel_inputs/audit_ocr_export.xlsx"))
+
+    def test_run_ingest_batch_rejects_existing_outputs_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "cleaned.xlsx"
+            output_path.write_text("existing", encoding="utf-8")
+            outputs = {"cleaned": output_path}
+
+            with self.assertRaisesRegex(ValueError, "换一个唯一的 --batch-id"):
+                run_ingest_batch.validate_output_conflicts(outputs, overwrite=False)
+            run_ingest_batch.validate_output_conflicts(outputs, overwrite=True)
+
+    def test_run_ingest_batch_passes_overwrite_to_child_commands(self):
+        outputs = {
+            "cleaned": Path("cleaned_inputs/20260630_001/ocr_required_cleaned.xlsx"),
+            "removed": Path("removed_inputs/20260630_001/ocr_required_removed.xlsx"),
+            "classified": Path("classified_outputs/20260630_001/classified_projects.xlsx"),
+            "samples": Path("samples/20260630_001/cost_item_samples.xlsx"),
+        }
+
+        commands_without_overwrite = run_ingest_batch.command_steps(Path("input.xlsx"), outputs, overwrite=False)
+        commands_with_overwrite = run_ingest_batch.command_steps(Path("input.xlsx"), outputs, overwrite=True)
+
+        self.assertFalse(any("--overwrite" in command for command in commands_without_overwrite))
+        self.assertTrue(all(command[-1] == "--overwrite" for command in commands_with_overwrite))
+        self.assertIn("--clean-output", commands_with_overwrite[0])
+        self.assertIn("-o", commands_with_overwrite[1])
+        self.assertIn("-o", commands_with_overwrite[2])
+
+    def test_merge_samples_deduplicates_batches_and_writes_report(self):
+        row = {
+            "source_row_id": 2,
+            "item_row_id": "2-1",
+            "file_name": "source.pdf",
+            "consultation_project_name": "嘉兴某小区屋面",
+            "consultation_time": "2026-06-30",
+            "location": "浙江省嘉兴市",
+            "renovation_content": "渗漏维修",
+            "sub_project_id": "屋面",
+            "seq": 1,
+            "cost_item_name": "屋面卷材防水",
+            "project_description": "3mm SBS",
+            "unit": "平方米",
+            "unit_normalized": "m²",
+            "quantity": 10,
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            samples_dir = tmp_path / "samples"
+            self.write_sample_batch(samples_dir / "20260630_001" / "cost_item_samples.xlsx", [row])
+            self.write_sample_batch(samples_dir / "20260630_002" / "cost_item_samples.xlsx", [row])
+            self.write_sample_batch(
+                samples_dir / "20260701_001" / "cost_item_samples.xlsx",
+                [{**row, "seq": 2, "quantity": 20}],
+            )
+            (samples_dir / "cost_item_samples_all.xlsx").write_text("not an input", encoding="utf-8")
+
+            output_path = samples_dir / "cost_item_samples_all_output.xlsx"
+            report_path = merge_samples.dedup_report_path(output_path)
+            input_rows, output_rows, duplicate_rows = merge_samples.merge_batches(
+                samples_dir,
+                output_path,
+                report_path,
+            )
+
+            workbook = openpyxl.load_workbook(output_path, data_only=True)
+            worksheet = workbook["samples"]
+            headers = [worksheet.cell(row=1, column=column).value for column in range(1, worksheet.max_column + 1)]
+            rows = [
+                {
+                    header: worksheet.cell(row=row_index, column=column).value
+                    for column, header in enumerate(headers, start=1)
+                }
+                for row_index in range(2, worksheet.max_row + 1)
+            ]
+            workbook.close()
+            report_text = report_path.read_text(encoding="utf-8-sig")
+
+        self.assertEqual((input_rows, output_rows, duplicate_rows), (3, 2, 1))
+        self.assertEqual(headers[-2:], ["batch_id", "stable_sample_id"])
+        self.assertEqual([row["batch_id"] for row in rows], ["20260630_001", "20260701_001"])
+        self.assertIn("20260630_001", report_text)
+        self.assertIn("20260630_002", report_text)
+
+    def test_merge_samples_rejects_missing_samples_sheet_and_header_mismatch(self):
+        row = {"file_name": "source.pdf", "cost_item_name": "屋面卷材防水"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            samples_dir = tmp_path / "samples"
+            self.write_sample_batch(samples_dir / "20260630_001" / "cost_item_samples.xlsx", [row])
+            self.write_sample_batch(
+                samples_dir / "20260630_002" / "cost_item_samples.xlsx",
+                [row],
+                sheet_name="not_samples",
+            )
+
+            with self.assertRaisesRegex(ValueError, "缺少 samples sheet"):
+                merge_samples.merge_batches(
+                    samples_dir,
+                    samples_dir / "cost_item_samples_all.xlsx",
+                    samples_dir / "cost_item_samples_all_dedup_report.csv",
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            samples_dir = tmp_path / "samples"
+            self.write_sample_batch(samples_dir / "20260630_001" / "cost_item_samples.xlsx", [row])
+            workbook = openpyxl.Workbook()
+            worksheet = workbook.active
+            worksheet.title = "samples"
+            worksheet.append(["different_header"])
+            worksheet.append(["value"])
+            batch_path = samples_dir / "20260630_002" / "cost_item_samples.xlsx"
+            batch_path.parent.mkdir(parents=True, exist_ok=True)
+            workbook.save(batch_path)
+
+            with self.assertRaisesRegex(ValueError, "样本表头不一致"):
+                merge_samples.merge_batches(
+                    samples_dir,
+                    samples_dir / "cost_item_samples_all.xlsx",
+                    samples_dir / "cost_item_samples_all_dedup_report.csv",
+                )
+
+    def test_merge_samples_validate_output_paths_requires_overwrite_for_output_or_report(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            output_path = tmp_path / "samples" / "cost_item_samples_all.xlsx"
+            report_path = merge_samples.dedup_report_path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text("existing", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "输出已存在，请加 --overwrite"):
+                merge_samples.validate_output_paths(output_path, report_path, overwrite=False)
+            merge_samples.validate_output_paths(output_path, report_path, overwrite=True)
 
     def test_query_validate_output_path_requires_overwrite_for_existing_output(self):
         with tempfile.TemporaryDirectory() as tmpdir:

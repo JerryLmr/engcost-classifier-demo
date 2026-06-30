@@ -31,7 +31,11 @@ PROJECT_GROUP_DEBUG_FILE = "cost_item_project_groups.xlsx"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="构建已审定清单样本 embedding 索引")
-    parser.add_argument("--samples", required=True, help="已审定清单样本 Excel 路径")
+    parser.add_argument(
+        "--samples",
+        default="samples/cost_item_samples_all.xlsx",
+        help="已审定清单总样本 Excel 路径，默认 samples/cost_item_samples_all.xlsx",
+    )
     parser.add_argument("--output-dir", required=True, help="索引输出目录")
     parser.add_argument("--model", default="BAAI/bge-m3", help="sentence-transformers 模型名")
     parser.add_argument("--batch-size", type=int, default=32, help="embedding 批大小")
@@ -43,6 +47,8 @@ def validate_output_dir(output_dir: Path, overwrite: bool) -> None:
     if output_dir.exists() and not output_dir.is_dir():
         raise ValueError(f"输出路径不是目录: {output_dir}")
     existing = [name for name in MANAGED_OUTPUT_FILES if (output_dir / name).exists()]
+    if output_dir.exists() and not overwrite:
+        existing.append(str(output_dir))
     debug_output = output_dir.parent / PROJECT_GROUP_DEBUG_FILE
     if debug_output.exists():
         existing.append(str(debug_output))
