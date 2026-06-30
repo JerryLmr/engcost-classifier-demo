@@ -53,7 +53,6 @@ def batch_id_from_args(input_path: Path, explicit_batch_id: str | None) -> str:
 def batch_outputs(batch_id: str) -> dict[str, Path]:
     return {
         "cleaned": ROOT / "cleaned_inputs" / batch_id / "ocr_required_cleaned.xlsx",
-        "removed": ROOT / "removed_inputs" / batch_id / "ocr_required_removed.xlsx",
         "classified": ROOT / "classified_outputs" / batch_id / "classified_projects.xlsx",
         "samples": ROOT / "samples" / batch_id / "cost_item_samples.xlsx",
     }
@@ -86,8 +85,6 @@ def command_steps(input_path: Path, outputs: dict[str, Path], overwrite: bool) -
         str(input_path),
         "--clean-output",
         str(outputs["cleaned"]),
-        "--removed-output",
-        str(outputs["removed"]),
     ]
     classify_command = [
         sys.executable,

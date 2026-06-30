@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="过滤 OCR Excel 中缺少必填字段的行")
     parser.add_argument("input_excel", help="OCR 输入 Excel 文件")
     parser.add_argument("--clean-output", required=True, help="必填字段完整行输出 xlsx 路径")
-    parser.add_argument("--removed-output", required=True, help="缺少必填字段行输出 xlsx 路径")
+    parser.add_argument("--removed-output", help="兼容旧流程：额外输出缺少必填字段行 xlsx 路径")
     parser.add_argument("--overwrite", action="store_true", help="若输出文件已存在则覆盖")
     return parser.parse_args()
 
@@ -96,7 +96,7 @@ def resolve_path(raw_path: str) -> Path:
     return Path(raw_path).expanduser().resolve()
 
 
-def validate_paths(input_path: Path, clean_output: Path, removed_output: Path, overwrite: bool) -> None:
+def validate_paths(input_path: Path, clean_output: Path, removed_output: Path | None, overwrite: bool) -> None:
     if not input_path.exists():
         raise ValueError(f"输入文件不存在: {input_path}")
     if not input_path.is_file():
@@ -106,10 +106,14 @@ def validate_paths(input_path: Path, clean_output: Path, removed_output: Path, o
 
     if clean_output == input_path or removed_output == input_path:
         raise ValueError("输出文件不能覆盖原始输入文件")
-    if clean_output == removed_output:
+    if removed_output is not None and clean_output == removed_output:
         raise ValueError("clean-output 和 removed-output 不能是同一个文件")
 
-    for output_path in (clean_output, removed_output):
+    output_paths = [clean_output]
+    if removed_output is not None:
+        output_paths.append(removed_output)
+
+    for output_path in output_paths:
         if output_path.exists() and output_path.is_dir():
             raise ValueError(f"输出路径是目录，不是文件: {output_path}")
         if output_path.exists() and not overwrite:
@@ -146,7 +150,7 @@ def normalize_row_length(row_values: list[Any], expected_length: int) -> list[An
 def filter_required_ocr_rows(
     input_path: Path,
     clean_output: Path,
-    removed_output: Path,
+    removed_output: Path | None = None,
 ) -> tuple[int, int, int, dict[str, int]]:
     source_workbook = openpyxl.load_workbook(input_path, read_only=True, data_only=True)
     source_sheet = source_workbook.active
@@ -168,10 +172,15 @@ def filter_required_ocr_rows(
     clean_workbook = openpyxl.Workbook(write_only=True)
     clean_sheet = clean_workbook.create_sheet("cleaned")
     clean_sheet.append(headers)
-
-    removed_workbook = openpyxl.Workbook(write_only=True)
-    removed_sheet = removed_workbook.create_sheet("removed")
+    removed_sheet = clean_workbook.create_sheet("removed")
     removed_sheet.append(REMOVED_PREFIX_HEADERS + headers)
+
+    removed_workbook = None
+    removed_compat_sheet = None
+    if removed_output is not None:
+        removed_workbook = openpyxl.Workbook(write_only=True)
+        removed_compat_sheet = removed_workbook.create_sheet("removed")
+        removed_compat_sheet.append(REMOVED_PREFIX_HEADERS + headers)
 
     input_rows = 0
     cleaned_rows = 0
@@ -194,21 +203,24 @@ def filter_required_ocr_rows(
                 for field in missing_fields:
                     missing_counts[field] += 1
 
-                removed_sheet.append(
-                    [
-                        source_row_id,
-                        ",".join(missing_fields),
-                        REMOVED_REASON,
-                        *normalized_row_values,
-                    ]
-                )
+                removed_row = [
+                    source_row_id,
+                    ",".join(missing_fields),
+                    REMOVED_REASON,
+                    *normalized_row_values,
+                ]
+                removed_sheet.append(removed_row)
+                if removed_compat_sheet is not None:
+                    removed_compat_sheet.append(removed_row)
                 removed_rows += 1
             else:
                 clean_sheet.append(normalized_row_values)
                 cleaned_rows += 1
 
+        clean_workbook.active = 0
         clean_workbook.save(clean_output)
-        removed_workbook.save(removed_output)
+        if removed_workbook is not None:
+            removed_workbook.save(removed_output)
     finally:
         source_workbook.close()
 
@@ -228,7 +240,7 @@ def main() -> int:
     args = parse_args()
     input_path = resolve_path(args.input_excel)
     clean_output = resolve_path(args.clean_output)
-    removed_output = resolve_path(args.removed_output)
+    removed_output = resolve_path(args.removed_output) if args.removed_output else None
 
     try:
         validate_paths(input_path, clean_output, removed_output, args.overwrite)

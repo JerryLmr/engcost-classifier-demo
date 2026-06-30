@@ -50,10 +50,11 @@ backend/.venv/bin/python scripts/run_ingest_batch.py \
 
 ```text
 cleaned_inputs/{batch_id}/ocr_required_cleaned.xlsx
-removed_inputs/{batch_id}/ocr_required_removed.xlsx
 classified_outputs/{batch_id}/classified_projects.xlsx
 samples/{batch_id}/cost_item_samples.xlsx
 ```
+
+`ocr_required_cleaned.xlsx` 包含两个 sheet：`cleaned` 保存必填字段完整行，`removed` 保存被过滤行和缺失字段原因。
 
 如果任一批次产物已存在，默认报错。确认要重跑并覆盖该批次时显式传：
 
@@ -249,7 +250,6 @@ backend/.venv/bin/python scripts/build_cost_item_embedding_index.py \
 ```text
 excel_outputs/
 cleaned_inputs/
-removed_inputs/
 classified_outputs/
 samples/
 outputs/
