@@ -2,11 +2,27 @@
 import argparse
 import math
 import re
+import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import openpyxl
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from build_cost_item_samples import (  # noqa: E402
+    NUMERIC_FIELDS,
+    PARSE_ERROR_HEADERS,
+    append_dict_row,
+    collect_numeric_parse_errors,
+    make_error,
+    parse_number,
+    parse_sub_item_rows,
+    raw_row_summary,
+)
 
 
 REQUIRED_HEADERS = [
@@ -147,11 +163,119 @@ def normalize_row_length(row_values: list[Any], expected_length: int) -> list[An
     return row_values + [None] * (expected_length - len(row_values))
 
 
+def get_row_value(row_values: list[Any], header_map: dict[str, int], header: str) -> Any:
+    column_index = header_map.get(header)
+    if column_index is None or column_index >= len(row_values):
+        return None
+    return row_values[column_index]
+
+
+def build_row_summary(row_values: list[Any], header_map: dict[str, int]) -> str:
+    row_values_by_header = {
+        "file_name": cell_text(get_row_value(row_values, header_map, "file_name")),
+        "工程名称": cell_text(get_row_value(row_values, header_map, "工程名称")),
+        "project_name_text": cell_text(get_row_value(row_values, header_map, "project_name_text")),
+        "consultation_project_name": cell_text(
+            get_row_value(row_values, header_map, "consultation_project_name")
+        ),
+        "renovation_content": cell_text(get_row_value(row_values, header_map, "renovation_content")),
+        "catalog_id": cell_text(get_row_value(row_values, header_map, "catalog_id")),
+        "一级分类": cell_text(get_row_value(row_values, header_map, "一级分类")),
+        "二级分类": cell_text(get_row_value(row_values, header_map, "二级分类")),
+    }
+    return raw_row_summary(row_values_by_header)
+
+
+def collect_sub_item_parse_errors(
+    source_row_id: int,
+    raw_sub_item_rows: Any,
+    row_summary: str,
+) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    item_rows, parse_error = parse_sub_item_rows(raw_sub_item_rows)
+    if parse_error:
+        errors.append(
+            make_error(
+                source_row_id,
+                "invalid_sub_item_project_rows",
+                parse_error,
+                raw_sub_item_rows,
+                row_summary,
+            )
+        )
+        return errors
+
+    if not item_rows:
+        errors.append(
+            make_error(
+                source_row_id,
+                "empty_sub_item_project_rows",
+                "sub_item_project_rows 数组为空",
+                raw_sub_item_rows,
+                row_summary,
+            )
+        )
+        return errors
+
+    for index, item in enumerate(item_rows, start=1):
+        if not isinstance(item, dict):
+            errors.append(
+                make_error(
+                    source_row_id,
+                    "invalid_item_row",
+                    f"清单行不是对象: index={index}, type={type(item).__name__}",
+                    raw_sub_item_rows,
+                    row_summary,
+                )
+            )
+            continue
+
+        seq = item.get("seq")
+        if seq is None or cell_text(seq) == "":
+            seq = index
+            errors.append(
+                make_error(
+                    source_row_id,
+                    "missing_seq",
+                    f"清单行缺少 seq，已使用数组内序号: {index}",
+                    raw_sub_item_rows,
+                    row_summary,
+                )
+            )
+        seq_text = cell_text(seq)
+
+        cost_item_name = cell_text(item.get("cost_item_name") or item.get("project_name"))
+        if not cost_item_name:
+            errors.append(
+                make_error(
+                    source_row_id,
+                    "missing_cost_item_name",
+                    f"清单行缺少 cost_item_name/project_name: seq={seq_text}",
+                    raw_sub_item_rows,
+                    row_summary,
+                )
+            )
+
+        numeric_values = {field: parse_number(item.get(field)) for field in NUMERIC_FIELDS}
+        errors.extend(
+            collect_numeric_parse_errors(
+                source_row_id,
+                seq_text,
+                item,
+                numeric_values,
+                raw_sub_item_rows,
+                row_summary,
+            )
+        )
+
+    return errors
+
+
 def filter_required_ocr_rows(
     input_path: Path,
     clean_output: Path,
     removed_output: Path | None = None,
-) -> tuple[int, int, int, dict[str, int]]:
+) -> tuple[int, int, int, int, dict[str, int]]:
     source_workbook = openpyxl.load_workbook(input_path, read_only=True, data_only=True)
     source_sheet = source_workbook.active
 
@@ -174,6 +298,8 @@ def filter_required_ocr_rows(
     clean_sheet.append(headers)
     removed_sheet = clean_workbook.create_sheet("removed")
     removed_sheet.append(REMOVED_PREFIX_HEADERS + headers)
+    parse_errors_sheet = clean_workbook.create_sheet("parse_errors")
+    parse_errors_sheet.append(PARSE_ERROR_HEADERS)
 
     removed_workbook = None
     removed_compat_sheet = None
@@ -185,6 +311,7 @@ def filter_required_ocr_rows(
     input_rows = 0
     cleaned_rows = 0
     removed_rows = 0
+    parse_errors_count = 0
 
     try:
         for source_row_id, row in enumerate(row_iter, start=2):
@@ -214,8 +341,20 @@ def filter_required_ocr_rows(
                     removed_compat_sheet.append(removed_row)
                 removed_rows += 1
             else:
-                clean_sheet.append(normalized_row_values)
-                cleaned_rows += 1
+                raw_sub_item_rows = get_row_value(row_values, header_map, "sub_item_project_rows")
+                row_summary = build_row_summary(normalized_row_values, header_map)
+                parse_errors = collect_sub_item_parse_errors(
+                    source_row_id,
+                    raw_sub_item_rows,
+                    row_summary,
+                )
+                if parse_errors:
+                    for error in parse_errors:
+                        append_dict_row(parse_errors_sheet, PARSE_ERROR_HEADERS, error)
+                    parse_errors_count += len(parse_errors)
+                else:
+                    clean_sheet.append(normalized_row_values)
+                    cleaned_rows += 1
 
         clean_workbook.active = 0
         clean_workbook.save(clean_output)
@@ -224,13 +363,20 @@ def filter_required_ocr_rows(
     finally:
         source_workbook.close()
 
-    return input_rows, cleaned_rows, removed_rows, missing_counts
+    return input_rows, cleaned_rows, removed_rows, parse_errors_count, missing_counts
 
 
-def print_summary(input_rows: int, cleaned_rows: int, removed_rows: int, missing_counts: dict[str, int]) -> None:
+def print_summary(
+    input_rows: int,
+    cleaned_rows: int,
+    removed_rows: int,
+    parse_errors_count: int,
+    missing_counts: dict[str, int],
+) -> None:
     print(f"[DONE] input rows: {input_rows}")
     print(f"[DONE] cleaned rows: {cleaned_rows}")
     print(f"[DONE] removed rows: {removed_rows}")
+    print(f"[DONE] parse_errors: {parse_errors_count}")
     print("[DONE] missing counts:")
     for header in REQUIRED_HEADERS:
         print(f"  {header}: {missing_counts[header]}")
@@ -244,7 +390,7 @@ def main() -> int:
 
     try:
         validate_paths(input_path, clean_output, removed_output, args.overwrite)
-        input_rows, cleaned_rows, removed_rows, missing_counts = filter_required_ocr_rows(
+        input_rows, cleaned_rows, removed_rows, parse_errors_count, missing_counts = filter_required_ocr_rows(
             input_path,
             clean_output,
             removed_output,
@@ -253,7 +399,9 @@ def main() -> int:
         print(f"[ERROR] {exc}")
         return 1
 
-    print_summary(input_rows, cleaned_rows, removed_rows, missing_counts)
+    print_summary(input_rows, cleaned_rows, removed_rows, parse_errors_count, missing_counts)
+    if parse_errors_count:
+        return 1
     return 0
 
 
