@@ -22,6 +22,7 @@ MANAGED_OUTPUT_FILES = [
     "project_groups.parquet",
     "project_name_embeddings.npy",
     "project_detail_embeddings.npy",
+    "item_text_embeddings.npy",
     # 清理旧单路索引残留，查询阶段不再兼容读取。
     "project_group_embeddings.npy",
     "index_meta.json",
@@ -70,7 +71,10 @@ def load_samples(samples_path: Path) -> pd.DataFrame:
     if missing:
         raise ValueError(f"samples sheet 缺少必要字段: {', '.join(missing)}")
 
-    return ensure_project_key(samples)
+    samples = ensure_project_key(samples)
+    samples["sample_index"] = range(len(samples))
+    samples["item_text"] = samples.apply(build_item_text, axis=1)
+    return samples
 
 
 def normalize_source_row_id(value: Any) -> str:
@@ -113,6 +117,20 @@ def safe_text(value: Any) -> str:
 
 def join_parts(parts: list[str], separator: str = " ") -> str:
     return separator.join(part for part in parts if part).strip()
+
+
+def build_item_text(row: pd.Series) -> str:
+    return join_parts(
+        [
+            safe_text(row.get("cost_item_name")),
+            safe_text(row.get("project_description")),
+            safe_text(row.get("一级分类")),
+            safe_text(row.get("二级分类")),
+            safe_text(row.get("维修状态")),
+            safe_text(row.get("标准对象")),
+        ],
+        " ",
+    )
 
 
 PROJECT_GROUP_COLUMNS = [
@@ -236,10 +254,13 @@ def build_index_meta(
             "project_groups": "project_groups.parquet",
             "project_name_embeddings": "project_name_embeddings.npy",
             "project_detail_embeddings": "project_detail_embeddings.npy",
+            "item_text_embeddings": "item_text_embeddings.npy",
         },
         "field_descriptions": {
             "project_name_text": "batch_classify 阶段从原始工程名称抽取出的项目级语义文本，用于项目主召回。",
             "project_detail_text": "工程下清单项名称和项目特征拼接文本，用于施工工艺/清单细节辅助召回。",
+            "item_text": "清单项名称、项目特征、分类、维修状态和标准对象拼接文本，用于清单项级 rerank。",
+            "sample_index": "samples.parquet 当前行顺序对应的稳定行号，用于定位 item_text_embeddings.npy。",
             "unit_price": "综合单价，查询阶段用于参考区间计算",
             "labor_unit_price": "人工单价，查询阶段用于参考区间计算",
             "machinery_unit_price": "机械单价，查询阶段用于参考区间计算",
@@ -252,6 +273,7 @@ def write_index(
     project_groups: pd.DataFrame,
     project_name_embeddings: np.ndarray,
     project_detail_embeddings: np.ndarray,
+    item_text_embeddings: np.ndarray,
     output_dir: Path,
     meta: dict[str, Any],
 ) -> None:
@@ -264,6 +286,7 @@ def write_index(
     project_groups.to_parquet(output_dir / "project_groups.parquet", index=False)
     np.save(output_dir / "project_name_embeddings.npy", project_name_embeddings)
     np.save(output_dir / "project_detail_embeddings.npy", project_detail_embeddings)
+    np.save(output_dir / "item_text_embeddings.npy", item_text_embeddings)
     (output_dir / "index_meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -282,13 +305,18 @@ def build_cost_item_embedding_index(
 
     project_name_embeddings = encode_texts(model, text_series(project_groups["project_name_text"]), batch_size)
     project_detail_embeddings = encode_texts(model, text_series(project_groups["project_detail_text"]), batch_size)
+    item_text_embeddings = encode_texts(model, text_series(samples["item_text"]), batch_size)
 
     if len(project_groups) != project_name_embeddings.shape[0]:
         raise ValueError("工程分组数量与工程名称 embedding 数量不一致")
     if len(project_groups) != project_detail_embeddings.shape[0]:
         raise ValueError("工程分组数量与工程明细 embedding 数量不一致")
+    if len(samples) != item_text_embeddings.shape[0]:
+        raise ValueError("样本数量与清单项 embedding 数量不一致")
     if project_name_embeddings.shape[1] != project_detail_embeddings.shape[1]:
         raise ValueError("工程名称 embedding 与工程明细 embedding 维度不一致")
+    if project_name_embeddings.shape[1] != item_text_embeddings.shape[1]:
+        raise ValueError("工程名称 embedding 与清单项 embedding 维度不一致")
 
     embedding_dim = int(project_name_embeddings.shape[1]) if project_name_embeddings.ndim == 2 else 0
     meta = build_index_meta(samples_path, model_name, len(samples), embedding_dim)
@@ -297,6 +325,7 @@ def build_cost_item_embedding_index(
         project_groups,
         project_name_embeddings,
         project_detail_embeddings,
+        item_text_embeddings,
         output_dir,
         meta,
     )

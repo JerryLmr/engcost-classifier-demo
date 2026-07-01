@@ -55,6 +55,9 @@ RECOMMENDED_ITEM_COLUMNS = [
     "其中包含机械单价最大值",
     "来源清单行",
     "历史样本数",
+    "item_embedding_score最大值",
+    "item_embedding_score中位数",
+    "推荐分数",
 ]
 
 MATCH_COLUMNS = [
@@ -66,6 +69,7 @@ MATCH_COLUMNS = [
     "batch_id",
     "source_row_id",
     "item_row_id",
+    "sample_index",
     "consultation_time",
     "location",
     "catalog_id",
@@ -77,6 +81,8 @@ MATCH_COLUMNS = [
     "复合目录",
     "seq",
     "cost_item_name",
+    "item_text",
+    "item_embedding_score",
     "unit",
     "unit_normalized",
     "quantity",
@@ -187,12 +193,16 @@ def normalize_project_weights(project_name_weight: float, project_detail_weight:
     return project_name_weight / total, project_detail_weight / total
 
 
-def load_index(index_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray, dict[str, Any]]:
+def load_index(index_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
     samples_path = index_dir / "samples.parquet"
     groups_path = index_dir / "project_groups.parquet"
     name_path = index_dir / "project_name_embeddings.npy"
     detail_path = index_dir / "project_detail_embeddings.npy"
+    item_text_path = index_dir / "item_text_embeddings.npy"
     meta_path = index_dir / "index_meta.json"
+
+    if not item_text_path.exists():
+        raise ValueError("索引缺少 item_text_embeddings.npy，请重新运行 build_cost_item_embedding_index.py --overwrite")
 
     missing = [path.name for path in [samples_path, groups_path, name_path, detail_path, meta_path] if not path.exists()]
     if missing:
@@ -202,17 +212,24 @@ def load_index(index_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray,
     project_groups = pd.read_parquet(groups_path)
     project_name_embeddings = np.load(name_path)
     project_detail_embeddings = np.load(detail_path)
+    item_text_embeddings = np.load(item_text_path)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
     if len(project_groups) != project_name_embeddings.shape[0]:
         raise ValueError("工程分组数量与工程名称 embedding 数量不一致")
     if len(project_groups) != project_detail_embeddings.shape[0]:
         raise ValueError("工程分组数量与工程明细 embedding 数量不一致")
+    if len(samples) != item_text_embeddings.shape[0]:
+        raise ValueError("样本数量与清单项 embedding 数量不一致")
     if project_name_embeddings.ndim != 2 or project_detail_embeddings.ndim != 2:
         raise ValueError("工程分组 embedding 维度不正确")
+    if item_text_embeddings.ndim != 2:
+        raise ValueError("清单项 embedding 维度不正确")
     if project_name_embeddings.shape[1] != project_detail_embeddings.shape[1]:
         raise ValueError("工程名称 embedding 与工程明细 embedding 维度不一致")
-    return samples, project_groups, project_name_embeddings, project_detail_embeddings, meta
+    if item_text_embeddings.shape[1] != project_name_embeddings.shape[1]:
+        raise ValueError("清单项 embedding 与工程名称 embedding 维度不一致")
+    return samples, project_groups, project_name_embeddings, project_detail_embeddings, item_text_embeddings, meta
 
 
 def cell_text(value: Any) -> str:
@@ -509,6 +526,33 @@ def expand_matched_samples(samples: pd.DataFrame, matched_projects: pd.DataFrame
     return rows
 
 
+def score_matched_items(
+    matches: pd.DataFrame,
+    item_text_embeddings: np.ndarray,
+    query_embedding: np.ndarray,
+) -> pd.DataFrame:
+    if matches.empty:
+        return matches
+    if "sample_index" not in matches.columns:
+        raise ValueError("matches 缺少 sample_index，无法计算清单项 embedding 分数")
+
+    sample_indices_raw = pd.to_numeric(matches["sample_index"], errors="raise").to_numpy()
+    if not np.all(np.isfinite(sample_indices_raw)):
+        raise ValueError("sample_index 包含无效值")
+    if not np.all(sample_indices_raw == np.floor(sample_indices_raw)):
+        raise ValueError("sample_index 必须是整数")
+
+    sample_indices = sample_indices_raw.astype(int)
+    if sample_indices.size and (sample_indices.min() < 0 or sample_indices.max() >= item_text_embeddings.shape[0]):
+        raise ValueError("sample_index 超出 item_text_embeddings 范围")
+
+    output = matches.copy()
+    item_embeddings = item_text_embeddings[sample_indices]
+    output["sample_index"] = sample_indices
+    output["item_embedding_score"] = item_embeddings @ query_embedding
+    return output
+
+
 def numeric_values(frame: pd.DataFrame, column: str) -> pd.Series:
     if column not in frame.columns:
         return pd.Series(dtype=float)
@@ -543,6 +587,20 @@ def first_non_empty(values: pd.Series) -> str:
     return ""
 
 
+def max_numeric_or_zero(frame: pd.DataFrame, column: str) -> float:
+    values = numeric_values(frame, column)
+    if values.empty:
+        return 0.0
+    return float(values.max())
+
+
+def median_numeric_or_none(frame: pd.DataFrame, column: str) -> float | None:
+    values = numeric_values(frame, column)
+    if values.empty:
+        return None
+    return float(values.median())
+
+
 def source_item_refs(group: pd.DataFrame) -> pd.Series:
     if "project_key" not in group.columns or "item_row_id" not in group.columns:
         return pd.Series(dtype=object)
@@ -567,18 +625,30 @@ def aggregate_recommend_items(matches: pd.DataFrame, parsed: ParsedQuery) -> pd.
     for _signature, group in matches.groupby(group_columns, sort=False, dropna=False):
         first = group.iloc[0]
         unit_normalized = cell_text(first.get("unit_normalized"))
+        history_sample_count = int(len(group))
+        project_score = max_numeric_or_zero(group, "project_score")
+        item_score = max_numeric_or_zero(group, "item_embedding_score")
+        median_item_score = median_numeric_or_none(group, "item_embedding_score")
+        sample_count_score = min(1.0, np.log1p(history_sample_count) / np.log1p(10))
+        final_recommend_score = 0.55 * item_score + 0.35 * project_score + 0.10 * sample_count_score
         row: dict[str, Any] = {
             "清单项名称": cell_text(first.get("cost_item_name")),
             "项目特征/施工工艺": first_non_empty(group["project_description"]) if "project_description" in group.columns else "",
             "单位": unit_normalized,
-            "历史样本数": int(len(group)),
+            "历史样本数": history_sample_count,
+            "item_embedding_score最大值": item_score,
+            "item_embedding_score中位数": median_item_score,
+            "推荐分数": final_recommend_score,
             "catalog_id": cell_text(first.get("catalog_id")),
             "一级分类": cell_text(first.get("一级分类")),
             "二级分类": cell_text(first.get("二级分类")),
             "维修状态": cell_text(first.get("维修状态")),
             "unit_normalized": unit_normalized,
             "来源清单行": ordered_join(source_item_refs(group)),
-            "max_project_score": float(pd.to_numeric(group["project_score"], errors="coerce").max()),
+            "max_project_score": project_score,
+            "max_item_embedding_score": item_score,
+            "median_item_embedding_score": median_item_score,
+            "final_recommend_score": final_recommend_score,
         }
         row.update(rename_stats(range_stats(group, "quantity"), "quantity", "历史工程量"))
         row.update(rename_stats(range_stats(group, "unit_price"), "unit_price", "历史综合单价"))
@@ -600,9 +670,26 @@ def aggregate_recommend_items(matches: pd.DataFrame, parsed: ParsedQuery) -> pd.
     recommended["_has_unit_price"] = recommended["历史综合单价中位数"].notna()
     recommended["_has_total_price"] = recommended["历史总价中位数"].notna()
     recommended = recommended.sort_values(
-        ["max_project_score", "历史样本数", "_has_unit_price", "_has_total_price"],
-        ascending=[False, False, False, False],
-    ).drop(columns=["max_project_score", "_has_unit_price", "_has_total_price", "catalog_id"])
+        [
+            "final_recommend_score",
+            "max_item_embedding_score",
+            "max_project_score",
+            "历史样本数",
+            "_has_unit_price",
+            "_has_total_price",
+        ],
+        ascending=[False, False, False, False, False, False],
+    ).drop(
+        columns=[
+            "max_project_score",
+            "max_item_embedding_score",
+            "median_item_embedding_score",
+            "final_recommend_score",
+            "_has_unit_price",
+            "_has_total_price",
+            "catalog_id",
+        ]
+    )
     recommended.insert(0, "序号", range(1, len(recommended) + 1))
 
     for column in RECOMMENDED_ITEM_COLUMNS:
@@ -799,7 +886,7 @@ def run_query(
     display: bool = False,
 ) -> tuple[ParsedQuery, pd.DataFrame, pd.DataFrame]:
     normalized_name_weight, normalized_detail_weight = normalize_project_weights(project_name_weight, project_detail_weight)
-    samples, project_groups, project_name_embeddings, project_detail_embeddings, meta = load_index(index_dir)
+    samples, project_groups, project_name_embeddings, project_detail_embeddings, item_text_embeddings, meta = load_index(index_dir)
     parsed = parse_query_requirements(raw_text, project_groups)
     parsed = apply_parsed_overrides(
         parsed,
@@ -839,6 +926,7 @@ def run_query(
             normalized_detail_weight,
         )
         matches = expand_matched_samples(samples, matched_projects)
+        matches = score_matched_items(matches, item_text_embeddings, query_embedding)
         recommend_items = aggregate_recommend_items(matches, parsed)
     finally:
         release_embedding_model(model)
