@@ -80,6 +80,12 @@ PROJECT_PACKAGE_COLUMNS = [
     "consultation_time",
     "location",
     "item_count",
+    "cost_item_names_summary",
+    "catalog_id",
+    "一级分类",
+    "二级分类",
+    "维修状态",
+    "标准对象",
     "catalog_summary",
     "item_summary",
     "package_text",
@@ -207,25 +213,12 @@ def build_item_retrieval_text(row: pd.Series) -> str:
     lines: list[str] = []
     cost_item_name = safe_text(row.get("cost_item_name"))
     project_description = safe_text(row.get("project_description"))
-    category = join_non_empty(
-        [
-            safe_text(row.get("一级分类")),
-            safe_text(row.get("二级分类")),
-            safe_text(row.get("维修状态")),
-            safe_text(row.get("标准对象")),
-        ]
-    )
-    project_name_text = safe_text(row.get("project_name_text"))
-    unit = safe_text(row.get("unit")) or safe_text(row.get("unit_normalized"))
+    unit = safe_text(row.get("unit_normalized")) or safe_text(row.get("unit"))
 
     if cost_item_name:
         lines.append(f"清单项：{cost_item_name}")
     if project_description:
         lines.append(f"项目特征：{project_description}")
-    if category:
-        lines.append(f"分类：{category}")
-    if project_name_text:
-        lines.append(f"工程语义：{project_name_text}")
     if unit:
         lines.append(f"单位：{unit}")
     return "\n".join(lines)
@@ -296,45 +289,25 @@ def catalog_summary_for_group(group: pd.DataFrame) -> str:
 
 
 def item_summary_for_group(group: pd.DataFrame) -> str:
-    rows: list[str] = []
-    for _index, row in group.iterrows():
-        name = safe_text(row.get("cost_item_name"))
-        description = safe_text(row.get("project_description"))
-        unit = safe_text(row.get("unit")) or safe_text(row.get("unit_normalized"))
-        if not name and not description:
-            continue
-        item_text = name
-        if description:
-            item_text = f"{item_text}：{description}" if item_text else description
-        if unit:
-            item_text = f"{item_text}；单位：{unit}"
-        rows.append(item_text)
-    return unique_join(rows)
+    return cost_item_names_summary_for_group(group)
 
 
-def package_text_for_group(first: pd.Series, catalog_summary: str, group: pd.DataFrame) -> str:
+def cost_item_names_summary_for_group(group: pd.DataFrame) -> str:
+    return unique_join([safe_text(value) for value in group.get("cost_item_name", pd.Series(dtype=object)).tolist()])
+
+
+def unique_field_summary(group: pd.DataFrame, column: str) -> str:
+    if column not in group.columns:
+        return ""
+    return unique_join([safe_text(value) for value in group[column].tolist()])
+
+
+def package_text_for_group(first: pd.Series, cost_item_names_summary: str) -> str:
     lines = [
         f"工程名称：{safe_text(first.get('工程名称'))}",
         f"工程语义：{safe_text(first.get('project_name_text'))}",
+        f"包含清单项：{cost_item_names_summary}",
     ]
-    if catalog_summary:
-        lines.append(f"分类摘要：{catalog_summary}")
-    lines.append("包含清单：")
-    seen: set[str] = set()
-    for _index, row in group.iterrows():
-        name = safe_text(row.get("cost_item_name"))
-        description = safe_text(row.get("project_description"))
-        unit = safe_text(row.get("unit")) or safe_text(row.get("unit_normalized"))
-        if not name and not description:
-            continue
-        item_line = f"- {name}"
-        if description:
-            item_line += f"：{description}"
-        if unit:
-            item_line += f"；单位：{unit}"
-        if item_line not in seen:
-            lines.append(item_line)
-            seen.add(item_line)
     return "\n".join(line for line in lines if line.strip())
 
 
@@ -351,6 +324,7 @@ def build_project_packages(samples: pd.DataFrame) -> pd.DataFrame:
         project_name = safe_text(first.get("工程名称"))
         project_name_text = safe_text(first.get("project_name_text"))
         catalog_summary = catalog_summary_for_group(group)
+        cost_item_names_summary = cost_item_names_summary_for_group(group)
         item_summary = item_summary_for_group(group)
         rows.append(
             {
@@ -364,9 +338,15 @@ def build_project_packages(samples: pd.DataFrame) -> pd.DataFrame:
                 "consultation_time": safe_text(first.get("consultation_time")),
                 "location": safe_text(first.get("location")),
                 "item_count": int(len(group)),
+                "cost_item_names_summary": cost_item_names_summary,
+                "catalog_id": unique_field_summary(group, "catalog_id"),
+                "一级分类": unique_field_summary(group, "一级分类"),
+                "二级分类": unique_field_summary(group, "二级分类"),
+                "维修状态": unique_field_summary(group, "维修状态"),
+                "标准对象": unique_field_summary(group, "标准对象"),
                 "catalog_summary": catalog_summary,
                 "item_summary": item_summary,
-                "package_text": package_text_for_group(first, catalog_summary, group),
+                "package_text": package_text_for_group(first, cost_item_names_summary),
             }
         )
     return pd.DataFrame(rows, columns=PROJECT_PACKAGE_COLUMNS)
@@ -431,10 +411,11 @@ def build_index_meta(
         "field_descriptions": {
             "sample_index": "samples.parquet 行号，与 item_embeddings.npy 行号一一对应。",
             "project_package_id": "当前阶段固定等于 project_key，用于历史工程包召回和展开。",
-            "item_retrieval_text": "清单项、项目特征、分类、工程语义和单位拼接文本，用于 item embedding。",
+            "item_retrieval_text": "cost_item_name、project_description、unit_normalized(or unit) 拼接文本，用于 item embedding。",
             "fine_signature": "cost_item_name + project_description + unit，用于候选项精细聚合。",
             "family_signature": "cost_item_name + unit，用于相似工程包共现统计。",
-            "package_text": "工程名称、工程语义、分类摘要和完整清单摘要，用于 project_package embedding。",
+            "cost_item_names_summary": "同一个 project_package 下 cost_item_name 去重列表。",
+            "package_text": "工程名称、project_name_text、cost_item_names_summary 拼接文本，用于 project_package embedding。",
         },
     }
 

@@ -194,14 +194,16 @@ index_meta.json
 
 索引包含两层 embedding：
 
-- `project_package_embeddings.npy`：每个历史工程包一个 embedding，文本来自工程名称、工程语义、分类摘要和完整清单摘要，用于召回相似历史工程包。
-- `item_embeddings.npy`：每条历史清单行一个 embedding，文本优先包含清单项和 `project_description`，并补充分类、工程语义和单位，用于召回直接相关清单证据。
+- `project_package_embeddings.npy`：每个 `project_key` 一个历史工程包 embedding，文本只基于 `工程名称 + project_name_text + cost_item_names_summary`，用于召回相似历史工程包。
+- `item_embeddings.npy`：每条历史清单行一个 embedding，文本只基于 `cost_item_name + project_description + unit_normalized`，用于召回相似清单行证据。
+
+目录分类字段仍保留在 `samples.parquet` / `project_packages.parquet` 中用于追溯和 `catalog_score`，但不进入 package/item embedding 文本。
 
 当前阶段不使用 Milvus，不使用 LangChain；每次合并后允许重建整个本地 parquet + npy + `index_meta.json`。
 
 ### 5. 自然语言造价查询
 
-示例：用户只输入口语化维修需求，系统先调用本地 LLM 理解查询，再执行 project package 召回、item row 召回、候选项统计和证据整理，最后由 LLM 生成结构化 `suggested_bill`。
+示例：用户只输入口语化维修需求，系统先调用本地 LLM 生成两个 embedding query，再复用标准目录分类器选择一个主目录，之后执行 project package 召回、item row 召回、候选项统计和证据整理，最后由 LLM 生成结构化 `suggested_bill`。
 
 ```bash
 backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
@@ -236,12 +238,14 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 
 ```text
 用户自然语言需求
-→ LLM 查询理解
-→ project_package 召回相似历史工程包
-→ item row 召回直接相关清单证据
+→ LLM 生成 project_package_query_text 和 item_query_text
+→ 标准目录分类器选择一个主目录
+→ package query 检索 project_package_embeddings
+→ item query 检索 item_embeddings
 → 聚合 candidate_item_stats
+→ 压缩证据交给 LLM
 → LLM 生成 suggested_bill
-→ 输出 suggested_bill、matched_project_packages、candidate_item_stats、evidence_items、parse_info
+→ 输出 suggested_bill、matched_project_packages、candidate_item_stats、evidence_items、parse_info、llm_trace
 ```
 
 输出 xlsx 固定包含：
@@ -250,7 +254,8 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 - `matched_project_packages`：相似历史工程包摘要，用于说明参考了哪些完整历史工程。
 - `candidate_item_stats`：按 `fine_signature = cost_item_name + project_description + unit` 聚合的候选项统计。
 - `evidence_items`：历史清单明细证据，保留 `project_description`、工程量、单价、合价和召回分数。
-- `parse_info`：查询理解、运行参数、索引信息、LLM 成功/fallback 状态和主要文件路径。
+- `parse_info`：query texts、标准目录分类结果、运行参数、索引信息、LLM 成功/fallback 状态和主要文件路径。
+- `llm_trace`：记录 `query_rewrite_for_embedding`、`query_catalog_classification`、`suggested_bill_generation` 三步的成功状态、错误和 prompt 长度。
 
 ### 6. 日常流程
 
