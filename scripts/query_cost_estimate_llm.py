@@ -33,6 +33,7 @@ MATCHED_PROJECT_PACKAGE_COLUMNS = [
     "cost_item_names_summary",
     "consultation_time",
     "location",
+    "cache_subject",
     "item_count",
 ]
 
@@ -182,6 +183,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite", action="store_true", help="若输出文件已存在则覆盖")
     parser.add_argument("--include-debug-text", action="store_true", help="在 parse_info 中保留 LLM 调试文本摘要")
     parser.add_argument("--display", action="store_true", help="输出时将部分数值格式化为易读文本")
+    parser.add_argument(
+        "--max-packages-per-cache-subject",
+        type=int,
+        default=1,
+        help="同一 cache_subject 最多保留的相似历史工程包数量，默认 1；设为 0 表示不限制",
+    )
     return parser.parse_args()
 
 
@@ -514,14 +521,24 @@ def score_project_packages(
     project_package_embeddings: np.ndarray,
     package_query_embedding: np.ndarray,
     top_packages: int,
+    max_packages_per_cache_subject: int = 1,
 ) -> pd.DataFrame:
     scores = project_package_embeddings @ package_query_embedding
-    indices = top_score_indices(scores, max(top_packages * 3, top_packages))
+    indices = top_score_indices(scores, max(top_packages * 20, top_packages))
     rows = project_packages.iloc[indices].copy()
     rows["package_score"] = scores[indices].astype(float)
     rows["package_dedupe_key"] = rows.apply(package_dedupe_key, axis=1)
     rows = rows.sort_values("package_score", ascending=False)
-    rows = rows.drop_duplicates("package_dedupe_key", keep="first").head(top_packages).copy()
+    rows = rows.drop_duplicates("package_dedupe_key", keep="first").copy()
+    if "cache_subject" in rows.columns and max_packages_per_cache_subject > 0:
+        rows["_cache_subject_key"] = rows["cache_subject"].map(normalize_dedupe_text)
+        empty_mask = rows["_cache_subject_key"].eq("")
+        rows.loc[empty_mask, "_cache_subject_key"] = rows.loc[empty_mask, "package_dedupe_key"]
+
+        rows["_cache_subject_rank"] = rows.groupby("_cache_subject_key").cumcount()
+        rows = rows[rows["_cache_subject_rank"] < max_packages_per_cache_subject]
+        rows = rows.drop(columns=["_cache_subject_key", "_cache_subject_rank"])
+    rows = rows.head(top_packages).copy()
     rows = rows.drop(columns=["package_dedupe_key"])
     rows.insert(0, "rank", range(1, len(rows) + 1))
     return rows
@@ -788,7 +805,16 @@ def split_refs(value: Any, limit: int | None = None) -> list[str]:
 
 
 def compressed_packages_for_llm(frame: pd.DataFrame, limit: int) -> pd.DataFrame:
-    columns = ["rank", "package_score", "project_package_id", "工程名称", "project_name_text", "cost_item_names_summary", "item_count"]
+    columns = [
+        "rank",
+        "package_score",
+        "project_package_id",
+        "工程名称",
+        "project_name_text",
+        "cost_item_names_summary",
+        "cache_subject",
+        "item_count",
+    ]
     rows = frame.head(limit).copy()
     for column in columns:
         if column not in rows.columns:
@@ -1218,6 +1244,7 @@ def build_parse_info(
     query_catalog: QueryCatalog,
     top_packages: int,
     top_items: int,
+    max_packages_per_cache_subject: int,
     meta: dict[str, Any],
     sample_count: int,
     package_count: int,
@@ -1239,6 +1266,7 @@ def build_parse_info(
         ("package_retrieval_text_fields", "工程名称 + project_name_text + cost_item_names_summary"),
         ("top_packages", top_packages),
         ("top_items", top_items),
+        ("max_packages_per_cache_subject", max_packages_per_cache_subject),
         ("embedding_model", meta.get("model", "")),
         ("sample_count", sample_count),
         ("package_count", package_count),
@@ -1307,6 +1335,7 @@ def run_query(
     top_packages: int,
     top_items: int,
     output: Path | None,
+    max_packages_per_cache_subject: int = 1,
     include_debug_text: bool = False,
     display: bool = False,
 ) -> QueryResult:
@@ -1337,6 +1366,7 @@ def run_query(
         project_package_embeddings,
         package_query_embedding,
         top_packages,
+        max_packages_per_cache_subject=max_packages_per_cache_subject,
     )
     item_scores = item_embeddings @ item_query_embedding
     direct_item_hits = score_direct_items(samples, item_scores, top_items)
@@ -1359,6 +1389,7 @@ def run_query(
         query_catalog=query_catalog,
         top_packages=top_packages,
         top_items=top_items,
+        max_packages_per_cache_subject=max_packages_per_cache_subject,
         meta=meta,
         sample_count=len(samples),
         package_count=len(project_packages),
@@ -1425,6 +1456,7 @@ def main() -> int:
             top_packages=args.top_packages,
             top_items=args.top_items,
             output=output_path,
+            max_packages_per_cache_subject=args.max_packages_per_cache_subject,
             include_debug_text=args.include_debug_text,
             display=args.display,
         )

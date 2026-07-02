@@ -39,6 +39,7 @@ PROJECT_HEADERS = [
     "分类依据",
     "consultation_time",
     "location",
+    "cache_subject",
 ]
 
 SAMPLE_HEADERS = [
@@ -75,6 +76,7 @@ SAMPLE_HEADERS = [
     "item_context_text",
     "consultation_time",
     "location",
+    "cache_subject",
     "source_row_id",
     "item_row_id",
     "source_json",
