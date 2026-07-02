@@ -145,7 +145,7 @@ stable_sample_id
 合并总样本后重建本地 embedding index：
 
 ```bash
-backend/.venv/bin/python scripts/build_cost_item_embedding_index.py
+backend/.venv/bin/python scripts/build_cost_item_embedding_index.py --overwrite
 ```
 
 默认读取：
@@ -166,7 +166,7 @@ embeddings/
 BAAI/bge-m3
 ```
 
-如果目标索引目录已存在，脚本默认不覆盖；确认要重建时加：
+如果目标索引目录已存在，脚本默认不覆盖；确认要重建时必须显式加：
 
 ```bash
 backend/.venv/bin/python scripts/build_cost_item_embedding_index.py --overwrite
@@ -186,23 +186,26 @@ backend/.venv/bin/python scripts/build_cost_item_embedding_index.py \
 
 ```text
 samples.parquet
-project_groups.parquet
-project_name_embeddings.npy
-project_detail_embeddings.npy
+project_packages.parquet
+project_package_embeddings.npy
+item_embeddings.npy
 index_meta.json
 ```
 
-索引阶段不再调用 LLM 清洗工程名称，只读取样本中的 `project_name_text`。如果该字段为空，会打印 warning 并回退为原始 `工程名称`。`project_detail_text` 由同一历史工程下的 `cost_item_name + project_description` 去重拼接，不拼入工程名称。
+索引包含两层 embedding：
+
+- `project_package_embeddings.npy`：每个历史工程包一个 embedding，文本来自工程名称、工程语义、分类摘要和完整清单摘要，用于召回相似历史工程包。
+- `item_embeddings.npy`：每条历史清单行一个 embedding，文本优先包含清单项和 `project_description`，并补充分类、工程语义和单位，用于召回直接相关清单证据。
 
 当前阶段不使用 Milvus，不使用 LangChain；每次合并后允许重建整个本地 parquet + npy + `index_meta.json`。
 
 ### 5. 自然语言造价查询
 
-示例：用户只输入口语化维修需求，系统调用本地 LLM 将 `--text` 解析为结构化 `ParsedQuery`，再由程序执行 project group 双路 embedding 检索、location / consultation_time 硬过滤、历史工程下样本展开和推荐清单项聚合。
+示例：用户只输入口语化维修需求，系统先调用本地 LLM 理解查询，再执行 project package 召回、item row 召回、候选项统计和证据整理，最后由 LLM 生成结构化 `suggested_bill`。
 
 ```bash
 backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
-  --text "屋面漏水，想做3mm SBS防水，面积大概500平，参考嘉兴一年内的造价"
+  --text "屋面漏水，想做3mm SBS防水，面积大概500平"
 ```
 
 默认读取索引目录：
@@ -222,17 +225,32 @@ query/YYYYMMDDHHMM.xlsx
 ```bash
 backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
   --index-dir embeddings \
-  --text "屋面漏水，想做3mm SBS防水，面积大概500平，参考嘉兴一年内的造价" \
+  --text "屋面漏水，想做3mm SBS防水，面积大概500平" \
   --output query/test_result.xlsx \
   --overwrite
 ```
 
 如果输出文件已存在，需要显式传 `--overwrite`。
 
-其中：
+新查询流程：
 
-- `recommend_items` sheet：领导展示主表，按相似工程展开后的历史清单项聚合，默认使用结构化数值列展示一级/二级分类、维修状态、清单项名称、项目特征/施工工艺、单位、样本数、历史工程量、估算金额、综合单价、历史总价、人工单价、机械单价和来源清单行；需要把单位和金额单位拼入数值单元格时加 `--display`。
-- `matches` sheet：内部追溯表，展示相似工程展开后的清单样本行，并保留 `project_score`、`project_name_score`、`project_detail_score`。默认不输出历史工程名称和召回文本；需要调试明文时加 `--include-debug-text`。
+```text
+用户自然语言需求
+→ LLM 查询理解
+→ project_package 召回相似历史工程包
+→ item row 召回直接相关清单证据
+→ 聚合 candidate_item_stats
+→ LLM 生成 suggested_bill
+→ 输出 suggested_bill、matched_project_packages、candidate_item_stats、evidence_items、parse_info
+```
+
+输出 xlsx 固定包含：
+
+- `suggested_bill`：LLM 生成的最终建议清单、建议工程量、估价区间和解释。
+- `matched_project_packages`：相似历史工程包摘要，用于说明参考了哪些完整历史工程。
+- `candidate_item_stats`：按 `fine_signature = cost_item_name + project_description + unit` 聚合的候选项统计。
+- `evidence_items`：历史清单明细证据，保留 `project_description`、工程量、单价、合价和召回分数。
+- `parse_info`：查询理解、运行参数、索引信息、LLM 成功/fallback 状态和主要文件路径。
 
 ### 6. 日常流程
 
