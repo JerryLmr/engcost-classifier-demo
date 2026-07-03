@@ -1132,15 +1132,31 @@ JSON 格式：
 
 要求：
 - 从 candidate_item_stats 中选择本次建议清单，必须填写对应 candidate_id，不要输出明显无关项。
-- LLM 可以判断工程量、单位、估价口径和金额计算方式，但历史综合单价、人工单价、机械单价必须来自对应 candidate_id 的 candidate_item_stats。
+- suggested_bill 默认输出 3-6 行。除非 candidate_item_stats 中确实没有可用候选，否则不要只输出 1-2 行。
+- 不要只选择同一种清单项的多个近似重复项。对于语义高度重复的候选，只选择最能代表本次需求的一项；优先选择 final_score 高、历史样本数多、项目特征更匹配用户需求的 candidate。
+- 生成 suggested_bill 时要按“施工链条”思考，而不是只找最直接的清单项：
+  1. 核心施工项：直接完成用户需求的主要清单，例如屋面卷材防水；
+  2. 常见前置项：施工前通常需要发生的旧层拆除、铲除、基层处理等；
+  3. 工程包共现措施项：在相似历史工程包中经常一起出现的垂直运输、脚手架、垃圾清运等；
+  4. 可选/待确认项：是否发生取决于现场状况的项目。
+- 对屋面漏水、屋面防水、SBS 卷材防水、3mm 防水卷材等需求：
+  - 如果 candidate_item_stats 中存在“屋面卷材防水”，必须优先作为核心施工项列出；
+  - 如果 candidate_item_stats 中存在“防水层拆除”或“铲除卷材防水层 屋面”，应至少选择其中一个作为常见前置项，不要只在不确定性说明里提到；
+  - 如果 candidate_item_stats 中存在“垂直运输”，应作为工程包共现措施项或可选/待确认项列出；
+  - 防水层拆除、基层处理、垂直运输是否最终计取，可在 uncertainty_note 中说明需要现场确认，但不能因为不确定就完全不输出候选。
+- 如果用户明确给出面积，例如 500㎡：
+  - 单位为 m² / ㎡ 的核心施工项、拆除项，可以使用该面积作为建议工程量；
+  - 垂直运输、项、台班、次、部、套等非面积单位，不要机械按面积线性放大；如果候选单位确实是 m²，才可参考面积，并在 uncertainty_note 中说明需确认楼层、运输距离、是否已包含在综合单价中。
+- LLM 可以判断工程量、单位、估价口径和金额计算方式，但历史综合单价、人工单价、机械单价仍必须来自对应 candidate_id 的 candidate_item_stats，不允许自行估价。
 - 不要输出 source_ref、source_refs、evidence_ref、evidence_refs、stable_sample_id、project_key、item_key 或任何来源编号。
 - 人工/机械单价或金额没有证据时保留 null，不要填 0。
 - recommend_type 建议使用：直接匹配项、常见前置项、工程包共现措施项、补充候选项、可选/待确认项。
 - item_role 建议使用：核心施工项、常见前置项、工程包共现措施项、补充候选项、可选/待确认项。
-- 用户明确给了工程量时，可以作为重要依据，但仍需结合候选项单位和项目语义。
-- 防水层拆除是否发生取决于现场旧防水层状况；垂直运输、措施项、项/台/部/套/幢/次/台班等不应机械按面积线性放大。
-- 如果楼栋数、设备数量、运输高度、基层状况、节点复杂度未知，要在 uncertainty_note 中指出。
+- adopt_reason 要写清楚为什么采用该 candidate，特别是它在施工链条中的作用，而不是只写“与需求匹配”。
+- uncertainty_note 要说明现场需要确认什么，例如旧防水层是否拆除、基层是否需要处理、垂直运输是否单独计取、节点/女儿墙/排水口等细部是否包含。
+- 如果楼栋数、设备数量、运输高度、基层状况、节点复杂度未知，也要在 uncertainty_note 中指出。
 - 如果无法可靠估算工程量，可以给历史价格参考但金额为空，或给保守范围并说明原因。
+- 简短结构示例：对于“屋面漏水，3mm SBS 防水，面积约500㎡”，如果候选中存在相关项，suggested_bill 应优先包含：1. 屋面卷材防水 / 直接匹配项 / 核心施工项；2. 防水层拆除或铲除卷材防水层屋面 / 常见前置项；3. 垂直运输 / 工程包共现措施项或可选/待确认项；必要时再补充基层处理、垃圾清运等候选，但必须来自 candidate_item_stats。
 
 输入数据：
 {json_text(payload)}
@@ -1567,32 +1583,121 @@ def build_estimate_summary(
         suggested_bill["项目角色"].map(cell_text).str.contains("共现|措施", regex=True, na=False)
         | suggested_bill["推荐类型"].map(cell_text).str.contains("共现|措施", regex=True, na=False)
     ]
+    quantity_texts: list[str] = []
+    for item in rewrite.parsed_quantities:
+        if not isinstance(item, dict):
+            continue
+        raw_text = cell_text(item.get("raw_text"))
+        meaning = cell_text(item.get("meaning"))
+        value = numeric_or_none(item.get("value"))
+        unit = cell_text(item.get("unit"))
+        if value is not None:
+            value_text = f"{value:g}{unit}"
+        else:
+            value_text = raw_text
+        if not value_text:
+            continue
+        if meaning:
+            quantity_texts.append(f"{meaning}约 {value_text}")
+        else:
+            quantity_texts.append(f"工程量约 {value_text}")
+
+    demand_parts = []
+    if rewrite.repair_object:
+        demand_parts.append(f"用户拟对{rewrite.repair_object}进行维修")
+    else:
+        demand_parts.append(f"用户需求为“{rewrite.raw_query}”")
+    if rewrite.materials_or_specs:
+        demand_parts.append(f"涉及{join_non_empty(rewrite.materials_or_specs)}")
+    if quantity_texts:
+        demand_parts.append(f"明确{join_non_empty(quantity_texts)}")
+    demand_understanding = "，".join(demand_parts) + "。"
+
+    catalog_path = join_non_empty(
+        [query_catalog.一级分类, query_catalog.二级分类, query_catalog.维修状态],
+    )
+    if catalog_path:
+        catalog_text = catalog_path.replace("；", " / ")
+        catalog_prefix = f"{query_catalog.catalog_id} " if query_catalog.catalog_id else ""
+        standard_object = f"，标准对象为{query_catalog.标准对象}" if query_catalog.标准对象 else ""
+        classification = f"按维修项目分类，当前需求归入 {catalog_prefix}{catalog_text}{standard_object}。"
+    else:
+        classification = "按维修项目分类，当前需求暂未归入明确标准目录，需结合候选清单和现场情况判断。"
+
+    core_names = join_non_empty(core_rows["清单项名称"].tolist(), limit=5)
+    optional_names = join_non_empty(optional_rows["清单项名称"].tolist(), limit=5)
+    cooccur_names = join_non_empty(cooccur_rows["清单项名称"].tolist(), limit=5)
+    plan_parts = []
+    if core_names:
+        plan_parts.append(f"建议以{core_names.replace('；', '、')}作为核心施工项")
+    if optional_names:
+        plan_parts.append(f"结合现场情况确认是否需要{optional_names.replace('；', '、')}等前置或待确认项目")
+    if cooccur_names:
+        plan_parts.append(f"同步核查{cooccur_names.replace('；', '、')}等工程包共现措施项")
+    recommendation = "，并".join(plan_parts) + "。" if plan_parts else "建议基于已召回候选项形成维修清单，并按现场条件确认前置及措施项目。"
+
+    included_items = join_non_empty(suggested_bill["清单项名称"].tolist(), limit=20)
+    if included_items:
+        included_items += "。"
+    else:
+        included_items = "当前未形成可展示的建议清单项。"
+
+    low_amount = amount_sum(suggested_bill, "估算金额最低值")
+    mid_amount = amount_sum(suggested_bill, "估算金额中位数")
+    high_amount = amount_sum(suggested_bill, "估算金额最高值")
+    if low_amount is not None and mid_amount is not None and high_amount is not None:
+        amount_range = (
+            f"当前可计算项目的参考金额约为 {low_amount:,.2f} - {high_amount:,.2f} 元，"
+            f"中位参考值约 {mid_amount:,.2f} 元。"
+        )
+    elif low_amount is not None or mid_amount is not None or high_amount is not None:
+        amount_parts = []
+        if low_amount is not None:
+            amount_parts.append(f"最低参考值约 {low_amount:,.2f} 元")
+        if mid_amount is not None:
+            amount_parts.append(f"中位参考值约 {mid_amount:,.2f} 元")
+        if high_amount is not None:
+            amount_parts.append(f"最高参考值约 {high_amount:,.2f} 元")
+        amount_range = (
+            f"当前可计算项目已有部分金额参考：{join_non_empty(amount_parts)}；"
+            "因部分项目缺少可计算工程量，区间可能不完整。"
+        )
+    else:
+        amount_range = "当前存在无法可靠计算工程量的项目，暂不汇总总价，仅提供历史单价参考。"
+
+    confirmation_values = []
+    for value in [*rewrite.uncertainties, *suggested_bill["不确定性说明"].tolist()]:
+        text = cell_text(value).strip("。；; ")
+        if text.endswith("未知"):
+            text = text[:-2]
+        if text.endswith("不确定"):
+            text = text[:-3]
+        if text.endswith("需要确认"):
+            text = text[:-4]
+        if text.endswith("需确认"):
+            text = text[:-3]
+        if text.endswith("待确认"):
+            text = text[:-3]
+        if text:
+            confirmation_values.append(text)
+    confirmation_text = join_non_empty(confirmation_values, limit=6)
+    if confirmation_text:
+        site_confirmation = f"需确认{confirmation_text}。"
+    else:
+        site_confirmation = "需结合现场踏勘确认实际工程量、施工条件和细部做法。"
+
     rows = [
-        ("原始需求", rewrite.raw_query),
-        ("ParsedQuery", json_text(parsed_query_dict(rewrite))),
+        ("需求理解", demand_understanding),
+        ("分类结果", classification),
+        ("推荐方案", recommendation),
+        ("已列入清单项", included_items),
+        ("参考金额区间", amount_range),
+        ("需现场确认", site_confirmation),
         (
-            "核心分类",
-            f"{query_catalog.catalog_id} {query_catalog.一级分类}/{query_catalog.二级分类}/{query_catalog.维修状态}".strip(),
+            "价格口径",
+            "综合单价、人工费单价、机械费单价均来自 candidate_item_stats 的历史样本统计；"
+            "具体来源可通过 suggested_bill.来源样本 和 evidence_items 回查。",
         ),
-        ("估价口径", join_non_empty(suggested_bill["计量/估算口径"].tolist(), limit=5)),
-        ("推荐核心项目", join_non_empty(core_rows["清单项名称"].tolist(), limit=8)),
-        ("常见前置/可选项目", join_non_empty(optional_rows["清单项名称"].tolist(), limit=8)),
-        ("共现措施项", join_non_empty(cooccur_rows["清单项名称"].tolist(), limit=8)),
-        ("总估算金额最低值", amount_sum(suggested_bill, "估算金额最低值")),
-        ("总估算金额中位数", amount_sum(suggested_bill, "估算金额中位数")),
-        ("总估算金额最高值", amount_sum(suggested_bill, "估算金额最高值")),
-        (
-            "未计入或需现场确认项目",
-            join_non_empty(
-                suggested_bill[
-                    suggested_bill["估算金额中位数"].map(numeric_or_none).isna()
-                    | suggested_bill["不确定性说明"].map(cell_text).str.contains("确认|未知|不确定", regex=True, na=False)
-                ]["清单项名称"].tolist(),
-                limit=10,
-            ),
-        ),
-        ("主要不确定因素", join_non_empty([*rewrite.uncertainties, *suggested_bill["不确定性说明"].tolist()], limit=10)),
-        ("来源说明", "本结果基于内部历史审价样本和相似工程包，不是联网市场报价。"),
     ]
     return pd.DataFrame(rows, columns=ESTIMATE_SUMMARY_COLUMNS)
 
