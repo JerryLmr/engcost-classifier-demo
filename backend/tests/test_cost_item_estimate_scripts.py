@@ -248,8 +248,61 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(args.index_dir, "embeddings")
         self.assertEqual(args.top_packages, 20)
         self.assertEqual(args.top_items, 300)
+        self.assertEqual(args.llm_check_timeout, 3.0)
         self.assertFalse(hasattr(args, "top_k"))
         self.assertFalse(hasattr(args, "project_name_weight"))
+
+    def test_query_main_checks_llm_service_before_run_query(self):
+        call_order: list[str] = []
+
+        def check_service(timeout_seconds: float):
+            call_order.append(f"check:{timeout_seconds}")
+
+        def run_query(**_kwargs):
+            call_order.append("run_query")
+            return object()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "query.xlsx"
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "query_cost_estimate_llm.py",
+                    "--text",
+                    "屋面漏水",
+                    "--output",
+                    str(output_path),
+                    "--llm-check-timeout",
+                    "1.5",
+                ],
+            ), patch.object(query_estimate_llm, "check_lmstudio_service", side_effect=check_service) as check_mock, patch.object(
+                query_estimate_llm,
+                "run_query",
+                side_effect=run_query,
+            ) as run_mock, patch.object(query_estimate_llm, "print_terminal_summary"):
+                exit_code = query_estimate_llm.main()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(call_order, ["check:1.5", "run_query"])
+        check_mock.assert_called_once_with(timeout_seconds=1.5)
+        run_mock.assert_called_once()
+
+    def test_query_main_returns_before_run_query_when_llm_service_unavailable(self):
+        with patch.object(sys, "argv", ["query_cost_estimate_llm.py", "--text", "屋面漏水"]), patch.object(
+            query_estimate_llm,
+            "check_lmstudio_service",
+            side_effect=RuntimeError("LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1"),
+        ) as check_mock, patch.object(query_estimate_llm, "run_query") as run_mock, patch("builtins.print") as print_mock:
+            exit_code = query_estimate_llm.main()
+
+        self.assertEqual(exit_code, 1)
+        check_mock.assert_called_once_with(timeout_seconds=3.0)
+        run_mock.assert_not_called()
+        print_mock.assert_called_once_with(
+            "[ERROR] LLM 服务不可用，请先启动 LM Studio Server，并检查 "
+            "LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1"
+        )
 
     def test_query_load_index_reads_new_files_and_validates_shapes(self):
         samples = self.prepared_samples()
@@ -274,6 +327,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         llm_result = {
             "project_package_query_text": "屋面漏水维修工程 屋面卷材防水",
             "item_query_text": "",
+            "parsed_quantities": [{"raw_text": "500平", "value": 500, "unit": "m²"}],
+            "materials_or_specs": ["3mm SBS"],
+            "repair_object": "屋面防水层",
+            "uncertainties": ["是否拆除旧防水层未知"],
             "likely_catalog": {"SHOULD": "IGNORE"},
         }
         with patch.object(query_estimate_llm, "request_llm_json", return_value=llm_result):
@@ -281,6 +338,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         self.assertTrue(rewrite.success)
         self.assertEqual(rewrite.item_query_text, "屋面漏水维修工程 屋面卷材防水")
+        self.assertEqual(rewrite.parsed_quantities[0]["value"], 500)
+        self.assertEqual(rewrite.materials_or_specs, ["3mm SBS"])
         self.assertIn("item_query_text 为空", rewrite.notes[0])
         self.assertEqual(trace["step"], "query_rewrite_for_embedding")
 
@@ -290,6 +349,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertFalse(fallback.success)
         self.assertEqual(fallback.project_package_query_text, "屋面漏水")
         self.assertEqual(fallback.item_query_text, "屋面漏水")
+        self.assertEqual(fallback.parsed_quantities, [])
         self.assertEqual(trace["success"], "否")
 
     def test_classify_query_catalog_reuses_standard_classifier(self):
@@ -363,6 +423,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertAlmostEqual(float(roof["item_score"]), 0.95)
         self.assertAlmostEqual(float(roof["cooccur_score"]), 0.5)
         self.assertEqual(float(roof["catalog_score"]), 1.0)
+        self.assertEqual(roof["source_ref"], "batch-a::2::2-1")
         self.assertEqual(pipe["package_score"], 0.0)
         self.assertEqual(pipe["direct_hit"], True)
         self.assertEqual(pipe["catalog_score"], 0.55)
@@ -376,15 +437,33 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         candidates["catalog_score"] = 1.0
         candidates["unit_score"] = 0.5
         candidates["final_score"] = [0.85, 0.6]
-        candidates["evidence_ref"] = ["E0", "E1"]
+        candidates["source_ref"] = ["batch-a::2::2-1", "batch-a::2::2-2"]
 
         stats = query_estimate_llm.build_candidate_item_stats(candidates)
 
+        self.assertIn("candidate_id", stats.columns)
+        self.assertIn("source_refs", stats.columns)
         self.assertIn("历史人工单价中位数", stats.columns)
         self.assertIn("历史机械单价中位数", stats.columns)
         roof = stats[stats["cost_item_name"] == "屋面卷材防水"].iloc[0]
+        self.assertEqual(roof["candidate_id"], "C001")
         self.assertEqual(roof["历史人工单价中位数"], 20.0)
         self.assertEqual(roof["历史机械单价中位数"], 5.0)
+        self.assertEqual(roof["source_refs"], "batch-a::2::2-1")
+
+    def test_source_ref_recovers_from_batch_source_row_and_seq(self):
+        rows = self.prepared_samples().head(1).copy()
+        rows["project_key"] = ""
+        rows["item_row_id"] = ""
+        warnings: list[str] = []
+
+        recovered = query_estimate_llm.attach_source_refs(rows, warnings)
+
+        self.assertEqual(recovered.iloc[0]["project_key"], "batch-a::2")
+        self.assertEqual(recovered.iloc[0]["item_row_id"], "2-1")
+        self.assertEqual(recovered.iloc[0]["source_ref"], "batch-a::2::2-1")
+        self.assertIn("source_ref_recovered_from_batch_source_row", warnings)
+        self.assertIn("source_ref_recovered_from_source_row_seq", warnings)
 
     def test_compressed_llm_payload_limits_rows_and_refs(self):
         candidates = pd.DataFrame(
@@ -395,10 +474,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "cost_item_name": f"项{index}",
                     "project_description": "做法",
                     "unit": "m²",
+                    "unit_normalized": "m²",
                     "历史样本数": 1,
                     "来源工程包数": 1,
                     "final_score": 1 - index / 100,
-                    "evidence_refs": "E0, E1, E2, E3, E4, E5",
+                    "candidate_id": f"C{index + 1:03d}",
+                    "source_refs": "batch-a::1::1-1, batch-a::1::1-2, batch-a::1::1-3, batch-a::1::1-4, batch-a::1::1-5, batch-a::1::1-6",
                 }
                 for index in range(40)
             ]
@@ -407,15 +488,21 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         compressed = query_estimate_llm.compressed_candidates_for_llm(candidates, 30)
 
         self.assertEqual(len(compressed), 30)
-        self.assertEqual(compressed.iloc[0]["evidence_refs_sample"], ["E0", "E1", "E2", "E3", "E4"])
-        self.assertNotIn("evidence_refs", compressed.columns)
+        self.assertEqual(
+            compressed.iloc[0]["source_refs_sample"],
+            ["batch-a::1::1-1", "batch-a::1::1-2", "batch-a::1::1-3", "batch-a::1::1-4", "batch-a::1::1-5"],
+        )
+        self.assertNotIn("source_refs", compressed.columns)
 
     def test_suggested_bill_success_and_fallback_columns(self):
         result = {
             "suggested_bill": [
                 {
                     "seq": 1,
+                    "candidate_id": "C001",
                     "recommend_type": "直接匹配项",
+                    "item_role": "核心施工项",
+                    "estimate_method": "按面积线性估算",
                     "cost_item_name": "屋面卷材防水",
                     "project_description": "3mm SBS",
                     "unit": "m²",
@@ -423,26 +510,33 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "unit_price_low": 80,
                     "labor_unit_price_mid": 20,
                     "estimated_labor_amount_mid": 10000,
-                    "evidence_refs": ["E0"],
+                    "source_refs": ["SHOULD_IGNORE"],
                 }
             ]
         }
+        warnings: list[str] = []
 
-        bill = query_estimate_llm.suggested_bill_from_llm_result(result)
+        bill = query_estimate_llm.suggested_bill_from_llm_result(result, warnings)
 
         self.assertEqual(bill.columns.tolist(), query_estimate_llm.SUGGESTED_BILL_COLUMNS)
-        self.assertEqual(bill.loc[0, "人工单价中值"], 20)
-        self.assertEqual(bill.loc[0, "估算人工费中值"], 10000)
+        self.assertEqual(bill.loc[0, "candidate_id"], "C001")
+        self.assertEqual(bill.loc[0, "项目角色"], "核心施工项")
+        self.assertEqual(bill.loc[0, "其中包含人工费单价中位数"], 20)
+        self.assertEqual(bill.loc[0, "估算人工费中位数"], 10000)
+        self.assertEqual(bill.loc[0, "来源样本"], "")
+        self.assertIn("llm_source_fields_ignored", warnings)
 
         fallback = query_estimate_llm.fallback_suggested_bill(
             pd.DataFrame(
                 [
                     {
+                        "candidate_id": "C001",
                         "cost_item_name": "屋面卷材防水",
                         "project_description": "3mm SBS",
                         "unit": "m²",
+                        "unit_normalized": "m²",
                         "历史人工单价中位数": 20,
-                        "evidence_refs": "E0",
+                        "source_refs": "batch-a::2::2-1",
                     }
                 ]
             )
@@ -450,23 +544,89 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(fallback.loc[0, "推荐类型"], "fallback_candidate")
         self.assertIn("不代表最终建议清单", fallback.loc[0, "采用理由"])
         self.assertEqual(fallback.loc[0, "不确定性说明"], "需修复 LLM 上下文或降低候选规模后重新生成")
+        self.assertEqual(fallback.loc[0, "来源样本"], "batch-a::2::2-1")
 
-    def test_write_query_result_workbook_has_new_six_sheets(self):
-        rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], True)
+    def test_postprocess_overrides_prices_amounts_and_marks_adoption(self):
+        stats = pd.DataFrame(
+            [
+                {
+                    "candidate_id": "C001",
+                    "fine_signature": "sig",
+                    "family_signature": "fam",
+                    "cost_item_name": "屋面卷材防水",
+                    "project_description": "3mm SBS",
+                    "unit": "m²",
+                    "unit_normalized": "m²",
+                    "历史样本数": 1,
+                    "来源工程包数": 1,
+                    "历史综合单价最低值": 80,
+                    "历史综合单价中位数": 90,
+                    "历史综合单价最高值": 100,
+                    "历史人工单价中位数": 20,
+                    "历史机械单价中位数": None,
+                    "source_refs": "batch-a::2::2-1",
+                    "是否被LLM采用": "",
+                }
+            ],
+            columns=query_estimate_llm.CANDIDATE_ITEM_STATS_COLUMNS,
+        )
+        bill = pd.DataFrame(
+            [
+                {
+                    "序号": 1,
+                    "candidate_id": "C001",
+                    "推荐类型": "直接匹配项",
+                    "项目角色": "核心施工项",
+                    "计量/估算口径": "按面积估算",
+                    "清单项名称": "屋面卷材防水",
+                    "项目特征/施工工艺": "3mm SBS",
+                    "单位": "m²",
+                    "建议工程量": 10,
+                    "工程量依据": "用户给定",
+                    "综合单价最低值": 1,
+                    "综合单价中位数": 2,
+                    "综合单价最高值": 3,
+                    "估算金额最低值": 1,
+                    "估算金额中位数": 2,
+                    "估算金额最高值": 3,
+                    "采用理由": "",
+                    "不确定性说明": "",
+                }
+            ],
+            columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS,
+        )
+        warnings: list[str] = []
+
+        processed_bill, processed_stats = query_estimate_llm.postprocess_suggested_bill(bill, stats, warnings)
+
+        self.assertEqual(processed_bill.loc[0, "综合单价最低值"], 80)
+        self.assertEqual(processed_bill.loc[0, "估算金额中位数"], 900)
+        self.assertEqual(processed_bill.loc[0, "其中包含机械费单价中位数"], "")
+        self.assertEqual(processed_bill.loc[0, "来源样本"], "batch-a::2::2-1")
+        self.assertEqual(processed_stats.loc[0, "是否被LLM采用"], "是")
+        self.assertIn("llm_unit_price_overridden_by_candidate_stats", warnings)
+        self.assertIn("llm_amount_overridden_by_program_calculation", warnings)
+
+    def test_write_query_result_workbook_has_new_seven_sheets(self):
+        rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], [], "", [], [], True)
         catalog = query_estimate_llm.QueryCatalog("CP-002-03", "屋面", "防水层", "维修", "共用部位", None, {}, True, [])
         result = query_estimate_llm.QueryResult(
             rewrite=rewrite,
             query_catalog=catalog,
+            estimate_summary=pd.DataFrame([{"字段": "原始需求", "值": "屋面"}]),
             suggested_bill=pd.DataFrame(
                 [
                     {
                         "序号": 1,
+                        "candidate_id": "C001",
                         "推荐类型": "直接匹配项",
+                        "项目角色": "核心施工项",
+                        "计量/估算口径": "按面积估算",
                         "清单项名称": "屋面卷材防水",
                         "项目特征/施工工艺": "3mm SBS",
                         "单位": "m²",
                         "建议工程量": 500,
-                        "来源证据": "E0",
+                        "来源样本": "batch-a::2::2-1",
                     }
                 ],
                 columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS,
@@ -491,7 +651,15 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             workbook = openpyxl.load_workbook(output_path, data_only=True)
             self.assertEqual(
                 workbook.sheetnames,
-                ["suggested_bill", "matched_project_packages", "candidate_item_stats", "evidence_items", "parse_info", "llm_trace"],
+                [
+                    "estimate_summary",
+                    "suggested_bill",
+                    "matched_project_packages",
+                    "candidate_item_stats",
+                    "evidence_items",
+                    "parse_info",
+                    "llm_trace",
+                ],
             )
             matched_headers = [
                 workbook["matched_project_packages"].cell(row=1, column=column).value

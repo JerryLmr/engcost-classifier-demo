@@ -203,7 +203,9 @@ index_meta.json
 
 ### 5. 自然语言造价查询
 
-示例：用户只输入口语化维修需求，系统先调用本地 LLM 生成两个 embedding query，再复用标准目录分类器选择一个主目录，之后执行 project package 召回、item row 召回、候选项统计和证据整理，最后由 LLM 生成结构化 `suggested_bill`。
+本系统不是通用联网报价工具，而是基于内部历史审价样本和相似工程包的离线估价辅助工具。LLM 的作用是识别需求、选择候选清单项、判断工程量估算口径、计算参考金额并生成解释；历史价格必须来自 `candidate_item_stats`，程序会校验并覆盖 LLM 输出中的历史单价和金额异常。
+
+运行 `query_cost_estimate_llm.py` 前需先启动 LM Studio Server 或兼容 OpenAI `chat/completions` 的本地 LLM 服务；脚本启动时会先检查 `LMSTUDIO_BASE_URL/models`，服务不可用会快速退出。
 
 ```bash
 backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
@@ -238,24 +240,47 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 
 ```text
 用户自然语言需求
-→ LLM 生成 project_package_query_text 和 item_query_text
+→ LLM 生成 ParsedQuery、project_package_query_text 和 item_query_text
 → 标准目录分类器选择一个主目录
 → package query 检索 project_package_embeddings
 → item query 检索 item_embeddings
 → 聚合 candidate_item_stats
-→ 压缩证据交给 LLM
-→ LLM 生成 suggested_bill
-→ 输出 suggested_bill、matched_project_packages、candidate_item_stats、evidence_items、parse_info、llm_trace
+→ 压缩候选统计和 item 级证据交给 LLM
+→ LLM 选择 candidate_id、判断估算口径并生成 suggested_bill
+→ 程序回填来源样本、校验并覆盖历史单价和金额异常
+→ 输出 estimate_summary、suggested_bill、matched_project_packages、candidate_item_stats、evidence_items、parse_info、llm_trace
 ```
 
 输出 xlsx 固定包含：
 
-- `suggested_bill`：LLM 生成的最终建议清单、建议工程量、估价区间和解释。
-- `matched_project_packages`：相似历史工程包摘要，用于说明参考了哪些完整历史工程。
-- `candidate_item_stats`：按 `fine_signature = cost_item_name + project_description + unit` 聚合的候选项统计。
-- `evidence_items`：历史清单明细证据，保留 `project_description`、工程量、单价、合价和召回分数。
-- `parse_info`：query texts、标准目录分类结果、运行参数、索引信息、LLM 成功/fallback 状态和主要文件路径。
-- `llm_trace`：记录 `query_rewrite_for_embedding`、`query_catalog_classification`、`suggested_bill_generation` 三步的成功状态、错误和 prompt 长度。
+- `estimate_summary`：面向用户/领导的估价摘要，展示原始需求、ParsedQuery、核心分类、估算金额区间、核心项目、共现措施项、未计入或需现场确认项目、主要不确定因素和来源说明。
+- `suggested_bill`：估价主表，展示最终采用的推荐清单项、项目角色、计量/估算口径、建议工程量、历史综合单价最低值/中位数/最高值、人工费和机械费单价区间、估算金额区间、金额计算说明、采用理由、不确定性说明和来源样本。历史价格由程序从 `candidate_item_stats` 回填。
+- `matched_project_packages`：相似历史工程包摘要，包括 `package_score`、`project_package_id`、工程名称、`project_name_text`、`cost_item_names_summary`、`consultation_time`、`location`、`cache_subject` 和 `item_count`。
+- `candidate_item_stats`：按 `fine_signature = cost_item_name + project_description + unit` 聚合的候选清单项统计，提供历史价格统计、历史工程量统计、工程包共现信息、`candidate_id`、`source_refs` 和是否被采用。
+- `evidence_items`：来源样本明细，保存本次查询进入候选池的历史清单行。`source_ref = project_key + "::" + item_row_id`，可用于回查 `samples/cost_item_samples_all.xlsx` / `samples.parquet`。
+- `parse_info`：本次查询解析结果和检索参数，包括原始需求、ParsedQuery、分类结果、样本数、工程包数、候选数、索引目录、输出路径、`max_packages_per_cache_subject` 和 warnings。
+- `llm_trace`：记录结构化解析、推荐生成等步骤是否成功、prompt 长度、估算 token 数、输入摘要和 warnings。
+
+来源样本统一使用：
+
+```text
+source_ref = project_key + "::" + item_row_id
+```
+
+示例：
+
+```text
+20260630_001::27::27-1
+```
+
+回查时在 `samples/cost_item_samples_all.xlsx` 的 `samples` sheet 中筛选：
+
+```text
+project_key == "20260630_001::27"
+item_row_id == "27-1"
+```
+
+查询输出不再使用临时证据编号。
 
 ### 6. 日常流程
 

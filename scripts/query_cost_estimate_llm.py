@@ -20,7 +20,7 @@ BACKEND_DIR = ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from classifier.llm_client import LLMServiceError, request_llm_json  # noqa: E402
+from classifier.llm_client import LLMServiceError, check_lmstudio_service, request_llm_json  # noqa: E402
 from services.standard_classifier import classify_project_standard  # noqa: E402
 
 
@@ -38,39 +38,46 @@ MATCHED_PROJECT_PACKAGE_COLUMNS = [
 ]
 
 CANDIDATE_ITEM_STATS_COLUMNS = [
+    "candidate_id",
     "fine_signature",
     "family_signature",
     "cost_item_name",
     "project_description",
     "unit",
+    "unit_normalized",
     "历史样本数",
     "来源工程包数",
-    "历史工程量最小值",
+    "历史工程量最低值",
     "历史工程量中位数",
-    "历史工程量最大值",
-    "历史综合单价最小值",
+    "历史工程量最高值",
+    "历史综合单价最低值",
     "历史综合单价中位数",
-    "历史综合单价最大值",
-    "历史合价最小值",
+    "历史综合单价最高值",
+    "历史合价最低值",
     "历史合价中位数",
-    "历史合价最大值",
-    "历史人工单价最小值",
+    "历史合价最高值",
+    "历史人工单价最低值",
     "历史人工单价中位数",
-    "历史人工单价最大值",
-    "历史机械单价最小值",
+    "历史人工单价最高值",
+    "历史机械单价最低值",
     "历史机械单价中位数",
-    "历史机械单价最大值",
+    "历史机械单价最高值",
     "package_score最大值",
     "item_score最大值",
     "cooccur_score",
     "catalog_score",
     "final_score",
     "是否被LLM采用",
-    "evidence_refs",
+    "source_refs",
 ]
 
 EVIDENCE_ITEM_COLUMNS = [
-    "evidence_ref",
+    "source_ref",
+    "project_key",
+    "item_row_id",
+    "stable_sample_id",
+    "batch_id",
+    "source_row_id",
     "来源工程名称",
     "project_package_id",
     "consultation_time",
@@ -83,6 +90,7 @@ EVIDENCE_ITEM_COLUMNS = [
     "cost_item_name",
     "project_description",
     "unit",
+    "unit_normalized",
     "quantity",
     "unit_price",
     "total_price",
@@ -98,33 +106,42 @@ EVIDENCE_ITEM_COLUMNS = [
 
 SUGGESTED_BILL_COLUMNS = [
     "序号",
+    "candidate_id",
     "推荐类型",
+    "项目角色",
+    "计量/估算口径",
     "清单项名称",
     "项目特征/施工工艺",
     "单位",
     "建议工程量",
     "工程量依据",
-    "综合单价低值",
-    "综合单价中值",
-    "综合单价高值",
-    "人工单价低值",
-    "人工单价中值",
-    "人工单价高值",
-    "机械单价低值",
-    "机械单价中值",
-    "机械单价高值",
-    "估算金额低值",
-    "估算金额中值",
-    "估算金额高值",
-    "估算人工费低值",
-    "估算人工费中值",
-    "估算人工费高值",
-    "估算机械费低值",
-    "估算机械费中值",
-    "估算机械费高值",
+    "综合单价最低值",
+    "综合单价中位数",
+    "综合单价最高值",
+    "其中包含人工费单价最低值",
+    "其中包含人工费单价中位数",
+    "其中包含人工费单价最高值",
+    "其中包含机械费单价最低值",
+    "其中包含机械费单价中位数",
+    "其中包含机械费单价最高值",
+    "估算金额最低值",
+    "估算金额中位数",
+    "估算金额最高值",
+    "估算人工费最低值",
+    "估算人工费中位数",
+    "估算人工费最高值",
+    "估算机械费最低值",
+    "估算机械费中位数",
+    "估算机械费最高值",
+    "金额计算说明",
     "采用理由",
     "不确定性说明",
-    "来源证据",
+    "来源样本",
+]
+
+ESTIMATE_SUMMARY_COLUMNS = [
+    "字段",
+    "值",
 ]
 
 LLM_TRACE_COLUMNS = [
@@ -144,6 +161,10 @@ class QueryRewrite:
     raw_query: str
     project_package_query_text: str
     item_query_text: str
+    parsed_quantities: list[dict[str, Any]]
+    materials_or_specs: list[str]
+    repair_object: str
+    uncertainties: list[str]
     notes: list[str]
     success: bool
 
@@ -165,6 +186,7 @@ class QueryCatalog:
 class QueryResult:
     rewrite: QueryRewrite
     query_catalog: QueryCatalog
+    estimate_summary: pd.DataFrame
     suggested_bill: pd.DataFrame
     matched_project_packages: pd.DataFrame
     candidate_item_stats: pd.DataFrame
@@ -183,6 +205,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite", action="store_true", help="若输出文件已存在则覆盖")
     parser.add_argument("--include-debug-text", action="store_true", help="在 parse_info 中保留 LLM 调试文本摘要")
     parser.add_argument("--display", action="store_true", help="输出时将部分数值格式化为易读文本")
+    parser.add_argument(
+        "--llm-check-timeout",
+        type=float,
+        default=3.0,
+        help="启动前检查 LLM 服务可用性的超时时间，默认 3 秒",
+    )
     parser.add_argument(
         "--max-packages-per-cache-subject",
         type=int,
@@ -227,8 +255,34 @@ def normalize_dedupe_text(value: Any) -> str:
     return re.sub(r"\s+", " ", cell_text(value).lower()).strip()
 
 
+def normalize_source_row_id(value: Any) -> str:
+    text = cell_text(value)
+    if not text:
+        return ""
+    try:
+        number = float(text)
+    except ValueError:
+        return text
+    if number.is_integer():
+        return str(int(number))
+    return text
+
+
+def append_warning(warnings: list[str] | None, code: str) -> None:
+    if warnings is not None and code not in warnings:
+        warnings.append(code)
+
+
 def json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def as_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if value in (None, ""):
+        return []
+    return [value]
 
 
 def estimated_tokens(text: str) -> int:
@@ -336,14 +390,26 @@ def load_index(index_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray,
 
 def build_query_rewrite_prompt(query: str) -> str:
     return f"""
-你是维修工程 embedding query rewrite 助手。请将用户需求改写为两个严格 JSON 字段。
+你是维修工程需求解析和 embedding query rewrite 助手。请把用户原始需求解析为严格 JSON object。
 
 只能输出 JSON object，不要 Markdown，不要解释，不要建议清单，不要计算价格。
 
 输出格式：
 {{
   "project_package_query_text": "",
-  "item_query_text": ""
+  "item_query_text": "",
+  "parsed_quantities": [
+    {{
+      "raw_text": "500平",
+      "value": 500,
+      "unit": "m²",
+      "meaning": "屋面防水面积",
+      "confidence": 0.95
+    }}
+  ],
+  "materials_or_specs": ["3mm SBS"],
+  "repair_object": "屋面防水层",
+  "uncertainties": ["是否拆除旧防水层未知"]
 }}
 
 当前 embedding 结构：
@@ -352,16 +418,18 @@ def build_query_rewrite_prompt(query: str) -> str:
 2. item_retrieval_text 由“cost_item_name、project_description、unit_normalized”组成。
    item_query_text 用于匹配相似清单行，应贴近具体清单项名称和做法。
 3. item_query_text 必须非空。如果用户问得很粗，也输出宽泛 item query，不要留空。
+4. parsed_quantities 只解析用户原文明确或强烈暗示的工程量、面积、长度、数量等，不要为了估价编造工程量。
+5. repair_object、materials_or_specs、uncertainties 用于后续估价 LLM 判断口径，不要输出价格。
 
 示例：
 用户：屋面漏水，想做3mm SBS防水，面积大概500平
-输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修 防水层拆除 屋面卷材防水 垂直运输","item_query_text":"屋面卷材防水 3.0mm SBS防水卷材"}}
+输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修 防水层拆除 屋面卷材防水 垂直运输","item_query_text":"屋面卷材防水 3.0mm SBS防水卷材","parsed_quantities":[{{"raw_text":"500平","value":500,"unit":"m²","meaning":"屋面防水面积","confidence":0.95}}],"materials_or_specs":["3mm SBS"],"repair_object":"屋面防水层","uncertainties":["是否拆除旧防水层未知","基层状况未知"]}}
 
 用户：屋面漏水帮我估价
-输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修 防水层拆除 屋面卷材防水 垂直运输","item_query_text":"屋面防水 防水层维修"}}
+输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修 防水层拆除 屋面卷材防水 垂直运输","item_query_text":"屋面防水 防水层维修","parsed_quantities":[],"materials_or_specs":[],"repair_object":"屋面防水层","uncertainties":["维修面积未知","是否拆除旧防水层未知","基层状况未知"]}}
 
 用户：地下室渗水维修
-输出：{{"project_package_query_text":"地下室渗水维修工程 地下室防水维修 防水层维修 墙面修复 地面修复","item_query_text":"地下室防水 渗水维修 防水层维修"}}
+输出：{{"project_package_query_text":"地下室渗水维修工程 地下室防水维修 防水层维修 墙面修复 地面修复","item_query_text":"地下室防水 渗水维修 防水层维修","parsed_quantities":[],"materials_or_specs":[],"repair_object":"地下室防水层","uncertainties":["渗水范围未知","基层状况未知"]}}
 
 用户需求：{query}
 """.strip()
@@ -372,6 +440,10 @@ def fallback_query_rewrite(query: str, note: str) -> QueryRewrite:
         raw_query=query,
         project_package_query_text=query,
         item_query_text=query,
+        parsed_quantities=[],
+        materials_or_specs=[],
+        repair_object="",
+        uncertainties=[],
         notes=[note],
         success=False,
     )
@@ -411,6 +483,10 @@ def query_rewrite_for_embedding(query: str) -> tuple[QueryRewrite, dict[str, Any
         raw_query=query,
         project_package_query_text=package_text,
         item_query_text=item_text,
+        parsed_quantities=[item for item in as_list(result.get("parsed_quantities")) if isinstance(item, dict)],
+        materials_or_specs=[cell_text(item) for item in as_list(result.get("materials_or_specs")) if cell_text(item)],
+        repair_object=cell_text(result.get("repair_object")),
+        uncertainties=[cell_text(item) for item in as_list(result.get("uncertainties")) if cell_text(item)],
         notes=notes,
         success=True,
     )
@@ -590,6 +666,40 @@ def unit_score(_row: pd.Series) -> float:
     return 0.5
 
 
+def source_identity_for_row(row: pd.Series, warnings: list[str] | None = None) -> tuple[str, str, str]:
+    project_key = cell_text(row.get("project_key"))
+    if not project_key:
+        batch_id = cell_text(row.get("batch_id"))
+        source_row_id = normalize_source_row_id(row.get("source_row_id"))
+        if batch_id and source_row_id:
+            project_key = f"{batch_id}::{source_row_id}"
+            append_warning(warnings, "source_ref_recovered_from_batch_source_row")
+
+    item_row_id = cell_text(row.get("item_row_id"))
+    if not item_row_id:
+        source_row_id = normalize_source_row_id(row.get("source_row_id"))
+        seq = cell_text(row.get("seq"))
+        if source_row_id and seq:
+            item_row_id = f"{source_row_id}-{seq}"
+            append_warning(warnings, "source_ref_recovered_from_source_row_seq")
+
+    source_ref = f"{project_key}::{item_row_id}" if project_key and item_row_id else ""
+    if not source_ref:
+        append_warning(warnings, "source_ref_missing")
+    return project_key, item_row_id, source_ref
+
+
+def attach_source_refs(rows: pd.DataFrame, warnings: list[str] | None = None) -> pd.DataFrame:
+    if rows.empty:
+        return rows
+    output = rows.copy()
+    identities = output.apply(lambda row: source_identity_for_row(row, warnings), axis=1)
+    output["project_key"] = [item[0] for item in identities]
+    output["item_row_id"] = [item[1] for item in identities]
+    output["source_ref"] = [item[2] for item in identities]
+    return output
+
+
 def matched_package_maps(matched_project_packages: pd.DataFrame) -> tuple[dict[str, float], dict[str, int]]:
     score_map: dict[str, float] = {}
     rank_map: dict[str, int] = {}
@@ -619,6 +729,7 @@ def candidate_pool(
     direct_item_hits: pd.DataFrame,
     item_scores: np.ndarray,
     query_catalog: QueryCatalog,
+    warnings: list[str] | None = None,
 ) -> pd.DataFrame:
     package_score_map, package_rank_map = matched_package_maps(matched_project_packages)
     matched_package_ids = list(package_score_map.keys())
@@ -654,7 +765,7 @@ def candidate_pool(
         + 0.15 * rows["catalog_score"]
         + 0.05 * rows["unit_score"]
     )
-    rows["evidence_ref"] = rows["sample_index"].map(lambda value: f"E{int(value)}")
+    rows = attach_source_refs(rows, warnings)
     sort_columns = ["final_score", "item_score", "package_score", "cooccur_score"]
     return rows.sort_values(sort_columns, ascending=[False, False, False, False]).reset_index(drop=True)
 
@@ -689,7 +800,7 @@ def first_value(group: pd.DataFrame, column: str) -> str:
     return ""
 
 
-def ordered_refs(values: pd.Series) -> str:
+def ordered_refs(values: pd.Series, limit: int = 10) -> str:
     seen: set[str] = set()
     refs: list[str] = []
     for value in values.tolist():
@@ -697,6 +808,8 @@ def ordered_refs(values: pd.Series) -> str:
         if text and text not in seen:
             refs.append(text)
             seen.add(text)
+        if len(refs) >= limit:
+            break
     return ", ".join(refs)
 
 
@@ -706,6 +819,7 @@ def build_candidate_item_stats(candidates: pd.DataFrame) -> pd.DataFrame:
 
     rows: list[dict[str, Any]] = []
     for fine_signature, group in candidates.groupby("fine_signature", sort=False, dropna=False):
+        group = group.sort_values(["final_score", "item_score", "package_score"], ascending=[False, False, False])
         quantity_min, quantity_median, quantity_max = min_median_max(group, "quantity")
         unit_price_min, unit_price_median, unit_price_max = min_median_max(group, "unit_price")
         total_price_min, total_price_median, total_price_max = min_median_max(group, "total_price")
@@ -717,36 +831,38 @@ def build_candidate_item_stats(candidates: pd.DataFrame) -> pd.DataFrame:
                 "family_signature": first_value(group, "family_signature"),
                 "cost_item_name": first_value(group, "cost_item_name"),
                 "project_description": first_value(group, "project_description"),
-                "unit": first_value(group, "unit_normalized") or first_value(group, "unit"),
+                "unit": first_value(group, "unit"),
+                "unit_normalized": first_value(group, "unit_normalized") or first_value(group, "unit"),
                 "历史样本数": int(len(group)),
                 "来源工程包数": int(group["project_package_id"].nunique()) if "project_package_id" in group.columns else 0,
-                "历史工程量最小值": quantity_min,
+                "历史工程量最低值": quantity_min,
                 "历史工程量中位数": quantity_median,
-                "历史工程量最大值": quantity_max,
-                "历史综合单价最小值": unit_price_min,
+                "历史工程量最高值": quantity_max,
+                "历史综合单价最低值": unit_price_min,
                 "历史综合单价中位数": unit_price_median,
-                "历史综合单价最大值": unit_price_max,
-                "历史合价最小值": total_price_min,
+                "历史综合单价最高值": unit_price_max,
+                "历史合价最低值": total_price_min,
                 "历史合价中位数": total_price_median,
-                "历史合价最大值": total_price_max,
-                "历史人工单价最小值": labor_min,
+                "历史合价最高值": total_price_max,
+                "历史人工单价最低值": labor_min,
                 "历史人工单价中位数": labor_median,
-                "历史人工单价最大值": labor_max,
-                "历史机械单价最小值": machinery_min,
+                "历史人工单价最高值": labor_max,
+                "历史机械单价最低值": machinery_min,
                 "历史机械单价中位数": machinery_median,
-                "历史机械单价最大值": machinery_max,
+                "历史机械单价最高值": machinery_max,
                 "package_score最大值": max_numeric_or_zero(group, "package_score"),
                 "item_score最大值": max_numeric_or_zero(group, "item_score"),
                 "cooccur_score": max_numeric_or_zero(group, "cooccur_score"),
                 "catalog_score": max_numeric_or_zero(group, "catalog_score"),
                 "final_score": max_numeric_or_zero(group, "final_score"),
-                "是否被LLM采用": "否",
-                "evidence_refs": ordered_refs(group["evidence_ref"]),
+                "是否被LLM采用": "",
+                "source_refs": ordered_refs(group.get("source_ref", pd.Series(dtype=object)), limit=10),
             }
         )
 
     output = pd.DataFrame(rows)
     output = output.sort_values(["final_score", "item_score最大值", "历史样本数"], ascending=[False, False, False])
+    output.insert(0, "candidate_id", [f"C{index:03d}" for index in range(1, len(output) + 1)])
     for column in CANDIDATE_ITEM_STATS_COLUMNS:
         if column not in output.columns:
             output[column] = None
@@ -758,7 +874,12 @@ def build_evidence_items(candidates: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=EVIDENCE_ITEM_COLUMNS)
     output = pd.DataFrame(
         {
-            "evidence_ref": candidates.get("evidence_ref", ""),
+            "source_ref": candidates.get("source_ref", ""),
+            "project_key": candidates.get("project_key", ""),
+            "item_row_id": candidates.get("item_row_id", ""),
+            "stable_sample_id": candidates.get("stable_sample_id", ""),
+            "batch_id": candidates.get("batch_id", ""),
+            "source_row_id": candidates.get("source_row_id", ""),
             "来源工程名称": candidates.get("工程名称", ""),
             "project_package_id": candidates.get("project_package_id", ""),
             "consultation_time": candidates.get("consultation_time", ""),
@@ -770,7 +891,8 @@ def build_evidence_items(candidates: pd.DataFrame) -> pd.DataFrame:
             "标准对象": candidates.get("标准对象", ""),
             "cost_item_name": candidates.get("cost_item_name", ""),
             "project_description": candidates.get("project_description", ""),
-            "unit": candidates.get("unit_normalized", candidates.get("unit", "")),
+            "unit": candidates.get("unit", ""),
+            "unit_normalized": candidates.get("unit_normalized", candidates.get("unit", "")),
             "quantity": candidates.get("quantity", ""),
             "unit_price": candidates.get("unit_price", ""),
             "total_price": candidates.get("total_price", ""),
@@ -827,28 +949,30 @@ def compressed_packages_for_llm(frame: pd.DataFrame, limit: int) -> pd.DataFrame
 
 def compressed_candidates_for_llm(frame: pd.DataFrame, limit: int) -> pd.DataFrame:
     columns = [
+        "candidate_id",
         "fine_signature",
         "family_signature",
         "cost_item_name",
         "project_description",
         "unit",
+        "unit_normalized",
         "历史样本数",
         "来源工程包数",
-        "历史工程量最小值",
+        "历史工程量最低值",
         "历史工程量中位数",
-        "历史工程量最大值",
-        "历史综合单价最小值",
+        "历史工程量最高值",
+        "历史综合单价最低值",
         "历史综合单价中位数",
-        "历史综合单价最大值",
-        "历史合价最小值",
+        "历史综合单价最高值",
+        "历史合价最低值",
         "历史合价中位数",
-        "历史合价最大值",
-        "历史人工单价最小值",
+        "历史合价最高值",
+        "历史人工单价最低值",
         "历史人工单价中位数",
-        "历史人工单价最大值",
-        "历史机械单价最小值",
+        "历史人工单价最高值",
+        "历史机械单价最低值",
         "历史机械单价中位数",
-        "历史机械单价最大值",
+        "历史机械单价最高值",
         "package_score最大值",
         "item_score最大值",
         "cooccur_score",
@@ -859,8 +983,8 @@ def compressed_candidates_for_llm(frame: pd.DataFrame, limit: int) -> pd.DataFra
     for column in columns:
         if column not in rows.columns:
             rows[column] = None
-    rows["evidence_refs_sample"] = rows.get("evidence_refs", pd.Series(dtype=object)).map(lambda value: split_refs(value, 5))
-    return rows[[*columns, "evidence_refs_sample"]]
+    rows["source_refs_sample"] = rows.get("source_refs", pd.Series(dtype=object)).map(lambda value: split_refs(value, 5))
+    return rows[[*columns, "source_refs_sample"]]
 
 
 def selected_evidence_for_llm(
@@ -871,11 +995,13 @@ def selected_evidence_for_llm(
 ) -> pd.DataFrame:
     if evidence_items.empty or compressed_candidates.empty:
         return pd.DataFrame(columns=[
-            "evidence_ref",
+            "source_ref",
             "来源工程名称",
+            "project_package_id",
             "cost_item_name",
             "project_description",
             "unit",
+            "unit_normalized",
             "quantity",
             "unit_price",
             "total_price",
@@ -886,7 +1012,7 @@ def selected_evidence_for_llm(
             "item_score",
         ])
     refs: list[str] = []
-    for value in compressed_candidates["evidence_refs_sample"].tolist():
+    for value in compressed_candidates["source_refs_sample"].tolist():
         for ref in split_refs(value, per_candidate_limit):
             if ref not in refs:
                 refs.append(ref)
@@ -895,11 +1021,13 @@ def selected_evidence_for_llm(
         if len(refs) >= total_limit:
             break
     columns = [
-        "evidence_ref",
+        "source_ref",
         "来源工程名称",
+        "project_package_id",
         "cost_item_name",
         "project_description",
         "unit",
+        "unit_normalized",
         "quantity",
         "unit_price",
         "total_price",
@@ -909,9 +1037,9 @@ def selected_evidence_for_llm(
         "package_score",
         "item_score",
     ]
-    rows = evidence_items[evidence_items["evidence_ref"].isin(refs)].copy()
+    rows = evidence_items[evidence_items["source_ref"].isin(refs)].copy()
     order = {ref: index for index, ref in enumerate(refs)}
-    rows["_order"] = rows["evidence_ref"].map(order)
+    rows["_order"] = rows["source_ref"].map(order)
     rows = rows.sort_values("_order").drop(columns=["_order"])
     for column in columns:
         if column not in rows.columns:
@@ -938,6 +1066,14 @@ def build_suggested_bill_prompt(
             "project_package_query_text": rewrite.project_package_query_text,
             "item_query_text": rewrite.item_query_text,
         },
+        "ParsedQuery": {
+            "project_package_query_text": rewrite.project_package_query_text,
+            "item_query_text": rewrite.item_query_text,
+            "parsed_quantities": rewrite.parsed_quantities,
+            "materials_or_specs": rewrite.materials_or_specs,
+            "repair_object": rewrite.repair_object,
+            "uncertainties": rewrite.uncertainties,
+        },
         "query_catalog": {
             "catalog_id": query_catalog.catalog_id,
             "一级分类": query_catalog.一级分类,
@@ -951,7 +1087,7 @@ def build_suggested_bill_prompt(
         "evidence_items": replace_nan_records(compressed_evidence),
     }
     return f"""
-你是维修工程造价建议清单生成器。请基于相似历史工程包、候选项统计和历史明细证据，生成本次 suggested_bill。
+你是维修工程造价建议清单生成器。请基于用户需求、ParsedQuery、相似历史工程包、候选项统计和历史明细证据，生成本次 suggested_bill。
 
 只允许输出 JSON object，不要 Markdown，不要解释。用户需求即使较粗，也必须基于相似历史工程包和候选项给出参考 suggested_bill；不确定内容写入 uncertainty_note，不要直接放弃估价。
 
@@ -960,7 +1096,10 @@ JSON 格式：
   "suggested_bill": [
     {{
       "seq": 1,
+      "candidate_id": "C001",
       "recommend_type": "直接匹配项",
+      "item_role": "核心施工项",
+      "estimate_method": "基于用户给出的约500㎡面积，参考历史样本综合单价区间估算",
       "cost_item_name": "",
       "project_description": "",
       "unit": "",
@@ -984,20 +1123,24 @@ JSON 格式：
       "estimated_machinery_amount_low": null,
       "estimated_machinery_amount_mid": null,
       "estimated_machinery_amount_high": null,
+      "amount_calc_note": "",
       "adopt_reason": "",
-      "uncertainty_note": "",
-      "evidence_refs": []
+      "uncertainty_note": ""
     }}
   ]
 }}
 
 要求：
-- 从 candidate_item_stats 中选择本次建议清单，不要输出明显无关项。
-- 工程量、单位和估价由你结合用户需求与历史工程包/明细证据类比判断。
+- 从 candidate_item_stats 中选择本次建议清单，必须填写对应 candidate_id，不要输出明显无关项。
+- LLM 可以判断工程量、单位、估价口径和金额计算方式，但历史综合单价、人工单价、机械单价必须来自对应 candidate_id 的 candidate_item_stats。
+- 不要输出 source_ref、source_refs、evidence_ref、evidence_refs、stable_sample_id、project_key、item_key 或任何来源编号。
 - 人工/机械单价或金额没有证据时保留 null，不要填 0。
-- 不确定时也尽量给参考估计，并在 uncertainty_note 标注“需人工确认”及原因。
-- recommend_type 只能是：直接匹配项、工程包共现项、补充候选项。
-- evidence_refs 必须引用 evidence_items 中的 evidence_ref。
+- recommend_type 建议使用：直接匹配项、常见前置项、工程包共现措施项、补充候选项、可选/待确认项。
+- item_role 建议使用：核心施工项、常见前置项、工程包共现措施项、补充候选项、可选/待确认项。
+- 用户明确给了工程量时，可以作为重要依据，但仍需结合候选项单位和项目语义。
+- 防水层拆除是否发生取决于现场旧防水层状况；垂直运输、措施项、项/台/部/套/幢/次/台班等不应机械按面积线性放大。
+- 如果楼栋数、设备数量、运输高度、基层状况、节点复杂度未知，要在 uncertainty_note 中指出。
+- 如果无法可靠估算工程量，可以给历史价格参考但金额为空，或给保守范围并说明原因。
 
 输入数据：
 {json_text(payload)}
@@ -1067,46 +1210,62 @@ def bill_value(item: dict[str, Any], english_key: str, chinese_key: str = "") ->
     return ""
 
 
-def suggested_bill_from_llm_result(result: dict[str, Any]) -> pd.DataFrame:
+def suggested_bill_from_llm_result(result: dict[str, Any], warnings: list[str] | None = None) -> pd.DataFrame:
     bill = result.get("suggested_bill")
     if not isinstance(bill, list):
         raise ValueError("LLM 输出缺少 suggested_bill list")
 
+    forbidden_source_keys = {
+        "source_ref",
+        "source_refs",
+        "evidence_ref",
+        "evidence_refs",
+        "stable_sample_id",
+        "project_key",
+        "item_key",
+        "来源样本",
+        "来源证据",
+    }
     rows: list[dict[str, Any]] = []
     for index, item in enumerate(bill, start=1):
         if not isinstance(item, dict):
             continue
-        refs = split_refs(bill_value(item, "evidence_refs", "来源证据"))
+        if forbidden_source_keys & set(item.keys()):
+            append_warning(warnings, "llm_source_fields_ignored")
         rows.append(
             {
                 "序号": bill_value(item, "seq", "序号") or index,
+                "candidate_id": bill_value(item, "candidate_id", "candidate_id"),
                 "推荐类型": bill_value(item, "recommend_type", "推荐类型"),
+                "项目角色": bill_value(item, "item_role", "项目角色"),
+                "计量/估算口径": bill_value(item, "estimate_method", "计量/估算口径"),
                 "清单项名称": bill_value(item, "cost_item_name", "清单项名称"),
                 "项目特征/施工工艺": bill_value(item, "project_description", "项目特征/施工工艺"),
                 "单位": bill_value(item, "unit", "单位"),
                 "建议工程量": bill_value(item, "suggested_quantity", "建议工程量"),
                 "工程量依据": bill_value(item, "quantity_basis", "工程量依据"),
-                "综合单价低值": bill_value(item, "unit_price_low", "综合单价低值"),
-                "综合单价中值": bill_value(item, "unit_price_mid", "综合单价中值"),
-                "综合单价高值": bill_value(item, "unit_price_high", "综合单价高值"),
-                "人工单价低值": bill_value(item, "labor_unit_price_low", "人工单价低值"),
-                "人工单价中值": bill_value(item, "labor_unit_price_mid", "人工单价中值"),
-                "人工单价高值": bill_value(item, "labor_unit_price_high", "人工单价高值"),
-                "机械单价低值": bill_value(item, "machinery_unit_price_low", "机械单价低值"),
-                "机械单价中值": bill_value(item, "machinery_unit_price_mid", "机械单价中值"),
-                "机械单价高值": bill_value(item, "machinery_unit_price_high", "机械单价高值"),
-                "估算金额低值": bill_value(item, "estimated_amount_low", "估算金额低值"),
-                "估算金额中值": bill_value(item, "estimated_amount_mid", "估算金额中值"),
-                "估算金额高值": bill_value(item, "estimated_amount_high", "估算金额高值"),
-                "估算人工费低值": bill_value(item, "estimated_labor_amount_low", "估算人工费低值"),
-                "估算人工费中值": bill_value(item, "estimated_labor_amount_mid", "估算人工费中值"),
-                "估算人工费高值": bill_value(item, "estimated_labor_amount_high", "估算人工费高值"),
-                "估算机械费低值": bill_value(item, "estimated_machinery_amount_low", "估算机械费低值"),
-                "估算机械费中值": bill_value(item, "estimated_machinery_amount_mid", "估算机械费中值"),
-                "估算机械费高值": bill_value(item, "estimated_machinery_amount_high", "估算机械费高值"),
+                "综合单价最低值": bill_value(item, "unit_price_low", "综合单价最低值"),
+                "综合单价中位数": bill_value(item, "unit_price_mid", "综合单价中位数"),
+                "综合单价最高值": bill_value(item, "unit_price_high", "综合单价最高值"),
+                "其中包含人工费单价最低值": bill_value(item, "labor_unit_price_low", "其中包含人工费单价最低值"),
+                "其中包含人工费单价中位数": bill_value(item, "labor_unit_price_mid", "其中包含人工费单价中位数"),
+                "其中包含人工费单价最高值": bill_value(item, "labor_unit_price_high", "其中包含人工费单价最高值"),
+                "其中包含机械费单价最低值": bill_value(item, "machinery_unit_price_low", "其中包含机械费单价最低值"),
+                "其中包含机械费单价中位数": bill_value(item, "machinery_unit_price_mid", "其中包含机械费单价中位数"),
+                "其中包含机械费单价最高值": bill_value(item, "machinery_unit_price_high", "其中包含机械费单价最高值"),
+                "估算金额最低值": bill_value(item, "estimated_amount_low", "估算金额最低值"),
+                "估算金额中位数": bill_value(item, "estimated_amount_mid", "估算金额中位数"),
+                "估算金额最高值": bill_value(item, "estimated_amount_high", "估算金额最高值"),
+                "估算人工费最低值": bill_value(item, "estimated_labor_amount_low", "估算人工费最低值"),
+                "估算人工费中位数": bill_value(item, "estimated_labor_amount_mid", "估算人工费中位数"),
+                "估算人工费最高值": bill_value(item, "estimated_labor_amount_high", "估算人工费最高值"),
+                "估算机械费最低值": bill_value(item, "estimated_machinery_amount_low", "估算机械费最低值"),
+                "估算机械费中位数": bill_value(item, "estimated_machinery_amount_mid", "估算机械费中位数"),
+                "估算机械费最高值": bill_value(item, "estimated_machinery_amount_high", "估算机械费最高值"),
+                "金额计算说明": bill_value(item, "amount_calc_note", "金额计算说明"),
                 "采用理由": bill_value(item, "adopt_reason", "采用理由"),
                 "不确定性说明": bill_value(item, "uncertainty_note", "不确定性说明"),
-                "来源证据": ", ".join(refs),
+                "来源样本": "",
             }
         )
     if not rows:
@@ -1120,55 +1279,177 @@ def fallback_suggested_bill(candidate_item_stats: pd.DataFrame, limit: int = 20)
         rows.append(
             {
                 "序号": len(rows) + 1,
+                "candidate_id": row.get("candidate_id", ""),
                 "推荐类型": "fallback_candidate",
+                "项目角色": "补充候选项",
+                "计量/估算口径": "LLM suggested_bill 生成失败，未判断估算口径",
                 "清单项名称": row.get("cost_item_name", ""),
                 "项目特征/施工工艺": row.get("project_description", ""),
-                "单位": row.get("unit", ""),
+                "单位": row.get("unit_normalized", "") or row.get("unit", ""),
                 "建议工程量": "",
                 "工程量依据": "LLM suggested_bill 生成失败，未生成建议工程量",
-                "综合单价低值": row.get("历史综合单价最小值"),
-                "综合单价中值": row.get("历史综合单价中位数"),
-                "综合单价高值": row.get("历史综合单价最大值"),
-                "人工单价低值": row.get("历史人工单价最小值"),
-                "人工单价中值": row.get("历史人工单价中位数"),
-                "人工单价高值": row.get("历史人工单价最大值"),
-                "机械单价低值": row.get("历史机械单价最小值"),
-                "机械单价中值": row.get("历史机械单价中位数"),
-                "机械单价高值": row.get("历史机械单价最大值"),
-                "估算金额低值": row.get("历史合价最小值"),
-                "估算金额中值": row.get("历史合价中位数"),
-                "估算金额高值": row.get("历史合价最大值"),
-                "估算人工费低值": "",
-                "估算人工费中值": "",
-                "估算人工费高值": "",
-                "估算机械费低值": "",
-                "估算机械费中值": "",
-                "估算机械费高值": "",
+                "综合单价最低值": row.get("历史综合单价最低值"),
+                "综合单价中位数": row.get("历史综合单价中位数"),
+                "综合单价最高值": row.get("历史综合单价最高值"),
+                "其中包含人工费单价最低值": row.get("历史人工单价最低值"),
+                "其中包含人工费单价中位数": row.get("历史人工单价中位数"),
+                "其中包含人工费单价最高值": row.get("历史人工单价最高值"),
+                "其中包含机械费单价最低值": row.get("历史机械单价最低值"),
+                "其中包含机械费单价中位数": row.get("历史机械单价中位数"),
+                "其中包含机械费单价最高值": row.get("历史机械单价最高值"),
+                "估算金额最低值": "",
+                "估算金额中位数": "",
+                "估算金额最高值": "",
+                "估算人工费最低值": "",
+                "估算人工费中位数": "",
+                "估算人工费最高值": "",
+                "估算机械费最低值": "",
+                "估算机械费中位数": "",
+                "估算机械费最高值": "",
+                "金额计算说明": "缺少 LLM 判断工程量，未计算估算金额",
                 "采用理由": "LLM suggested_bill 生成失败，本行仅为候选项统计结果，不代表最终建议清单",
                 "不确定性说明": "需修复 LLM 上下文或降低候选规模后重新生成",
-                "来源证据": row.get("evidence_refs", ""),
+                "来源样本": row.get("source_refs", ""),
             }
         )
     return pd.DataFrame(rows, columns=SUGGESTED_BILL_COLUMNS)
 
 
-def mark_adopted_candidates(candidate_item_stats: pd.DataFrame, suggested_bill: pd.DataFrame) -> pd.DataFrame:
-    output = candidate_item_stats.copy()
-    if output.empty or suggested_bill.empty:
-        return output
-    adopted_refs: set[str] = set()
-    for value in suggested_bill["来源证据"].tolist():
-        adopted_refs.update(split_refs(value))
+def numeric_or_none(value: Any) -> float | None:
+    if value is None or cell_text(value) == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(number):
+        return None
+    return number
 
-    if not adopted_refs:
-        return output
 
-    def adopted(row: pd.Series) -> str:
-        refs = set(split_refs(row.get("evidence_refs")))
-        return "是" if refs & adopted_refs else "否"
+def numbers_close(left: Any, right: Any, tolerance: float = 1.0) -> bool:
+    left_number = numeric_or_none(left)
+    right_number = numeric_or_none(right)
+    if left_number is None or right_number is None:
+        return left_number is None and right_number is None
+    return abs(left_number - right_number) <= max(tolerance, abs(right_number) * 0.01)
 
-    output["是否被LLM采用"] = output.apply(adopted, axis=1)
-    return output
+
+def strict_candidate_match(candidate_item_stats: pd.DataFrame, row: pd.Series) -> pd.Series | None:
+    if candidate_item_stats.empty:
+        return None
+    mask = (
+        candidate_item_stats["cost_item_name"].map(cell_text).eq(cell_text(row.get("清单项名称")))
+        & candidate_item_stats["project_description"].map(cell_text).eq(cell_text(row.get("项目特征/施工工艺")))
+        & (
+            candidate_item_stats["unit"].map(cell_text).eq(cell_text(row.get("单位")))
+            | candidate_item_stats["unit_normalized"].map(cell_text).eq(cell_text(row.get("单位")))
+        )
+    )
+    matches = candidate_item_stats[mask]
+    if len(matches) == 1:
+        return matches.iloc[0]
+    return None
+
+
+def calc_amount(quantity: Any, unit_price: Any) -> float | None:
+    quantity_number = numeric_or_none(quantity)
+    price_number = numeric_or_none(unit_price)
+    if quantity_number is None or price_number is None:
+        return None
+    return round(quantity_number * price_number, 2)
+
+
+def postprocess_suggested_bill(
+    suggested_bill: pd.DataFrame,
+    candidate_item_stats: pd.DataFrame,
+    warnings: list[str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    output = suggested_bill.copy().astype("object")
+    stats = candidate_item_stats.copy().astype("object")
+    if stats.empty:
+        return output, stats
+    stats["是否被LLM采用"] = ""
+    candidate_map = {cell_text(row.get("candidate_id")): row for _index, row in stats.iterrows()}
+    adoption: dict[str, str] = {}
+
+    price_pairs = [
+        ("综合单价最低值", "历史综合单价最低值"),
+        ("综合单价中位数", "历史综合单价中位数"),
+        ("综合单价最高值", "历史综合单价最高值"),
+        ("其中包含人工费单价最低值", "历史人工单价最低值"),
+        ("其中包含人工费单价中位数", "历史人工单价中位数"),
+        ("其中包含人工费单价最高值", "历史人工单价最高值"),
+        ("其中包含机械费单价最低值", "历史机械单价最低值"),
+        ("其中包含机械费单价中位数", "历史机械单价中位数"),
+        ("其中包含机械费单价最高值", "历史机械单价最高值"),
+    ]
+    amount_pairs = [
+        ("估算金额最低值", "综合单价最低值"),
+        ("估算金额中位数", "综合单价中位数"),
+        ("估算金额最高值", "综合单价最高值"),
+        ("估算人工费最低值", "其中包含人工费单价最低值"),
+        ("估算人工费中位数", "其中包含人工费单价中位数"),
+        ("估算人工费最高值", "其中包含人工费单价最高值"),
+        ("估算机械费最低值", "其中包含机械费单价最低值"),
+        ("估算机械费中位数", "其中包含机械费单价中位数"),
+        ("估算机械费最高值", "其中包含机械费单价最高值"),
+    ]
+
+    for index, row in output.iterrows():
+        candidate_id = cell_text(row.get("candidate_id"))
+        candidate = candidate_map.get(candidate_id)
+        match_status = "是"
+        if candidate is None:
+            candidate = strict_candidate_match(stats, row)
+            if candidate is not None:
+                append_warning(warnings, "candidate_id_missing_strict_matched")
+                candidate_id = cell_text(candidate.get("candidate_id"))
+                output.at[index, "candidate_id"] = candidate_id
+                match_status = "是（退化匹配）"
+            else:
+                append_warning(warnings, "candidate_id_missing_or_ambiguous")
+                for final_column, _stats_column in price_pairs:
+                    output.at[index, final_column] = ""
+                for amount_column, _price_column in amount_pairs:
+                    output.at[index, amount_column] = ""
+                output.at[index, "来源样本"] = ""
+                continue
+
+        if candidate_id in adoption and adoption[candidate_id] != match_status:
+            adoption[candidate_id] = "匹配冲突"
+            append_warning(warnings, "candidate_id_missing_or_ambiguous")
+        else:
+            adoption[candidate_id] = match_status
+
+        for final_column, stats_column in price_pairs:
+            candidate_value = candidate.get(stats_column)
+            if numeric_or_none(candidate_value) is None:
+                if cell_text(output.at[index, final_column]):
+                    append_warning(warnings, "empty_price_field_kept_empty")
+                output.at[index, final_column] = ""
+                continue
+            if not numbers_close(output.at[index, final_column], candidate_value):
+                append_warning(warnings, "llm_unit_price_overridden_by_candidate_stats")
+            output.at[index, final_column] = candidate_value
+
+        output.at[index, "来源样本"] = ", ".join(split_refs(candidate.get("source_refs"), 10))
+
+        for amount_column, price_column in amount_pairs:
+            calculated = calc_amount(output.at[index, "建议工程量"], output.at[index, price_column])
+            if calculated is None:
+                if cell_text(output.at[index, amount_column]):
+                    append_warning(warnings, "empty_price_field_kept_empty")
+                output.at[index, amount_column] = ""
+                continue
+            if not numbers_close(output.at[index, amount_column], calculated):
+                append_warning(warnings, "llm_amount_overridden_by_program_calculation")
+                output.at[index, amount_column] = calculated
+
+    for index, row in stats.iterrows():
+        candidate_id = cell_text(row.get("candidate_id"))
+        stats.at[index, "是否被LLM采用"] = adoption.get(candidate_id, "")
+    return output[SUGGESTED_BILL_COLUMNS], stats[CANDIDATE_ITEM_STATS_COLUMNS]
 
 
 def generate_suggested_bill(
@@ -1177,6 +1458,7 @@ def generate_suggested_bill(
     matched_project_packages: pd.DataFrame,
     candidate_item_stats: pd.DataFrame,
     evidence_items: pd.DataFrame,
+    warnings: list[str] | None = None,
 ) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any]]:
     prompt = guarded_suggested_bill_prompt(
         rewrite,
@@ -1192,7 +1474,7 @@ def generate_suggested_bill(
             max_tokens=max_tokens,
             system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
         )
-        suggested_bill = suggested_bill_from_llm_result(result)
+        suggested_bill = suggested_bill_from_llm_result(result, warnings)
         trace = trace_row(
             "suggested_bill_generation",
             "基于压缩证据生成 suggested_bill",
@@ -1239,6 +1521,82 @@ def query_catalog_dict(query_catalog: QueryCatalog) -> dict[str, Any]:
     }
 
 
+def parsed_query_dict(rewrite: QueryRewrite) -> dict[str, Any]:
+    return {
+        "project_package_query_text": rewrite.project_package_query_text,
+        "item_query_text": rewrite.item_query_text,
+        "parsed_quantities": rewrite.parsed_quantities,
+        "materials_or_specs": rewrite.materials_or_specs,
+        "repair_object": rewrite.repair_object,
+        "uncertainties": rewrite.uncertainties,
+    }
+
+
+def join_non_empty(values: list[Any], limit: int | None = None) -> str:
+    texts: list[str] = []
+    for value in values:
+        text = cell_text(value)
+        if text and text not in texts:
+            texts.append(text)
+        if limit is not None and len(texts) >= limit:
+            break
+    return "；".join(texts)
+
+
+def amount_sum(frame: pd.DataFrame, column: str) -> float | None:
+    values = numeric_values(frame, column)
+    if values.empty:
+        return None
+    return round(float(values.sum()), 2)
+
+
+def build_estimate_summary(
+    rewrite: QueryRewrite,
+    query_catalog: QueryCatalog,
+    suggested_bill: pd.DataFrame,
+) -> pd.DataFrame:
+    core_rows = suggested_bill[
+        suggested_bill["项目角色"].map(cell_text).str.contains("核心", na=False)
+        | suggested_bill["推荐类型"].map(cell_text).str.contains("直接", na=False)
+    ]
+    optional_rows = suggested_bill[
+        suggested_bill["项目角色"].map(cell_text).str.contains("前置|可选|待确认", regex=True, na=False)
+        | suggested_bill["推荐类型"].map(cell_text).str.contains("前置|可选|待确认", regex=True, na=False)
+    ]
+    cooccur_rows = suggested_bill[
+        suggested_bill["项目角色"].map(cell_text).str.contains("共现|措施", regex=True, na=False)
+        | suggested_bill["推荐类型"].map(cell_text).str.contains("共现|措施", regex=True, na=False)
+    ]
+    rows = [
+        ("原始需求", rewrite.raw_query),
+        ("ParsedQuery", json_text(parsed_query_dict(rewrite))),
+        (
+            "核心分类",
+            f"{query_catalog.catalog_id} {query_catalog.一级分类}/{query_catalog.二级分类}/{query_catalog.维修状态}".strip(),
+        ),
+        ("估价口径", join_non_empty(suggested_bill["计量/估算口径"].tolist(), limit=5)),
+        ("推荐核心项目", join_non_empty(core_rows["清单项名称"].tolist(), limit=8)),
+        ("常见前置/可选项目", join_non_empty(optional_rows["清单项名称"].tolist(), limit=8)),
+        ("共现措施项", join_non_empty(cooccur_rows["清单项名称"].tolist(), limit=8)),
+        ("总估算金额最低值", amount_sum(suggested_bill, "估算金额最低值")),
+        ("总估算金额中位数", amount_sum(suggested_bill, "估算金额中位数")),
+        ("总估算金额最高值", amount_sum(suggested_bill, "估算金额最高值")),
+        (
+            "未计入或需现场确认项目",
+            join_non_empty(
+                suggested_bill[
+                    suggested_bill["估算金额中位数"].map(numeric_or_none).isna()
+                    | suggested_bill["不确定性说明"].map(cell_text).str.contains("确认|未知|不确定", regex=True, na=False)
+                ]["清单项名称"].tolist(),
+                limit=10,
+            ),
+        ),
+        ("主要不确定因素", join_non_empty([*rewrite.uncertainties, *suggested_bill["不确定性说明"].tolist()], limit=10)),
+        ("来源说明", "本结果基于内部历史审价样本和相似工程包，不是联网市场报价。"),
+    ]
+    return pd.DataFrame(rows, columns=ESTIMATE_SUMMARY_COLUMNS)
+
+
 def build_parse_info(
     rewrite: QueryRewrite,
     query_catalog: QueryCatalog,
@@ -1256,11 +1614,13 @@ def build_parse_info(
     llm_error: str,
     include_debug_text: bool,
     suggested_prompt: str,
+    warnings: list[str] | None = None,
 ) -> pd.DataFrame:
     rows = [
         ("原始用户需求", rewrite.raw_query),
         ("project_package_query_text", rewrite.project_package_query_text),
         ("item_query_text", rewrite.item_query_text),
+        ("ParsedQuery", json_text(parsed_query_dict(rewrite))),
         ("query_catalog", json_text(query_catalog_dict(query_catalog))),
         ("item_retrieval_text_fields", "cost_item_name + project_description + unit_normalized"),
         ("package_retrieval_text_fields", "工程名称 + project_name_text + cost_item_names_summary"),
@@ -1283,6 +1643,7 @@ def build_parse_info(
         ("主要文件路径", json_text((meta.get("files") or {}))),
         ("rewrite_notes", "；".join(rewrite.notes)),
         ("catalog_notes", "；".join(query_catalog.notes)),
+        ("warnings", "；".join(warnings or [])),
     ]
     if include_debug_text:
         rows.append(("suggested_bill_prompt_preview", suggested_prompt[:3000]))
@@ -1292,6 +1653,7 @@ def build_parse_info(
 def write_query_result_workbook(output_path: Path, result: QueryResult, display: bool = False) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        display_frame(result.estimate_summary, display).to_excel(writer, sheet_name="estimate_summary", index=False)
         display_frame(result.suggested_bill, display).to_excel(writer, sheet_name="suggested_bill", index=False)
         display_frame(result.matched_project_packages, display).to_excel(
             writer,
@@ -1340,6 +1702,7 @@ def run_query(
     display: bool = False,
 ) -> QueryResult:
     started_at = datetime.now()
+    warnings: list[str] = []
     samples, project_packages, project_package_embeddings, item_embeddings, meta = load_index(index_dir)
     rewrite, rewrite_trace = query_rewrite_for_embedding(raw_text)
     query_catalog, catalog_trace = classify_query_catalog(
@@ -1370,7 +1733,7 @@ def run_query(
     )
     item_scores = item_embeddings @ item_query_embedding
     direct_item_hits = score_direct_items(samples, item_scores, top_items)
-    candidates = candidate_pool(samples, matched_raw, direct_item_hits, item_scores, query_catalog)
+    candidates = candidate_pool(samples, matched_raw, direct_item_hits, item_scores, query_catalog, warnings=warnings)
     candidate_item_stats = build_candidate_item_stats(candidates)
     evidence_items = build_evidence_items(candidates)
     matched_project_packages = matched_project_packages_for_output(matched_raw)
@@ -1381,9 +1744,12 @@ def run_query(
         matched_project_packages,
         candidate_item_stats,
         evidence_items,
+        warnings=warnings,
     )
-    if suggested_success:
-        candidate_item_stats = mark_adopted_candidates(candidate_item_stats, suggested_bill)
+    suggested_bill, candidate_item_stats = postprocess_suggested_bill(suggested_bill, candidate_item_stats, warnings)
+    estimate_summary = build_estimate_summary(rewrite, query_catalog, suggested_bill)
+    if warnings:
+        suggested_trace["input_summary"] = f"{suggested_trace.get('input_summary', '')}; warnings={';'.join(warnings)}"
     parse_info = build_parse_info(
         rewrite=rewrite,
         query_catalog=query_catalog,
@@ -1401,12 +1767,14 @@ def run_query(
         llm_error=llm_error,
         include_debug_text=include_debug_text,
         suggested_prompt=suggested_prompt,
+        warnings=warnings,
     )
     llm_trace = pd.DataFrame([rewrite_trace, catalog_trace, suggested_trace], columns=LLM_TRACE_COLUMNS)
 
     result = QueryResult(
         rewrite=rewrite,
         query_catalog=query_catalog,
+        estimate_summary=estimate_summary,
         suggested_bill=suggested_bill,
         matched_project_packages=matched_project_packages,
         candidate_item_stats=candidate_item_stats,
@@ -1450,6 +1818,20 @@ def main() -> int:
 
     try:
         validate_output_path(output_path, args.overwrite)
+    except ValueError as exc:
+        print(f"[ERROR] {exc}")
+        return 1
+
+    try:
+        check_lmstudio_service(timeout_seconds=args.llm_check_timeout)
+    except RuntimeError as exc:
+        detail = str(exc)
+        marker = "LMSTUDIO_BASE_URL="
+        suffix = detail[detail.find(marker) :] if marker in detail else detail
+        print(f"[ERROR] LLM 服务不可用，请先启动 LM Studio Server，并检查 {suffix}")
+        return 1
+
+    try:
         result = run_query(
             index_dir=index_dir,
             raw_text=args.text,
