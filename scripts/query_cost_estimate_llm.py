@@ -1467,7 +1467,7 @@ def generate_suggested_bill(
         candidate_item_stats,
         evidence_items,
     )
-    max_tokens = 1536
+    max_tokens = 4096
     try:
         result = request_llm_json(
             prompt,
