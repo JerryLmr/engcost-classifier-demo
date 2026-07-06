@@ -1571,18 +1571,6 @@ def build_estimate_summary(
     query_catalog: QueryCatalog,
     suggested_bill: pd.DataFrame,
 ) -> pd.DataFrame:
-    core_rows = suggested_bill[
-        suggested_bill["项目角色"].map(cell_text).str.contains("核心", na=False)
-        | suggested_bill["推荐类型"].map(cell_text).str.contains("直接", na=False)
-    ]
-    optional_rows = suggested_bill[
-        suggested_bill["项目角色"].map(cell_text).str.contains("前置|可选|待确认", regex=True, na=False)
-        | suggested_bill["推荐类型"].map(cell_text).str.contains("前置|可选|待确认", regex=True, na=False)
-    ]
-    cooccur_rows = suggested_bill[
-        suggested_bill["项目角色"].map(cell_text).str.contains("共现|措施", regex=True, na=False)
-        | suggested_bill["推荐类型"].map(cell_text).str.contains("共现|措施", regex=True, na=False)
-    ]
     quantity_texts: list[str] = []
     for item in rewrite.parsed_quantities:
         if not isinstance(item, dict):
@@ -1613,34 +1601,11 @@ def build_estimate_summary(
         demand_parts.append(f"明确{join_non_empty(quantity_texts)}")
     demand_understanding = "，".join(demand_parts) + "。"
 
-    catalog_path = join_non_empty(
-        [query_catalog.一级分类, query_catalog.二级分类, query_catalog.维修状态],
-    )
-    if catalog_path:
-        catalog_text = catalog_path.replace("；", " / ")
-        catalog_prefix = f"{query_catalog.catalog_id} " if query_catalog.catalog_id else ""
-        standard_object = f"，标准对象为{query_catalog.标准对象}" if query_catalog.标准对象 else ""
-        classification = f"按维修项目分类，当前需求归入 {catalog_prefix}{catalog_text}{standard_object}。"
+    suggested_reference_items = join_non_empty(suggested_bill["清单项名称"].tolist(), limit=20)
+    if suggested_reference_items:
+        suggested_reference_items += "。"
     else:
-        classification = "按维修项目分类，当前需求暂未归入明确标准目录，需结合候选清单和现场情况判断。"
-
-    core_names = join_non_empty(core_rows["清单项名称"].tolist(), limit=5)
-    optional_names = join_non_empty(optional_rows["清单项名称"].tolist(), limit=5)
-    cooccur_names = join_non_empty(cooccur_rows["清单项名称"].tolist(), limit=5)
-    plan_parts = []
-    if core_names:
-        plan_parts.append(f"建议以{core_names.replace('；', '、')}作为核心施工项")
-    if optional_names:
-        plan_parts.append(f"结合现场情况确认是否需要{optional_names.replace('；', '、')}等前置或待确认项目")
-    if cooccur_names:
-        plan_parts.append(f"同步核查{cooccur_names.replace('；', '、')}等工程包共现措施项")
-    recommendation = "，并".join(plan_parts) + "。" if plan_parts else "建议基于已召回候选项形成维修清单，并按现场条件确认前置及措施项目。"
-
-    included_items = join_non_empty(suggested_bill["清单项名称"].tolist(), limit=20)
-    if included_items:
-        included_items += "。"
-    else:
-        included_items = "当前未形成可展示的建议清单项。"
+        suggested_reference_items = "当前未形成可展示的建议清单项。"
 
     low_amount = amount_sum(suggested_bill, "估算金额最低值")
     mid_amount = amount_sum(suggested_bill, "估算金额中位数")
@@ -1688,16 +1653,9 @@ def build_estimate_summary(
 
     rows = [
         ("需求理解", demand_understanding),
-        ("分类结果", classification),
-        ("推荐方案", recommendation),
-        ("已列入清单项", included_items),
+        ("建议参考清单", suggested_reference_items),
         ("参考金额区间", amount_range),
         ("需现场确认", site_confirmation),
-        (
-            "价格口径",
-            "综合单价、人工费单价、机械费单价均来自 candidate_item_stats 的历史样本统计；"
-            "具体来源可通过 suggested_bill.来源样本 和 evidence_items 回查。",
-        ),
     ]
     return pd.DataFrame(rows, columns=ESTIMATE_SUMMARY_COLUMNS)
 
