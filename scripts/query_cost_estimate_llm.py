@@ -71,6 +71,39 @@ CANDIDATE_ITEM_STATS_COLUMNS = [
     "source_refs",
 ]
 
+CANDIDATE_FAMILY_COLUMNS = [
+    "family_id",
+    "family_signature",
+    "representative_cost_item_name",
+    "representative_project_description",
+    "unit",
+    "unit_normalized",
+    "覆盖candidate_ids",
+    "历史样本数",
+    "来源工程包数",
+    "历史工程量最低值",
+    "历史工程量中位数",
+    "历史工程量最高值",
+    "历史综合单价最低值",
+    "历史综合单价中位数",
+    "历史综合单价最高值",
+    "历史合价最低值",
+    "历史合价中位数",
+    "历史合价最高值",
+    "历史人工单价最低值",
+    "历史人工单价中位数",
+    "历史人工单价最高值",
+    "历史机械单价最低值",
+    "历史机械单价中位数",
+    "历史机械单价最高值",
+    "package_score最大值",
+    "item_score最大值",
+    "cooccur_score",
+    "catalog_score",
+    "final_score",
+    "source_refs",
+]
+
 EVIDENCE_ITEM_COLUMNS = [
     "source_ref",
     "project_key",
@@ -106,6 +139,7 @@ EVIDENCE_ITEM_COLUMNS = [
 
 SUGGESTED_BILL_COLUMNS = [
     "序号",
+    "family_id",
     "candidate_id",
     "推荐类型",
     "项目角色",
@@ -189,6 +223,7 @@ class QueryResult:
     estimate_summary: pd.DataFrame
     suggested_bill: pd.DataFrame
     matched_project_packages: pd.DataFrame
+    candidate_families: pd.DataFrame
     candidate_item_stats: pd.DataFrame
     evidence_items: pd.DataFrame
     parse_info: pd.DataFrame
@@ -813,6 +848,24 @@ def ordered_refs(values: pd.Series, limit: int = 10) -> str:
     return ", ".join(refs)
 
 
+def source_package_count(group: pd.DataFrame) -> int:
+    for column in ["project_key", "project_package_id"]:
+        if column not in group.columns:
+            continue
+        values = group[column].map(cell_text)
+        non_empty = values[values.ne("")]
+        if not non_empty.empty:
+            return int(non_empty.nunique())
+    if "source_ref" not in group.columns:
+        return 0
+    package_keys = []
+    for value in group["source_ref"].tolist():
+        text = cell_text(value)
+        if "::" in text:
+            package_keys.append(text.rsplit("::", 1)[0])
+    return len(set(package_keys))
+
+
 def build_candidate_item_stats(candidates: pd.DataFrame) -> pd.DataFrame:
     if candidates.empty:
         return pd.DataFrame(columns=CANDIDATE_ITEM_STATS_COLUMNS)
@@ -867,6 +920,68 @@ def build_candidate_item_stats(candidates: pd.DataFrame) -> pd.DataFrame:
         if column not in output.columns:
             output[column] = None
     return output[CANDIDATE_ITEM_STATS_COLUMNS].reset_index(drop=True)
+
+
+def build_candidate_families(candidates: pd.DataFrame, candidate_item_stats: pd.DataFrame) -> pd.DataFrame:
+    if candidates.empty:
+        return pd.DataFrame(columns=CANDIDATE_FAMILY_COLUMNS)
+
+    candidate_ids_by_family: dict[str, str] = {}
+    if not candidate_item_stats.empty and "family_signature" in candidate_item_stats.columns:
+        for family_signature, stats_group in candidate_item_stats.groupby("family_signature", sort=False, dropna=False):
+            ids = [cell_text(value) for value in stats_group.get("candidate_id", pd.Series(dtype=object)).tolist()]
+            candidate_ids_by_family[cell_text(family_signature)] = ", ".join([value for value in ids if value])
+
+    rows: list[dict[str, Any]] = []
+    for family_signature, group in candidates.groupby("family_signature", sort=False, dropna=False):
+        group = group.sort_values(["final_score", "item_score", "package_score"], ascending=[False, False, False])
+        representative = group.iloc[0]
+        quantity_min, quantity_median, quantity_max = min_median_max(group, "quantity")
+        unit_price_min, unit_price_median, unit_price_max = min_median_max(group, "unit_price")
+        total_price_min, total_price_median, total_price_max = min_median_max(group, "total_price")
+        labor_min, labor_median, labor_max = min_median_max(group, "labor_unit_price")
+        machinery_min, machinery_median, machinery_max = min_median_max(group, "machinery_unit_price")
+        rows.append(
+            {
+                "family_signature": cell_text(family_signature),
+                "representative_cost_item_name": cell_text(representative.get("cost_item_name")),
+                "representative_project_description": cell_text(representative.get("project_description")),
+                "unit": cell_text(representative.get("unit")),
+                "unit_normalized": cell_text(representative.get("unit_normalized")) or cell_text(representative.get("unit")),
+                "覆盖candidate_ids": candidate_ids_by_family.get(cell_text(family_signature), ""),
+                "历史样本数": int(len(group)),
+                "来源工程包数": source_package_count(group),
+                "历史工程量最低值": quantity_min,
+                "历史工程量中位数": quantity_median,
+                "历史工程量最高值": quantity_max,
+                "历史综合单价最低值": unit_price_min,
+                "历史综合单价中位数": unit_price_median,
+                "历史综合单价最高值": unit_price_max,
+                "历史合价最低值": total_price_min,
+                "历史合价中位数": total_price_median,
+                "历史合价最高值": total_price_max,
+                "历史人工单价最低值": labor_min,
+                "历史人工单价中位数": labor_median,
+                "历史人工单价最高值": labor_max,
+                "历史机械单价最低值": machinery_min,
+                "历史机械单价中位数": machinery_median,
+                "历史机械单价最高值": machinery_max,
+                "package_score最大值": max_numeric_or_zero(group, "package_score"),
+                "item_score最大值": max_numeric_or_zero(group, "item_score"),
+                "cooccur_score": max_numeric_or_zero(group, "cooccur_score"),
+                "catalog_score": max_numeric_or_zero(group, "catalog_score"),
+                "final_score": max_numeric_or_zero(group, "final_score"),
+                "source_refs": ordered_refs(group.get("source_ref", pd.Series(dtype=object)), limit=10),
+            }
+        )
+
+    output = pd.DataFrame(rows)
+    output = output.sort_values(["final_score", "item_score最大值", "历史样本数"], ascending=[False, False, False])
+    output.insert(0, "family_id", [f"F{index:03d}" for index in range(1, len(output) + 1)])
+    for column in CANDIDATE_FAMILY_COLUMNS:
+        if column not in output.columns:
+            output[column] = None
+    return output[CANDIDATE_FAMILY_COLUMNS].reset_index(drop=True)
 
 
 def build_evidence_items(candidates: pd.DataFrame) -> pd.DataFrame:
@@ -987,6 +1102,46 @@ def compressed_candidates_for_llm(frame: pd.DataFrame, limit: int) -> pd.DataFra
     return rows[[*columns, "source_refs_sample"]]
 
 
+def compressed_families_for_llm(frame: pd.DataFrame, limit: int) -> pd.DataFrame:
+    columns = [
+        "family_id",
+        "family_signature",
+        "representative_cost_item_name",
+        "representative_project_description",
+        "unit",
+        "unit_normalized",
+        "覆盖candidate_ids",
+        "历史样本数",
+        "来源工程包数",
+        "历史工程量最低值",
+        "历史工程量中位数",
+        "历史工程量最高值",
+        "历史综合单价最低值",
+        "历史综合单价中位数",
+        "历史综合单价最高值",
+        "历史合价最低值",
+        "历史合价中位数",
+        "历史合价最高值",
+        "历史人工单价最低值",
+        "历史人工单价中位数",
+        "历史人工单价最高值",
+        "历史机械单价最低值",
+        "历史机械单价中位数",
+        "历史机械单价最高值",
+        "package_score最大值",
+        "item_score最大值",
+        "cooccur_score",
+        "catalog_score",
+        "final_score",
+    ]
+    rows = frame.head(limit).copy()
+    for column in columns:
+        if column not in rows.columns:
+            rows[column] = None
+    rows["source_refs_sample"] = rows.get("source_refs", pd.Series(dtype=object)).map(lambda value: split_refs(value, 5))
+    return rows[[*columns, "source_refs_sample"]]
+
+
 def selected_evidence_for_llm(
     evidence_items: pd.DataFrame,
     compressed_candidates: pd.DataFrame,
@@ -1051,15 +1206,19 @@ def build_suggested_bill_prompt(
     rewrite: QueryRewrite,
     query_catalog: QueryCatalog,
     matched_project_packages: pd.DataFrame,
+    candidate_families: pd.DataFrame,
     candidate_item_stats: pd.DataFrame,
     evidence_items: pd.DataFrame,
     package_limit: int = 8,
+    family_limit: int = 20,
     candidate_limit: int = 30,
     evidence_limit: int = 60,
 ) -> str:
     compressed_packages = compressed_packages_for_llm(matched_project_packages, package_limit)
+    compressed_families = compressed_families_for_llm(candidate_families, family_limit)
     compressed_candidates = compressed_candidates_for_llm(candidate_item_stats, candidate_limit)
-    compressed_evidence = selected_evidence_for_llm(evidence_items, compressed_candidates, evidence_limit)
+    evidence_ref_source = compressed_families if not compressed_families.empty else compressed_candidates
+    compressed_evidence = selected_evidence_for_llm(evidence_items, evidence_ref_source, evidence_limit)
     payload = {
         "用户原始需求": rewrite.raw_query,
         "query_rewrite": {
@@ -1083,6 +1242,7 @@ def build_suggested_bill_prompt(
             "success": query_catalog.success,
         },
         "matched_project_packages": replace_nan_records(compressed_packages),
+        "candidate_families": replace_nan_records(compressed_families),
         "candidate_item_stats": replace_nan_records(compressed_candidates),
         "evidence_items": replace_nan_records(compressed_evidence),
     }
@@ -1096,6 +1256,7 @@ JSON 格式：
   "suggested_bill": [
     {{
       "seq": 1,
+      "family_id": "F001",
       "candidate_id": "C001",
       "recommend_type": "核心施工项",
       "item_role": "核心施工项",
@@ -1131,9 +1292,12 @@ JSON 格式：
 }}
 
 要求：
-- 从 candidate_item_stats 中选择本次建议清单，必须填写对应 candidate_id，不要输出明显无关项。
-- suggested_bill 默认输出 3-6 行。除非 candidate_item_stats 中确实没有可用候选，否则不要只输出 1-2 行。
-- 不要只选择同一种清单项的多个近似重复项。对于语义高度重复的候选，只选择最能代表本次需求的一项；优先选择 final_score 高、历史样本数多、项目特征更匹配用户需求的 candidate。
+- suggested_bill 必须优先从 candidate_families 中选择本次建议清单，必须填写对应 family_id，不要输出明显无关项。
+- candidate_id 是可选兼容字段，只作为代表细项或细粒度参考；不能因为同一 family 下存在多个 candidate_id 就重复输出多行。
+- 同一个 family_id 只能输出一次；不要从多个同一 family 的 candidate_id 中重复选择。
+- candidate_item_stats 只作为细粒度参考，用于理解 family 覆盖的明细候选，不作为优先选择入口。
+- suggested_bill 默认输出 3-6 行。除非 candidate_families 和 candidate_item_stats 中确实没有可用候选，否则不要只输出 1-2 行。
+- 不要只选择同一种清单项的多个近似重复项。对于语义高度重复的候选族，只选择最能代表本次需求的一项；优先选择 final_score 高、历史样本数多、项目特征更匹配用户需求的 family。
 - 生成 suggested_bill 时按跨目录通用候选角色判断：
   1. 核心施工项：直接解决用户需求的主要维修、更新、改造内容。
   2. 常见前置项：核心施工前通常需要发生的拆除、清理、检测、基层处理、开挖、保护等。
@@ -1145,7 +1309,7 @@ JSON 格式：
 - 如果用户明确给出面积，例如 500㎡：
   - 单位为 m² / ㎡ 且与该面积对应的候选项，可以使用该面积作为建议工程量；
   - 项、台班、次、部、套等非面积单位，不要机械按面积线性放大；如果候选单位确实是 m²，才可参考面积，并在 uncertainty_note 中说明需确认适用范围和是否已包含在综合单价中。
-- LLM 可以判断工程量、单位、估价口径和金额计算方式，但历史综合单价、人工单价、机械单价仍必须来自对应 candidate_id 的 candidate_item_stats，不允许自行估价。
+- LLM 可以判断工程量、单位、估价口径和金额计算方式，但历史综合单价、人工单价、机械单价仍必须来自对应 family_id 的 candidate_families；缺少 family_id 时才回退到 candidate_id 的 candidate_item_stats，不允许自行估价。
 - 不要输出 source_ref、source_refs、evidence_ref、evidence_refs、stable_sample_id、project_key、item_key 或任何来源编号。
 - 人工/机械单价或金额没有证据时保留 null，不要填 0。
 - recommend_type 建议使用：核心施工项、常见前置项、恢复/收尾项、措施/条件项、可选/替代工艺、补充候选项。
@@ -1164,6 +1328,7 @@ def guarded_suggested_bill_prompt(
     rewrite: QueryRewrite,
     query_catalog: QueryCatalog,
     matched_project_packages: pd.DataFrame,
+    candidate_families: pd.DataFrame,
     candidate_item_stats: pd.DataFrame,
     evidence_items: pd.DataFrame,
 ) -> str:
@@ -1171,9 +1336,11 @@ def guarded_suggested_bill_prompt(
         rewrite,
         query_catalog,
         matched_project_packages,
+        candidate_families,
         candidate_item_stats,
         evidence_items,
         package_limit=8,
+        family_limit=20,
         candidate_limit=30,
         evidence_limit=60,
     )
@@ -1183,9 +1350,11 @@ def guarded_suggested_bill_prompt(
         rewrite,
         query_catalog,
         matched_project_packages,
+        candidate_families,
         candidate_item_stats,
         evidence_items,
         package_limit=5,
+        family_limit=14,
         candidate_limit=20,
         evidence_limit=30,
     )
@@ -1195,9 +1364,11 @@ def guarded_suggested_bill_prompt(
         rewrite,
         query_catalog,
         matched_project_packages,
+        candidate_families,
         candidate_item_stats,
         evidence_items,
         package_limit=4,
+        family_limit=8,
         candidate_limit=12,
         evidence_limit=18,
     )
@@ -1207,9 +1378,11 @@ def guarded_suggested_bill_prompt(
         rewrite,
         query_catalog,
         matched_project_packages,
+        candidate_families,
         candidate_item_stats,
         evidence_items,
         package_limit=2,
+        family_limit=4,
         candidate_limit=6,
         evidence_limit=6,
     )
@@ -1248,6 +1421,7 @@ def suggested_bill_from_llm_result(result: dict[str, Any], warnings: list[str] |
         rows.append(
             {
                 "序号": bill_value(item, "seq", "序号") or index,
+                "family_id": bill_value(item, "family_id", "family_id"),
                 "candidate_id": bill_value(item, "candidate_id", "candidate_id"),
                 "推荐类型": bill_value(item, "recommend_type", "推荐类型"),
                 "项目角色": bill_value(item, "item_role", "项目角色"),
@@ -1286,12 +1460,65 @@ def suggested_bill_from_llm_result(result: dict[str, Any], warnings: list[str] |
     return pd.DataFrame(rows, columns=SUGGESTED_BILL_COLUMNS)
 
 
-def fallback_suggested_bill(candidate_item_stats: pd.DataFrame, limit: int = 20) -> pd.DataFrame:
+def fallback_suggested_bill(
+    candidate_item_stats: pd.DataFrame,
+    candidate_families: pd.DataFrame | None = None,
+    limit: int = 20,
+) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
+    if candidate_families is not None and not candidate_families.empty:
+        for _index, row in candidate_families.head(limit).iterrows():
+            candidate_id = split_refs(row.get("覆盖candidate_ids"), 1)
+            rows.append(
+                {
+                    "序号": len(rows) + 1,
+                    "family_id": row.get("family_id", ""),
+                    "candidate_id": candidate_id[0] if candidate_id else "",
+                    "推荐类型": "fallback_family",
+                    "项目角色": "补充候选项",
+                    "计量/估算口径": "LLM suggested_bill 生成失败，未判断估算口径",
+                    "清单项名称": row.get("representative_cost_item_name", ""),
+                    "项目特征/施工工艺": row.get("representative_project_description", ""),
+                    "单位": row.get("unit_normalized", "") or row.get("unit", ""),
+                    "建议工程量": "",
+                    "工程量依据": "LLM suggested_bill 生成失败，未生成建议工程量",
+                    "综合单价最低值": row.get("历史综合单价最低值"),
+                    "综合单价中位数": row.get("历史综合单价中位数"),
+                    "综合单价最高值": row.get("历史综合单价最高值"),
+                    "其中包含人工费单价最低值": row.get("历史人工单价最低值"),
+                    "其中包含人工费单价中位数": row.get("历史人工单价中位数"),
+                    "其中包含人工费单价最高值": row.get("历史人工单价最高值"),
+                    "其中包含机械费单价最低值": row.get("历史机械单价最低值"),
+                    "其中包含机械费单价中位数": row.get("历史机械单价中位数"),
+                    "其中包含机械费单价最高值": row.get("历史机械单价最高值"),
+                    "估算金额最低值": "",
+                    "估算金额中位数": "",
+                    "估算金额最高值": "",
+                    "估算人工费最低值": "",
+                    "估算人工费中位数": "",
+                    "估算人工费最高值": "",
+                    "估算机械费最低值": "",
+                    "估算机械费中位数": "",
+                    "估算机械费最高值": "",
+                    "金额计算说明": "缺少 LLM 判断工程量，未计算估算金额",
+                    "采用理由": "LLM suggested_bill 生成失败，本行仅为候选族统计结果，不代表最终建议清单",
+                    "不确定性说明": "需修复 LLM 上下文或降低候选规模后重新生成",
+                    "来源样本": row.get("source_refs", ""),
+                }
+            )
+        return pd.DataFrame(rows, columns=SUGGESTED_BILL_COLUMNS)
+
+    family_id_by_signature: dict[str, str] = {}
+    if candidate_families is not None and not candidate_families.empty:
+        family_id_by_signature = {
+            cell_text(row.get("family_signature")): cell_text(row.get("family_id"))
+            for _index, row in candidate_families.iterrows()
+        }
     for _index, row in candidate_item_stats.head(limit).iterrows():
         rows.append(
             {
                 "序号": len(rows) + 1,
+                "family_id": family_id_by_signature.get(cell_text(row.get("family_signature")), ""),
                 "candidate_id": row.get("candidate_id", ""),
                 "推荐类型": "fallback_candidate",
                 "项目角色": "补充候选项",
@@ -1376,15 +1603,37 @@ def calc_amount(quantity: Any, unit_price: Any) -> float | None:
 def postprocess_suggested_bill(
     suggested_bill: pd.DataFrame,
     candidate_item_stats: pd.DataFrame,
+    candidate_families: pd.DataFrame | None = None,
     warnings: list[str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if isinstance(candidate_families, list) and warnings is None:
+        warnings = candidate_families
+        candidate_families = None
     output = suggested_bill.copy().astype("object")
     stats = candidate_item_stats.copy().astype("object")
-    if stats.empty:
-        return output, stats
+    families = candidate_families.copy().astype("object") if candidate_families is not None else pd.DataFrame(
+        columns=CANDIDATE_FAMILY_COLUMNS
+    )
+    for column in SUGGESTED_BILL_COLUMNS:
+        if column not in output.columns:
+            output[column] = ""
     stats["是否被LLM采用"] = ""
     candidate_map = {cell_text(row.get("candidate_id")): row for _index, row in stats.iterrows()}
+    family_map = {cell_text(row.get("family_id")): row for _index, row in families.iterrows()}
     adoption: dict[str, str] = {}
+
+    if not output.empty and "family_id" in output.columns:
+        keep_indices: list[int] = []
+        seen_family_ids: set[str] = set()
+        for index, row in output.iterrows():
+            family_id = cell_text(row.get("family_id"))
+            if family_id and family_id in seen_family_ids:
+                append_warning(warnings, "duplicate_family_id_dropped")
+                continue
+            if family_id:
+                seen_family_ids.add(family_id)
+            keep_indices.append(index)
+        output = output.loc[keep_indices].reset_index(drop=True)
 
     price_pairs = [
         ("综合单价最低值", "历史综合单价最低值"),
@@ -1410,10 +1659,29 @@ def postprocess_suggested_bill(
     ]
 
     for index, row in output.iterrows():
+        family_id = cell_text(row.get("family_id"))
         candidate_id = cell_text(row.get("candidate_id"))
-        candidate = candidate_map.get(candidate_id)
+        matched_stats = family_map.get(family_id)
+        candidate = None
         match_status = "是"
-        if candidate is None:
+        adopted_candidate_ids: list[str] = []
+        if matched_stats is not None:
+            adopted_candidate_ids = split_refs(matched_stats.get("覆盖candidate_ids"))
+            if not candidate_id and adopted_candidate_ids:
+                candidate_id = adopted_candidate_ids[0]
+                output.at[index, "candidate_id"] = candidate_id
+            if not cell_text(output.at[index, "清单项名称"]):
+                output.at[index, "清单项名称"] = matched_stats.get("representative_cost_item_name", "")
+            if not cell_text(output.at[index, "项目特征/施工工艺"]):
+                output.at[index, "项目特征/施工工艺"] = matched_stats.get("representative_project_description", "")
+            if not cell_text(output.at[index, "单位"]):
+                output.at[index, "单位"] = matched_stats.get("unit_normalized", "") or matched_stats.get("unit", "")
+        else:
+            if family_id:
+                append_warning(warnings, "family_id_missing_or_ambiguous")
+            candidate = candidate_map.get(candidate_id)
+
+        if matched_stats is None and candidate is None:
             candidate = strict_candidate_match(stats, row)
             if candidate is not None:
                 append_warning(warnings, "candidate_id_missing_strict_matched")
@@ -1429,14 +1697,37 @@ def postprocess_suggested_bill(
                 output.at[index, "来源样本"] = ""
                 continue
 
-        if candidate_id in adoption and adoption[candidate_id] != match_status:
-            adoption[candidate_id] = "匹配冲突"
+        if matched_stats is None and candidate is not None:
+            matched_stats = candidate
+            adopted_candidate_ids = [candidate_id]
+
+        for adopted_candidate_id in adopted_candidate_ids:
+            if adopted_candidate_id in adoption and adoption[adopted_candidate_id] != match_status:
+                adoption[adopted_candidate_id] = "匹配冲突"
+                append_warning(warnings, "candidate_id_missing_or_ambiguous")
+            else:
+                adoption[adopted_candidate_id] = match_status
+
+        if matched_stats is None:
             append_warning(warnings, "candidate_id_missing_or_ambiguous")
-        else:
+            for final_column, _stats_column in price_pairs:
+                output.at[index, final_column] = ""
+            for amount_column, _price_column in amount_pairs:
+                output.at[index, amount_column] = ""
+            output.at[index, "来源样本"] = ""
+            continue
+
+        if candidate_id and candidate_id not in adopted_candidate_ids and candidate_id in candidate_map:
+            adopted_candidate_ids.append(candidate_id)
             adoption[candidate_id] = match_status
 
+        if family_id and matched_stats is not None:
+            output.at[index, "family_id"] = family_id
+        else:
+            output.at[index, "family_id"] = ""
+
         for final_column, stats_column in price_pairs:
-            candidate_value = candidate.get(stats_column)
+            candidate_value = matched_stats.get(stats_column)
             if numeric_or_none(candidate_value) is None:
                 if cell_text(output.at[index, final_column]):
                     append_warning(warnings, "empty_price_field_kept_empty")
@@ -1446,7 +1737,7 @@ def postprocess_suggested_bill(
                 append_warning(warnings, "llm_unit_price_overridden_by_candidate_stats")
             output.at[index, final_column] = candidate_value
 
-        output.at[index, "来源样本"] = ", ".join(split_refs(candidate.get("source_refs"), 10))
+        output.at[index, "来源样本"] = ", ".join(split_refs(matched_stats.get("source_refs"), 10))
 
         for amount_column, price_column in amount_pairs:
             calculated = calc_amount(output.at[index, "建议工程量"], output.at[index, price_column])
@@ -1459,6 +1750,8 @@ def postprocess_suggested_bill(
                 append_warning(warnings, "llm_amount_overridden_by_program_calculation")
                 output.at[index, amount_column] = calculated
 
+    if not output.empty:
+        output["序号"] = range(1, len(output) + 1)
     for index, row in stats.iterrows():
         candidate_id = cell_text(row.get("candidate_id"))
         stats.at[index, "是否被LLM采用"] = adoption.get(candidate_id, "")
@@ -1469,6 +1762,7 @@ def generate_suggested_bill(
     rewrite: QueryRewrite,
     query_catalog: QueryCatalog,
     matched_project_packages: pd.DataFrame,
+    candidate_families: pd.DataFrame,
     candidate_item_stats: pd.DataFrame,
     evidence_items: pd.DataFrame,
     warnings: list[str] | None = None,
@@ -1477,6 +1771,7 @@ def generate_suggested_bill(
         rewrite,
         query_catalog,
         matched_project_packages,
+        candidate_families,
         candidate_item_stats,
         evidence_items,
     )
@@ -1494,7 +1789,7 @@ def generate_suggested_bill(
             True,
             prompt=prompt,
             max_tokens=max_tokens,
-            input_summary=f"candidates={len(candidate_item_stats)}, evidence={len(evidence_items)}",
+            input_summary=f"families={len(candidate_families)}, candidates={len(candidate_item_stats)}, evidence={len(evidence_items)}",
         )
         return suggested_bill, True, False, "", prompt, trace
     except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
@@ -1505,9 +1800,9 @@ def generate_suggested_bill(
             error=str(exc),
             prompt=prompt,
             max_tokens=max_tokens,
-            input_summary=f"candidates={len(candidate_item_stats)}, evidence={len(evidence_items)}",
+            input_summary=f"families={len(candidate_families)}, candidates={len(candidate_item_stats)}, evidence={len(evidence_items)}",
         )
-        return fallback_suggested_bill(candidate_item_stats), False, True, str(exc), prompt, trace
+        return fallback_suggested_bill(candidate_item_stats, candidate_families), False, True, str(exc), prompt, trace
 
 
 def display_frame(frame: pd.DataFrame, display: bool) -> pd.DataFrame:
@@ -1720,6 +2015,11 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
             sheet_name="matched_project_packages",
             index=False,
         )
+        display_frame(result.candidate_families, display).to_excel(
+            writer,
+            sheet_name="candidate_families",
+            index=False,
+        )
         display_frame(result.candidate_item_stats, display).to_excel(
             writer,
             sheet_name="candidate_item_stats",
@@ -1795,6 +2095,7 @@ def run_query(
     direct_item_hits = score_direct_items(samples, item_scores, top_items)
     candidates = candidate_pool(samples, matched_raw, direct_item_hits, item_scores, query_catalog, warnings=warnings)
     candidate_item_stats = build_candidate_item_stats(candidates)
+    candidate_families = build_candidate_families(candidates, candidate_item_stats)
     evidence_items = build_evidence_items(candidates)
     matched_project_packages = matched_project_packages_for_output(matched_raw)
 
@@ -1802,11 +2103,17 @@ def run_query(
         rewrite,
         query_catalog,
         matched_project_packages,
+        candidate_families,
         candidate_item_stats,
         evidence_items,
         warnings=warnings,
     )
-    suggested_bill, candidate_item_stats = postprocess_suggested_bill(suggested_bill, candidate_item_stats, warnings)
+    suggested_bill, candidate_item_stats = postprocess_suggested_bill(
+        suggested_bill,
+        candidate_item_stats,
+        candidate_families,
+        warnings,
+    )
     estimate_summary = build_estimate_summary(rewrite, query_catalog, suggested_bill)
     if warnings:
         suggested_trace["input_summary"] = f"{suggested_trace.get('input_summary', '')}; warnings={';'.join(warnings)}"
@@ -1837,6 +2144,7 @@ def run_query(
         estimate_summary=estimate_summary,
         suggested_bill=suggested_bill,
         matched_project_packages=matched_project_packages,
+        candidate_families=candidate_families,
         candidate_item_stats=candidate_item_stats,
         evidence_items=evidence_items,
         parse_info=parse_info,
@@ -1859,6 +2167,7 @@ def print_terminal_summary(result: QueryResult, output_path: Path | None) -> Non
     else:
         print("[WARN] query catalog classification failed; catalog_score used neutral 0.5")
     print(f"[DONE] matched project packages: {len(result.matched_project_packages)}")
+    print(f"[DONE] candidate families: {len(result.candidate_families)}")
     print(f"[DONE] candidate item stats: {len(result.candidate_item_stats)}")
     print(f"[DONE] evidence items: {len(result.evidence_items)}")
     print(f"[DONE] suggested bill rows: {len(result.suggested_bill)}")

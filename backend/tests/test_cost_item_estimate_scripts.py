@@ -451,6 +451,44 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(roof["历史机械单价中位数"], 5.0)
         self.assertEqual(roof["source_refs"], "batch-a::2::2-1")
 
+    def test_candidate_families_group_by_family_signature(self):
+        candidates = self.prepared_samples().head(1).copy()
+        duplicate = candidates.iloc[0].copy()
+        duplicate["project_description"] = "4.0mm SBS 沥青防水卷材"
+        duplicate["fine_signature"] = "屋面卷材防水 | 4.0mm sbs 沥青防水卷材 | m²"
+        duplicate["quantity"] = 300
+        duplicate["unit_price"] = 120
+        duplicate["total_price"] = 36000
+        duplicate["labor_unit_price"] = 30
+        duplicate["machinery_unit_price"] = 7
+        duplicate["project_key"] = "batch-a::5"
+        duplicate["project_package_id"] = "batch-a::5"
+        duplicate["item_row_id"] = "5-1"
+        candidates = pd.concat([candidates, duplicate.to_frame().T], ignore_index=True)
+        candidates["package_score"] = [0.8, 0.7]
+        candidates["package_rank"] = [1, 2]
+        candidates["item_score"] = [0.9, 0.8]
+        candidates["cooccur_score"] = 1.0
+        candidates["catalog_score"] = 1.0
+        candidates["unit_score"] = 0.5
+        candidates["final_score"] = [0.85, 0.75]
+        candidates["source_ref"] = ["batch-a::2::2-1", "batch-a::5::5-1"]
+
+        stats = query_estimate_llm.build_candidate_item_stats(candidates)
+        families = query_estimate_llm.build_candidate_families(candidates, stats)
+
+        self.assertEqual(families.columns.tolist(), query_estimate_llm.CANDIDATE_FAMILY_COLUMNS)
+        self.assertEqual(len(families), 1)
+        family = families.iloc[0]
+        self.assertEqual(family["family_id"], "F001")
+        self.assertEqual(family["覆盖candidate_ids"], "C001, C002")
+        self.assertEqual(family["历史样本数"], 2)
+        self.assertEqual(family["来源工程包数"], 2)
+        self.assertEqual(family["历史综合单价最低值"], 80.0)
+        self.assertEqual(family["历史综合单价中位数"], 100.0)
+        self.assertEqual(family["历史综合单价最高值"], 120.0)
+        self.assertEqual(family["representative_project_description"], "3.0mm SBS 沥青防水卷材")
+
     def test_source_ref_recovers_from_batch_source_row_and_seq(self):
         rows = self.prepared_samples().head(1).copy()
         rows["project_key"] = ""
@@ -494,11 +532,40 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
         self.assertNotIn("source_refs", compressed.columns)
 
+        families = pd.DataFrame(
+            [
+                {
+                    "family_id": f"F{index + 1:03d}",
+                    "family_signature": f"fam-{index}",
+                    "representative_cost_item_name": f"族{index}",
+                    "representative_project_description": "代表做法",
+                    "unit": "m²",
+                    "unit_normalized": "m²",
+                    "覆盖candidate_ids": f"C{index + 1:03d}",
+                    "历史样本数": 1,
+                    "来源工程包数": 1,
+                    "final_score": 1 - index / 100,
+                    "source_refs": "batch-a::1::1-1, batch-a::1::1-2, batch-a::1::1-3, batch-a::1::1-4, batch-a::1::1-5, batch-a::1::1-6",
+                }
+                for index in range(25)
+            ]
+        )
+
+        compressed_families = query_estimate_llm.compressed_families_for_llm(families, 20)
+
+        self.assertEqual(len(compressed_families), 20)
+        self.assertEqual(
+            compressed_families.iloc[0]["source_refs_sample"],
+            ["batch-a::1::1-1", "batch-a::1::1-2", "batch-a::1::1-3", "batch-a::1::1-4", "batch-a::1::1-5"],
+        )
+        self.assertNotIn("source_refs", compressed_families.columns)
+
     def test_suggested_bill_success_and_fallback_columns(self):
         result = {
             "suggested_bill": [
                 {
                     "seq": 1,
+                    "family_id": "F001",
                     "candidate_id": "C001",
                     "recommend_type": "直接匹配项",
                     "item_role": "核心施工项",
@@ -519,6 +586,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         bill = query_estimate_llm.suggested_bill_from_llm_result(result, warnings)
 
         self.assertEqual(bill.columns.tolist(), query_estimate_llm.SUGGESTED_BILL_COLUMNS)
+        self.assertEqual(bill.loc[0, "family_id"], "F001")
         self.assertEqual(bill.loc[0, "candidate_id"], "C001")
         self.assertEqual(bill.loc[0, "项目角色"], "核心施工项")
         self.assertEqual(bill.loc[0, "其中包含人工费单价中位数"], 20)
@@ -530,6 +598,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             pd.DataFrame(
                 [
                     {
+                        "family_id": "F001",
                         "candidate_id": "C001",
                         "cost_item_name": "屋面卷材防水",
                         "project_description": "3mm SBS",
@@ -607,7 +676,116 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertIn("llm_unit_price_overridden_by_candidate_stats", warnings)
         self.assertIn("llm_amount_overridden_by_program_calculation", warnings)
 
-    def test_write_query_result_workbook_has_new_seven_sheets(self):
+    def test_postprocess_prefers_family_and_drops_duplicate_family_id(self):
+        stats = pd.DataFrame(
+            [
+                {
+                    "candidate_id": "C001",
+                    "fine_signature": "sig-a",
+                    "family_signature": "fam",
+                    "cost_item_name": "屋面卷材防水",
+                    "project_description": "3mm SBS",
+                    "unit": "m²",
+                    "unit_normalized": "m²",
+                    "历史样本数": 1,
+                    "来源工程包数": 1,
+                    "历史综合单价最低值": 80,
+                    "历史综合单价中位数": 90,
+                    "历史综合单价最高值": 100,
+                    "source_refs": "batch-a::2::2-1",
+                    "是否被LLM采用": "",
+                },
+                {
+                    "candidate_id": "C002",
+                    "fine_signature": "sig-b",
+                    "family_signature": "fam",
+                    "cost_item_name": "屋面卷材防水",
+                    "project_description": "4mm SBS",
+                    "unit": "m²",
+                    "unit_normalized": "m²",
+                    "历史样本数": 1,
+                    "来源工程包数": 1,
+                    "历史综合单价最低值": 110,
+                    "历史综合单价中位数": 120,
+                    "历史综合单价最高值": 130,
+                    "source_refs": "batch-a::5::5-1",
+                    "是否被LLM采用": "",
+                },
+            ],
+            columns=query_estimate_llm.CANDIDATE_ITEM_STATS_COLUMNS,
+        )
+        families = pd.DataFrame(
+            [
+                {
+                    "family_id": "F001",
+                    "family_signature": "fam",
+                    "representative_cost_item_name": "屋面卷材防水",
+                    "representative_project_description": "3mm SBS",
+                    "unit": "m²",
+                    "unit_normalized": "m²",
+                    "覆盖candidate_ids": "C001, C002",
+                    "历史样本数": 2,
+                    "来源工程包数": 2,
+                    "历史综合单价最低值": 80,
+                    "历史综合单价中位数": 100,
+                    "历史综合单价最高值": 130,
+                    "历史人工单价最低值": 20,
+                    "历史人工单价中位数": 25,
+                    "历史人工单价最高值": 30,
+                    "历史机械单价中位数": None,
+                    "source_refs": "batch-a::2::2-1, batch-a::5::5-1",
+                }
+            ],
+            columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
+        )
+        bill = pd.DataFrame(
+            [
+                {
+                    "序号": 1,
+                    "family_id": "F001",
+                    "candidate_id": "C002",
+                    "推荐类型": "直接匹配项",
+                    "项目角色": "核心施工项",
+                    "计量/估算口径": "按面积估算",
+                    "清单项名称": "",
+                    "项目特征/施工工艺": "",
+                    "单位": "",
+                    "建议工程量": 10,
+                    "工程量依据": "用户给定",
+                    "综合单价最低值": 1,
+                    "综合单价中位数": 2,
+                    "综合单价最高值": 3,
+                    "估算金额最低值": 1,
+                    "估算金额中位数": 2,
+                    "估算金额最高值": 3,
+                    "采用理由": "",
+                    "不确定性说明": "",
+                },
+                {
+                    "序号": 2,
+                    "family_id": "F001",
+                    "candidate_id": "C001",
+                    "推荐类型": "重复项",
+                    "建议工程量": 10,
+                },
+            ],
+            columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS,
+        )
+        warnings: list[str] = []
+
+        processed_bill, processed_stats = query_estimate_llm.postprocess_suggested_bill(bill, stats, families, warnings)
+
+        self.assertEqual(len(processed_bill), 1)
+        self.assertEqual(processed_bill.loc[0, "序号"], 1)
+        self.assertEqual(processed_bill.loc[0, "family_id"], "F001")
+        self.assertEqual(processed_bill.loc[0, "清单项名称"], "屋面卷材防水")
+        self.assertEqual(processed_bill.loc[0, "综合单价中位数"], 100)
+        self.assertEqual(processed_bill.loc[0, "估算金额中位数"], 1000)
+        self.assertEqual(processed_bill.loc[0, "来源样本"], "batch-a::2::2-1, batch-a::5::5-1")
+        self.assertEqual(processed_stats["是否被LLM采用"].tolist(), ["是", "是"])
+        self.assertIn("duplicate_family_id_dropped", warnings)
+
+    def test_write_query_result_workbook_has_new_eight_sheets(self):
         rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], [], "", [], [], True)
         catalog = query_estimate_llm.QueryCatalog("CP-002-03", "屋面", "防水层", "维修", "共用部位", None, {}, True, [])
         result = query_estimate_llm.QueryResult(
@@ -618,6 +796,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 [
                     {
                         "序号": 1,
+                        "family_id": "F001",
                         "candidate_id": "C001",
                         "推荐类型": "直接匹配项",
                         "项目角色": "核心施工项",
@@ -632,6 +811,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS,
             ),
             matched_project_packages=pd.DataFrame(columns=query_estimate_llm.MATCHED_PROJECT_PACKAGE_COLUMNS),
+            candidate_families=pd.DataFrame(columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS),
             candidate_item_stats=pd.DataFrame(columns=query_estimate_llm.CANDIDATE_ITEM_STATS_COLUMNS),
             evidence_items=pd.DataFrame(columns=query_estimate_llm.EVIDENCE_ITEM_COLUMNS),
             parse_info=pd.DataFrame([{"字段": "project_package_query_text", "值": "屋面工程"}]),
@@ -655,6 +835,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "estimate_summary",
                     "suggested_bill",
                     "matched_project_packages",
+                    "candidate_families",
                     "candidate_item_stats",
                     "evidence_items",
                     "parse_info",
