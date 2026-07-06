@@ -141,14 +141,13 @@ SUGGESTED_BILL_COLUMNS = [
     "序号",
     "family_id",
     "candidate_id",
-    "推荐类型",
-    "项目角色",
-    "计量/估算口径",
+    "建议项类型",
     "清单项名称",
     "项目特征/施工工艺",
     "单位",
+    "工程量来源",
     "建议工程量",
-    "工程量依据",
+    "工程量口径说明",
     "是否计入金额汇总",
     "综合单价最低值",
     "综合单价中位数",
@@ -168,9 +167,9 @@ SUGGESTED_BILL_COLUMNS = [
     "估算机械费最低值",
     "估算机械费中位数",
     "估算机械费最高值",
-    "金额计算说明",
-    "采用理由",
-    "不确定性说明",
+    "金额计算口径",
+    "推荐依据",
+    "需确认事项",
     "来源样本",
 ]
 
@@ -1250,45 +1249,25 @@ def build_suggested_bill_prompt(
     return f"""
 你是维修工程造价建议清单生成器。请基于用户需求、ParsedQuery、相似历史工程包、候选项统计和历史明细证据，生成本次 suggested_bill。
 
-只允许输出 JSON object，不要 Markdown，不要解释。用户需求即使较粗，也必须基于相似历史工程包和候选项给出参考 suggested_bill；不确定内容写入 uncertainty_note，不要直接放弃估价。
+只允许输出 JSON object，不要 Markdown，不要解释。用户需求即使较粗，也必须基于相似历史工程包和候选项给出参考 suggested_bill；不确定内容写入 confirmation_note，不要直接放弃估价。
 
 JSON 格式：
 {{
   "suggested_bill": [
     {{
       "seq": 1,
-      "family_id": "F001",
-      "candidate_id": "C001",
-      "recommend_type": "核心施工项",
-      "item_role": "核心施工项",
-      "estimate_method": "基于用户给出的约500㎡面积，参考历史样本综合单价区间估算",
+      "family_id": "",
+      "candidate_id": "",
+      "item_type": "",
       "cost_item_name": "",
       "project_description": "",
       "unit": "",
+      "quantity_source": "",
       "suggested_quantity": null,
-      "quantity_basis": "",
+      "quantity_note": "",
       "include_in_amount": true,
-      "unit_price_low": null,
-      "unit_price_mid": null,
-      "unit_price_high": null,
-      "labor_unit_price_low": null,
-      "labor_unit_price_mid": null,
-      "labor_unit_price_high": null,
-      "machinery_unit_price_low": null,
-      "machinery_unit_price_mid": null,
-      "machinery_unit_price_high": null,
-      "estimated_amount_low": null,
-      "estimated_amount_mid": null,
-      "estimated_amount_high": null,
-      "estimated_labor_amount_low": null,
-      "estimated_labor_amount_mid": null,
-      "estimated_labor_amount_high": null,
-      "estimated_machinery_amount_low": null,
-      "estimated_machinery_amount_mid": null,
-      "estimated_machinery_amount_high": null,
-      "amount_calc_note": "",
-      "adopt_reason": "",
-      "uncertainty_note": ""
+      "recommendation_reason": "",
+      "confirmation_note": ""
     }}
   ]
 }}
@@ -1300,32 +1279,37 @@ JSON 格式：
 - candidate_item_stats 只作为细粒度参考，用于理解 family 覆盖的明细候选，不作为优先选择入口。
 - suggested_bill 默认输出 3-6 行。除非 candidate_families 和 candidate_item_stats 中确实没有可用候选，否则不要只输出 1-2 行。
 - 不要只选择同一种清单项的多个近似重复项。对于语义高度重复的候选族，只选择最能代表本次需求的一项；优先选择 final_score 高、历史样本数多、项目特征更匹配用户需求的 family。
-- 必须输出 include_in_amount。include_in_amount=true 表示该行金额参与 estimate_summary 的总金额区间汇总；include_in_amount=false 表示该行只是建议参考、待确认项或替代方案，不参与总金额汇总。
-- include_in_amount 规则：
-  1. 核心施工项：如果工程量明确，通常 include_in_amount=true。
-  2. 常见前置项：如果工程量可由用户明确工程量合理推导，可以 include_in_amount=true；否则 false。
-  3. 恢复/收尾项、措施/条件项：工程量或计价口径不明确时 include_in_amount=false。
-  4. 可选/替代工艺：默认 include_in_amount=false，除非用户明确选择该工艺作为核心方案。
-- 生成 suggested_bill 时按跨目录通用候选角色判断：
-  1. 核心施工项：直接解决用户需求的主要维修、更新、改造内容。
-  2. 常见前置项：核心施工前通常需要发生的拆除、清理、检测、基层处理、开挖、保护等。
-  3. 恢复/收尾项：核心施工后恢复原状、饰面恢复、回填、调试、试运行、验收等。
-  4. 措施/条件项：为完成施工所需的脚手架、吊篮、垂直运输、机械设备进出场及安拆、吊装、安全文明、临时设施等。
-  5. 可选/替代工艺：与核心施工项解决同一目标，但属于不同材料、规格、设备型号或技术路线，默认不应重复计价。
-- 同一目标的替代工艺默认只选择最匹配用户需求的一项；其它可作为待确认或替代参考，不进入金额汇总。
-- 措施/条件项没有明确工程量时可以列为待确认，但金额留空。
-- 如果用户明确给出面积，例如 500㎡：
-  - 单位为 m² / ㎡ 且与该面积对应的候选项，可以使用该面积作为建议工程量；
-  - 项、台班、次、部、套等非面积单位，不要机械按面积线性放大；如果候选单位确实是 m²，才可参考面积，并在 uncertainty_note 中说明需确认适用范围和是否已包含在综合单价中。
-- LLM 可以判断工程量、单位、估价口径和金额计算方式，但历史综合单价、人工单价、机械单价仍必须来自对应 family_id 的 candidate_families；缺少 family_id 时才回退到 candidate_id 的 candidate_item_stats，不允许自行估价。
+- LLM 负责判断 item_type、quantity_source、quantity_note、include_in_amount、recommendation_reason、confirmation_note。
+- LLM 不负责生成最终金额计算说明，不要输出金额计算相关字段。
+- 历史综合单价、人工单价、机械单价由程序根据 family_id/candidate_id 回填；金额数值由程序计算。不要自行估价，不要输出单价或金额字段。
+- item_type 只能使用：核心施工项、必要前置项、恢复/收尾项、措施/条件项、替代方案、待确认补充项。
+- item_type 含义：
+  1. 核心施工项：直接解决用户需求的主要施工内容，工程量明确时通常计入金额。
+  2. 必要前置项：核心施工前通常必须发生的拆除、铲除、基层处理等，工程量明确时可计入金额。
+  3. 恢复/收尾项：恢复原状、饰面恢复、回填、调试、验收等，工程量明确时才计入金额。
+  4. 措施/条件项：登高车、垂直运输、脚手架、吊篮、机械进出场、垃圾清运等，默认需现场确认，不按面积直接线性估算。
+  5. 替代方案：与核心施工项解决同一目标的其他材料、规格或工艺，默认不计入金额。
+  6. 待确认补充项：可能相关但现场条件不足的补充候选，默认不计入金额。
+- quantity_source 只能使用：用户明确给定、由用户面积推导、历史常见数量参考、需现场确认、不可可靠估算。
+- 工程量来源规则：
+  1. 用户明确给出面积，且本行单位为 m²/㎡，并与维修对象直接对应时，可使用“用户明确给定”。
+  2. 拆除类面积项，如果用户明确说旧层铲除/拆除，可用“由用户面积推导”；如果拆除范围不明确，应在 quantity_note 或 confirmation_note 说明是假设或需现场确认。
+  3. 台次、项、套、部、台班、车次等非面积单位，不要按用户面积线性推导；没有明确数量时应使用“需现场确认”或“历史常见数量参考”，并且 include_in_amount=false。
+  4. 历史工程量只能作为参考，不要直接当成本次工程量，除非用户条件明确匹配。
+  5. 替代方案默认 include_in_amount=false。
+- include_in_amount=true 表示该行金额参与 estimate_summary 的总金额区间汇总；include_in_amount=false 表示该行只是建议参考、待确认项或替代方案，不参与总金额汇总。
+- include_in_amount 判断规则：
+  1. 核心施工项 + 有建议工程量：默认 true。
+  2. 必要前置项 + 有建议工程量：默认 true。
+  3. 恢复/收尾项：默认 false，除非现场条件和工程量明确。
+  4. 措施/条件项：默认 false；只有明确数量且 quantity_source 不是“需现场确认”时才可 true。
+  5. 替代方案、待确认补充项：默认 false。
+- 同一目标的替代方案默认只选择最匹配用户需求的一项；其它可作为待确认或替代参考，不进入金额汇总。
 - 不要输出 source_ref、source_refs、evidence_ref、evidence_refs、stable_sample_id、project_key、item_key 或任何来源编号。
-- 人工/机械单价或金额没有证据时保留 null，不要填 0。
-- recommend_type 建议使用：核心施工项、常见前置项、恢复/收尾项、措施/条件项、可选/替代工艺、补充候选项。
-- item_role 建议使用：核心施工项、常见前置项、恢复/收尾项、措施/条件项、可选/替代工艺、补充候选项。
-- adopt_reason 要写清楚为什么采用该 candidate，特别是它在通用候选角色中的作用，而不是只写“与需求匹配”。
-- uncertainty_note 要说明现场需要确认什么，例如施工范围、材料规格、设备型号、基层或原状条件、施工高度、运输距离、临时措施、恢复范围、调试验收要求等是否明确。
-- 如果楼栋数、设备数量、运输高度、基层状况、节点复杂度未知，也要在 uncertainty_note 中指出。
-- 如果无法可靠估算工程量，可以给历史价格参考但金额为空，或给保守范围并说明原因。
+- recommendation_reason 要写清楚为什么采用该 candidate/family，特别是它在建议方案中的作用，而不是只写“与需求匹配”。
+- confirmation_note 要说明现场需要确认什么，例如施工范围、材料规格、设备型号、基层或原状条件、施工高度、运输距离、临时措施、恢复范围、调试验收要求等是否明确。
+- 如果楼栋数、设备数量、运输高度、基层状况、节点复杂度未知，也要在 confirmation_note 中指出。
+- 如果无法可靠估算工程量，可以给历史单价参考但 suggested_quantity 留空，并在 quantity_source 使用“需现场确认”或“不可可靠估算”。
 
 输入数据：
 {json_text(payload)}
@@ -1404,21 +1388,62 @@ def bill_value(item: dict[str, Any], english_key: str, chinese_key: str = "") ->
     return ""
 
 
-def normalize_include_in_amount(value: Any, item_role: Any, suggested_quantity: Any) -> str:
+def first_bill_value(item: dict[str, Any], *keys: tuple[str, str]) -> Any:
+    for english_key, chinese_key in keys:
+        value = bill_value(item, english_key, chinese_key)
+        if cell_text(value):
+            return value
+    return ""
+
+
+def merge_bill_notes(item: dict[str, Any], *keys: tuple[str, str]) -> str:
+    values: list[str] = []
+    for english_key, chinese_key in keys:
+        value = cell_text(bill_value(item, english_key, chinese_key))
+        if value and value not in values:
+            values.append(value)
+    return "；".join(values)
+
+
+def canonical_item_type(value: Any) -> str:
+    text = cell_text(value)
+    aliases = {
+        "常见前置项": "必要前置项",
+        "可选/替代工艺": "替代方案",
+        "补充候选项": "待确认补充项",
+        "fallback_family": "待确认补充项",
+        "fallback_candidate": "待确认补充项",
+        "直接匹配项": "核心施工项",
+    }
+    return aliases.get(text, text)
+
+
+def normalize_include_in_amount(value: Any, item_type: Any, suggested_quantity: Any, quantity_source: Any = "") -> str:
+    role = canonical_item_type(item_type)
+    quantity = numeric_or_none(suggested_quantity)
+    source = cell_text(quantity_source)
+
     if isinstance(value, bool):
+        if value and role in {"替代方案", "待确认补充项"}:
+            return "否"
+        if value and role == "措施/条件项" and source == "需现场确认":
+            return "否"
         return "是" if value else "否"
 
     text = cell_text(value).lower()
     if text in {"true", "1", "yes", "y", "是", "计入"}:
+        if role in {"替代方案", "待确认补充项"}:
+            return "否"
+        if role == "措施/条件项" and source == "需现场确认":
+            return "否"
         return "是"
     if text in {"false", "0", "no", "n", "否", "不计入"}:
         return "否"
 
-    role = cell_text(item_role)
     if role == "核心施工项":
-        return "是"
-    if role == "常见前置项":
-        return "是" if numeric_or_none(suggested_quantity) is not None else "否"
+        return "是" if quantity is not None else "否"
+    if role == "必要前置项":
+        return "是" if quantity is not None else "否"
     return "否"
 
 
@@ -1444,25 +1469,40 @@ def suggested_bill_from_llm_result(result: dict[str, Any], warnings: list[str] |
             continue
         if forbidden_source_keys & set(item.keys()):
             append_warning(warnings, "llm_source_fields_ignored")
-        item_role = bill_value(item, "item_role", "项目角色")
+        item_type = canonical_item_type(
+            first_bill_value(
+                item,
+                ("item_type", "建议项类型"),
+                ("item_role", "项目角色"),
+                ("recommend_type", "推荐类型"),
+            )
+        )
         suggested_quantity = bill_value(item, "suggested_quantity", "建议工程量")
+        quantity_source = bill_value(item, "quantity_source", "工程量来源")
+        quantity_note = first_bill_value(item, ("quantity_note", "工程量口径说明"))
+        if not cell_text(quantity_note):
+            quantity_note = merge_bill_notes(
+                item,
+                ("estimate_method", "计量/估算口径"),
+                ("quantity_basis", "工程量依据"),
+            )
         rows.append(
             {
                 "序号": bill_value(item, "seq", "序号") or index,
                 "family_id": bill_value(item, "family_id", "family_id"),
                 "candidate_id": bill_value(item, "candidate_id", "candidate_id"),
-                "推荐类型": bill_value(item, "recommend_type", "推荐类型"),
-                "项目角色": item_role,
-                "计量/估算口径": bill_value(item, "estimate_method", "计量/估算口径"),
+                "建议项类型": item_type,
                 "清单项名称": bill_value(item, "cost_item_name", "清单项名称"),
                 "项目特征/施工工艺": bill_value(item, "project_description", "项目特征/施工工艺"),
                 "单位": bill_value(item, "unit", "单位"),
+                "工程量来源": quantity_source,
                 "建议工程量": suggested_quantity,
-                "工程量依据": bill_value(item, "quantity_basis", "工程量依据"),
+                "工程量口径说明": quantity_note,
                 "是否计入金额汇总": normalize_include_in_amount(
                     bill_value(item, "include_in_amount", "是否计入金额汇总"),
-                    item_role,
+                    item_type,
                     suggested_quantity,
+                    quantity_source,
                 ),
                 "综合单价最低值": bill_value(item, "unit_price_low", "综合单价最低值"),
                 "综合单价中位数": bill_value(item, "unit_price_mid", "综合单价中位数"),
@@ -1482,9 +1522,9 @@ def suggested_bill_from_llm_result(result: dict[str, Any], warnings: list[str] |
                 "估算机械费最低值": bill_value(item, "estimated_machinery_amount_low", "估算机械费最低值"),
                 "估算机械费中位数": bill_value(item, "estimated_machinery_amount_mid", "估算机械费中位数"),
                 "估算机械费最高值": bill_value(item, "estimated_machinery_amount_high", "估算机械费最高值"),
-                "金额计算说明": bill_value(item, "amount_calc_note", "金额计算说明"),
-                "采用理由": bill_value(item, "adopt_reason", "采用理由"),
-                "不确定性说明": bill_value(item, "uncertainty_note", "不确定性说明"),
+                "金额计算口径": "",
+                "推荐依据": first_bill_value(item, ("recommendation_reason", "推荐依据"), ("adopt_reason", "采用理由")),
+                "需确认事项": first_bill_value(item, ("confirmation_note", "需确认事项"), ("uncertainty_note", "不确定性说明")),
                 "来源样本": "",
             }
         )
@@ -1507,14 +1547,13 @@ def fallback_suggested_bill(
                     "序号": len(rows) + 1,
                     "family_id": row.get("family_id", ""),
                     "candidate_id": candidate_id[0] if candidate_id else "",
-                    "推荐类型": "fallback_family",
-                    "项目角色": "补充候选项",
-                    "计量/估算口径": "LLM suggested_bill 生成失败，未判断估算口径",
+                    "建议项类型": "待确认补充项",
                     "清单项名称": row.get("representative_cost_item_name", ""),
                     "项目特征/施工工艺": row.get("representative_project_description", ""),
                     "单位": row.get("unit_normalized", "") or row.get("unit", ""),
+                    "工程量来源": "需现场确认",
                     "建议工程量": "",
-                    "工程量依据": "LLM suggested_bill 生成失败，未生成建议工程量",
+                    "工程量口径说明": "LLM suggested_bill 生成失败，未判断工程量口径",
                     "是否计入金额汇总": "否",
                     "综合单价最低值": row.get("历史综合单价最低值"),
                     "综合单价中位数": row.get("历史综合单价中位数"),
@@ -1534,9 +1573,9 @@ def fallback_suggested_bill(
                     "估算机械费最低值": "",
                     "估算机械费中位数": "",
                     "估算机械费最高值": "",
-                    "金额计算说明": "缺少 LLM 判断工程量，未计算估算金额",
-                    "采用理由": "LLM suggested_bill 生成失败，本行仅为候选族统计结果，不代表最终建议清单",
-                    "不确定性说明": "需修复 LLM 上下文或降低候选规模后重新生成",
+                    "金额计算口径": "缺少可计算工程量，暂不计算金额，仅保留历史单价参考",
+                    "推荐依据": "LLM suggested_bill 生成失败，本行仅为候选统计结果，不代表最终建议清单",
+                    "需确认事项": "需修复 LLM 上下文或降低候选规模后重新生成",
                     "来源样本": row.get("source_refs", ""),
                 }
             )
@@ -1554,14 +1593,13 @@ def fallback_suggested_bill(
                 "序号": len(rows) + 1,
                 "family_id": family_id_by_signature.get(cell_text(row.get("family_signature")), ""),
                 "candidate_id": row.get("candidate_id", ""),
-                "推荐类型": "fallback_candidate",
-                "项目角色": "补充候选项",
-                "计量/估算口径": "LLM suggested_bill 生成失败，未判断估算口径",
+                "建议项类型": "待确认补充项",
                 "清单项名称": row.get("cost_item_name", ""),
                 "项目特征/施工工艺": row.get("project_description", ""),
                 "单位": row.get("unit_normalized", "") or row.get("unit", ""),
+                "工程量来源": "需现场确认",
                 "建议工程量": "",
-                "工程量依据": "LLM suggested_bill 生成失败，未生成建议工程量",
+                "工程量口径说明": "LLM suggested_bill 生成失败，未判断工程量口径",
                 "是否计入金额汇总": "否",
                 "综合单价最低值": row.get("历史综合单价最低值"),
                 "综合单价中位数": row.get("历史综合单价中位数"),
@@ -1581,9 +1619,9 @@ def fallback_suggested_bill(
                 "估算机械费最低值": "",
                 "估算机械费中位数": "",
                 "估算机械费最高值": "",
-                "金额计算说明": "缺少 LLM 判断工程量，未计算估算金额",
-                "采用理由": "LLM suggested_bill 生成失败，本行仅为候选项统计结果，不代表最终建议清单",
-                "不确定性说明": "需修复 LLM 上下文或降低候选规模后重新生成",
+                "金额计算口径": "缺少可计算工程量，暂不计算金额，仅保留历史单价参考",
+                "推荐依据": "LLM suggested_bill 生成失败，本行仅为候选统计结果，不代表最终建议清单",
+                "需确认事项": "需修复 LLM 上下文或降低候选规模后重新生成",
                 "来源样本": row.get("source_refs", ""),
             }
         )
@@ -1635,6 +1673,28 @@ def calc_amount(quantity: Any, unit_price: Any) -> float | None:
     return round(quantity_number * price_number, 2)
 
 
+def build_amount_calc_note(row: pd.Series, source_id: str) -> str:
+    quantity = numeric_or_none(row.get("建议工程量"))
+    prices = [
+        numeric_or_none(row.get("综合单价最低值")),
+        numeric_or_none(row.get("综合单价中位数")),
+        numeric_or_none(row.get("综合单价最高值")),
+    ]
+    include_text = cell_text(row.get("是否计入金额汇总"))
+    if quantity is None:
+        note = "缺少可计算工程量，暂不计算金额，仅保留历史单价参考"
+    elif not any(price is not None for price in prices):
+        note = "缺少可计算工程量或历史单价，暂不计算金额，仅保留历史单价参考。"
+    else:
+        source = source_id or cell_text(row.get("family_id")) or cell_text(row.get("candidate_id")) or "候选项"
+        note = f"按建议工程量 × 历史综合单价区间计算；单价来自 {source} 的历史样本统计。"
+    if include_text == "否":
+        if not note.endswith(("。", "；")):
+            note = f"{note}。"
+        note = f"{note}本行不参与参考金额区间汇总。"
+    return note
+
+
 def postprocess_suggested_bill(
     suggested_bill: pd.DataFrame,
     candidate_item_stats: pd.DataFrame,
@@ -1653,10 +1713,18 @@ def postprocess_suggested_bill(
         if column not in output.columns:
             output[column] = ""
     for index, row in output.iterrows():
+        item_type = canonical_item_type(row.get("建议项类型") or row.get("项目角色") or row.get("推荐类型"))
+        if item_type and not cell_text(output.at[index, "建议项类型"]):
+            output.at[index, "建议项类型"] = item_type
+        if not cell_text(output.at[index, "工程量口径说明"]):
+            old_quantity_note = join_non_empty([row.get("计量/估算口径"), row.get("工程量依据")], limit=2)
+            if old_quantity_note:
+                output.at[index, "工程量口径说明"] = old_quantity_note
         output.at[index, "是否计入金额汇总"] = normalize_include_in_amount(
             row.get("是否计入金额汇总"),
-            row.get("项目角色"),
+            item_type,
             row.get("建议工程量"),
+            row.get("工程量来源"),
         )
     stats["是否被LLM采用"] = ""
     candidate_map = {cell_text(row.get("candidate_id")): row for _index, row in stats.iterrows()}
@@ -1736,6 +1804,7 @@ def postprocess_suggested_bill(
                 for amount_column, _price_column in amount_pairs:
                     output.at[index, amount_column] = ""
                 output.at[index, "来源样本"] = ""
+                output.at[index, "金额计算口径"] = build_amount_calc_note(output.loc[index], "")
                 continue
 
         if matched_stats is None and candidate is not None:
@@ -1756,6 +1825,7 @@ def postprocess_suggested_bill(
             for amount_column, _price_column in amount_pairs:
                 output.at[index, amount_column] = ""
             output.at[index, "来源样本"] = ""
+            output.at[index, "金额计算口径"] = build_amount_calc_note(output.loc[index], "")
             continue
 
         if candidate_id and candidate_id not in adopted_candidate_ids and candidate_id in candidate_map:
@@ -1790,6 +1860,9 @@ def postprocess_suggested_bill(
             if not numbers_close(output.at[index, amount_column], calculated):
                 append_warning(warnings, "llm_amount_overridden_by_program_calculation")
                 output.at[index, amount_column] = calculated
+
+        source_id = family_id or candidate_id
+        output.at[index, "金额计算口径"] = build_amount_calc_note(output.loc[index], source_id)
 
     if not output.empty:
         output["序号"] = range(1, len(output) + 1)
@@ -1923,33 +1996,55 @@ def build_estimate_summary(
         else:
             quantity_texts.append(f"工程量约 {value_text}")
 
-    demand_parts = []
+    demand_parts = [f"用户需求为“{rewrite.raw_query}”"]
     if rewrite.repair_object:
-        demand_parts.append(f"用户拟对{rewrite.repair_object}进行维修")
-    else:
-        demand_parts.append(f"用户需求为“{rewrite.raw_query}”")
+        demand_parts.append(f"维修对象为{rewrite.repair_object}")
     if rewrite.materials_or_specs:
         demand_parts.append(f"涉及{join_non_empty(rewrite.materials_or_specs)}")
     if quantity_texts:
         demand_parts.append(f"明确{join_non_empty(quantity_texts)}")
     demand_understanding = "，".join(demand_parts) + "。"
 
-    suggested_reference_items = join_non_empty(suggested_bill["清单项名称"].tolist(), limit=20)
-    if suggested_reference_items:
-        suggested_reference_items += "。"
+    catalog_parts = [
+        f"catalog_id={query_catalog.catalog_id or '未匹配'}",
+        f"一级分类={query_catalog.一级分类 or '未匹配'}",
+        f"二级分类={query_catalog.二级分类 or '未匹配'}",
+        f"维修状态={query_catalog.维修状态 or '未匹配'}",
+        f"标准对象={query_catalog.标准对象 or '未匹配'}",
+    ]
+    catalog_summary = "；".join(catalog_parts) + "。"
+
+    overview_parts: list[str] = []
+    for item_type in ["核心施工项", "必要前置项", "恢复/收尾项", "措施/条件项", "替代方案", "待确认补充项"]:
+        if "建议项类型" not in suggested_bill.columns or "清单项名称" not in suggested_bill.columns:
+            continue
+        names = suggested_bill[suggested_bill["建议项类型"].map(canonical_item_type).eq(item_type)]["清单项名称"].tolist()
+        text = join_non_empty(names, limit=6)
+        if text:
+            overview_parts.append(f"{item_type}：{text}")
+    if overview_parts:
+        suggested_overview = "；".join(overview_parts) + "。"
     else:
-        suggested_reference_items = "当前未形成可展示的建议清单项。"
+        suggested_overview = "当前未形成可展示的建议方案概览。"
 
     amount_bill = suggested_bill.copy()
     if "是否计入金额汇总" not in amount_bill.columns:
         amount_bill["是否计入金额汇总"] = ""
     for index, row in amount_bill.iterrows():
+        item_type = row.get("建议项类型") or row.get("项目角色") or row.get("推荐类型")
         amount_bill.at[index, "是否计入金额汇总"] = normalize_include_in_amount(
             row.get("是否计入金额汇总"),
-            row.get("项目角色"),
+            item_type,
             row.get("建议工程量"),
+            row.get("工程量来源"),
         )
     amount_bill = amount_bill[amount_bill["是否计入金额汇总"].map(cell_text).eq("是")]
+
+    included_items = join_non_empty(amount_bill["清单项名称"].tolist(), limit=20) if "清单项名称" in amount_bill.columns else ""
+    if included_items:
+        included_items_text = included_items + "。"
+    else:
+        included_items_text = "当前没有清单项计入金额汇总。"
 
     low_amount = amount_sum(amount_bill, "估算金额最低值")
     mid_amount = amount_sum(amount_bill, "估算金额中位数")
@@ -1975,7 +2070,9 @@ def build_estimate_summary(
         amount_range = "当前没有可计入金额汇总的可计算项目，暂不汇总总价，仅提供历史单价参考。"
 
     confirmation_values = []
-    for value in [*rewrite.uncertainties, *suggested_bill["不确定性说明"].tolist()]:
+    confirmation_column = "需确认事项" if "需确认事项" in suggested_bill.columns else "不确定性说明"
+    suggested_confirmations = suggested_bill[confirmation_column].tolist() if confirmation_column in suggested_bill.columns else []
+    for value in [*rewrite.uncertainties, *suggested_confirmations]:
         text = cell_text(value).strip("。；; ")
         if text.endswith("未知"):
             text = text[:-2]
@@ -1997,7 +2094,9 @@ def build_estimate_summary(
 
     rows = [
         ("需求理解", demand_understanding),
-        ("建议参考清单", suggested_reference_items),
+        ("匹配分类", catalog_summary),
+        ("建议方案概览", suggested_overview),
+        ("计入金额项目", included_items_text),
         ("参考金额区间", amount_range),
         ("需现场确认", site_confirmation),
     ]

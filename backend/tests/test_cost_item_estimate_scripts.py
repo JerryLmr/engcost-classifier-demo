@@ -567,18 +567,34 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "seq": 1,
                     "family_id": "F001",
                     "candidate_id": "C001",
-                    "recommend_type": "直接匹配项",
-                    "item_role": "核心施工项",
-                    "estimate_method": "按面积线性估算",
+                    "item_type": "核心施工项",
                     "cost_item_name": "屋面卷材防水",
                     "project_description": "3mm SBS",
                     "unit": "m²",
+                    "quantity_source": "用户明确给定",
                     "suggested_quantity": 500,
+                    "quantity_note": "按用户明确面积作为工程量",
                     "include_in_amount": True,
+                    "recommendation_reason": "直接解决屋面防水需求",
+                    "confirmation_note": "需确认基层条件",
                     "unit_price_low": 80,
                     "labor_unit_price_mid": 20,
                     "estimated_labor_amount_mid": 10000,
                     "source_refs": ["SHOULD_IGNORE"],
+                },
+                {
+                    "seq": 2,
+                    "family_id": "F002",
+                    "candidate_id": "C002",
+                    "item_role": "常见前置项",
+                    "estimate_method": "按核心面积推导",
+                    "quantity_basis": "旧层拆除范围与维修范围一致",
+                    "cost_item_name": "防水层拆除",
+                    "project_description": "拆除原防水层",
+                    "unit": "m²",
+                    "suggested_quantity": 500,
+                    "adopt_reason": "核心施工前通常需要拆除旧层",
+                    "uncertainty_note": "需确认旧层是否全部拆除",
                 }
             ]
         }
@@ -589,11 +605,20 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(bill.columns.tolist(), query_estimate_llm.SUGGESTED_BILL_COLUMNS)
         self.assertEqual(bill.loc[0, "family_id"], "F001")
         self.assertEqual(bill.loc[0, "candidate_id"], "C001")
-        self.assertEqual(bill.loc[0, "项目角色"], "核心施工项")
+        self.assertEqual(bill.loc[0, "建议项类型"], "核心施工项")
+        self.assertEqual(bill.loc[0, "工程量来源"], "用户明确给定")
+        self.assertEqual(bill.loc[0, "工程量口径说明"], "按用户明确面积作为工程量")
         self.assertEqual(bill.loc[0, "是否计入金额汇总"], "是")
         self.assertEqual(bill.loc[0, "其中包含人工费单价中位数"], 20)
         self.assertEqual(bill.loc[0, "估算人工费中位数"], 10000)
+        self.assertEqual(bill.loc[0, "金额计算口径"], "")
+        self.assertEqual(bill.loc[0, "推荐依据"], "直接解决屋面防水需求")
+        self.assertEqual(bill.loc[0, "需确认事项"], "需确认基层条件")
         self.assertEqual(bill.loc[0, "来源样本"], "")
+        self.assertEqual(bill.loc[1, "建议项类型"], "必要前置项")
+        self.assertEqual(bill.loc[1, "工程量口径说明"], "按核心面积推导；旧层拆除范围与维修范围一致")
+        self.assertEqual(bill.loc[1, "推荐依据"], "核心施工前通常需要拆除旧层")
+        self.assertEqual(bill.loc[1, "需确认事项"], "需确认旧层是否全部拆除")
         self.assertIn("llm_source_fields_ignored", warnings)
 
         fallback = query_estimate_llm.fallback_suggested_bill(
@@ -612,45 +637,65 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 ]
             )
         )
-        self.assertEqual(fallback.loc[0, "推荐类型"], "fallback_candidate")
+        self.assertEqual(fallback.loc[0, "建议项类型"], "待确认补充项")
+        self.assertEqual(fallback.loc[0, "工程量来源"], "需现场确认")
+        self.assertEqual(fallback.loc[0, "工程量口径说明"], "LLM suggested_bill 生成失败，未判断工程量口径")
         self.assertEqual(fallback.loc[0, "是否计入金额汇总"], "否")
-        self.assertIn("不代表最终建议清单", fallback.loc[0, "采用理由"])
-        self.assertEqual(fallback.loc[0, "不确定性说明"], "需修复 LLM 上下文或降低候选规模后重新生成")
+        self.assertEqual(fallback.loc[0, "金额计算口径"], "缺少可计算工程量，暂不计算金额，仅保留历史单价参考")
+        self.assertIn("不代表最终建议清单", fallback.loc[0, "推荐依据"])
+        self.assertEqual(fallback.loc[0, "需确认事项"], "需修复 LLM 上下文或降低候选规模后重新生成")
         self.assertEqual(fallback.loc[0, "来源样本"], "batch-a::2::2-1")
 
-    def test_include_in_amount_defaults_by_item_role(self):
+    def test_include_in_amount_defaults_by_item_type(self):
         result = {
             "suggested_bill": [
                 {
                     "seq": 1,
                     "family_id": "F001",
-                    "item_role": "核心施工项",
+                    "item_type": "核心施工项",
                     "suggested_quantity": 10,
                 },
                 {
                     "seq": 2,
                     "family_id": "F002",
-                    "item_role": "常见前置项",
+                    "item_type": "必要前置项",
                     "suggested_quantity": 10,
                 },
                 {
                     "seq": 3,
                     "family_id": "F003",
-                    "item_role": "常见前置项",
+                    "item_type": "恢复/收尾项",
                     "suggested_quantity": None,
                 },
                 {
                     "seq": 4,
                     "family_id": "F004",
-                    "item_role": "可选/替代工艺",
+                    "item_type": "替代方案",
                     "suggested_quantity": 10,
+                    "include_in_amount": True,
+                },
+                {
+                    "seq": 5,
+                    "family_id": "F005",
+                    "item_type": "措施/条件项",
+                    "quantity_source": "需现场确认",
+                    "suggested_quantity": 1,
+                    "include_in_amount": True,
+                },
+                {
+                    "seq": 6,
+                    "family_id": "F006",
+                    "item_type": "措施/条件项",
+                    "quantity_source": "历史常见数量参考",
+                    "suggested_quantity": 1,
+                    "include_in_amount": True,
                 },
             ]
         }
 
         bill = query_estimate_llm.suggested_bill_from_llm_result(result)
 
-        self.assertEqual(bill["是否计入金额汇总"].tolist(), ["是", "是", "否", "否"])
+        self.assertEqual(bill["是否计入金额汇总"].tolist(), ["是", "是", "否", "否", "否", "是"])
 
     def test_postprocess_overrides_prices_amounts_and_marks_adoption(self):
         stats = pd.DataFrame(
@@ -681,22 +726,22 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {
                     "序号": 1,
                     "candidate_id": "C001",
-                    "推荐类型": "直接匹配项",
-                    "项目角色": "核心施工项",
-                    "计量/估算口径": "按面积估算",
+                    "建议项类型": "核心施工项",
                     "清单项名称": "屋面卷材防水",
                     "项目特征/施工工艺": "3mm SBS",
                     "单位": "m²",
+                    "工程量来源": "用户明确给定",
                     "建议工程量": 10,
-                    "工程量依据": "用户给定",
+                    "工程量口径说明": "按用户明确面积作为工程量",
                     "综合单价最低值": 1,
                     "综合单价中位数": 2,
                     "综合单价最高值": 3,
                     "估算金额最低值": 1,
                     "估算金额中位数": 2,
                     "估算金额最高值": 3,
-                    "采用理由": "",
-                    "不确定性说明": "",
+                    "金额计算口径": "LLM 不应覆盖",
+                    "推荐依据": "",
+                    "需确认事项": "",
                 }
             ],
             columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS,
@@ -708,6 +753,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(processed_bill.loc[0, "综合单价最低值"], 80)
         self.assertEqual(processed_bill.loc[0, "估算金额中位数"], 900)
         self.assertEqual(processed_bill.loc[0, "其中包含机械费单价中位数"], "")
+        self.assertIn("按建议工程量 × 历史综合单价区间计算", processed_bill.loc[0, "金额计算口径"])
+        self.assertIn("C001", processed_bill.loc[0, "金额计算口径"])
+        self.assertNotIn("LLM 不应覆盖", processed_bill.loc[0, "金额计算口径"])
         self.assertEqual(processed_bill.loc[0, "来源样本"], "batch-a::2::2-1")
         self.assertEqual(processed_stats.loc[0, "是否被LLM采用"], "是")
         self.assertIn("llm_unit_price_overridden_by_candidate_stats", warnings)
@@ -781,28 +829,27 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "序号": 1,
                     "family_id": "F001",
                     "candidate_id": "C002",
-                    "推荐类型": "直接匹配项",
-                    "项目角色": "核心施工项",
-                    "计量/估算口径": "按面积估算",
+                    "建议项类型": "核心施工项",
                     "清单项名称": "",
                     "项目特征/施工工艺": "",
                     "单位": "",
+                    "工程量来源": "用户明确给定",
                     "建议工程量": 10,
-                    "工程量依据": "用户给定",
+                    "工程量口径说明": "按用户明确面积作为工程量",
                     "综合单价最低值": 1,
                     "综合单价中位数": 2,
                     "综合单价最高值": 3,
                     "估算金额最低值": 1,
                     "估算金额中位数": 2,
                     "估算金额最高值": 3,
-                    "采用理由": "",
-                    "不确定性说明": "",
+                    "推荐依据": "",
+                    "需确认事项": "",
                 },
                 {
                     "序号": 2,
                     "family_id": "F001",
                     "candidate_id": "C001",
-                    "推荐类型": "重复项",
+                    "建议项类型": "核心施工项",
                     "建议工程量": 10,
                 },
             ],
@@ -818,6 +865,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(processed_bill.loc[0, "清单项名称"], "屋面卷材防水")
         self.assertEqual(processed_bill.loc[0, "综合单价中位数"], 100)
         self.assertEqual(processed_bill.loc[0, "估算金额中位数"], 1000)
+        self.assertIn("F001", processed_bill.loc[0, "金额计算口径"])
         self.assertEqual(processed_bill.loc[0, "来源样本"], "batch-a::2::2-1, batch-a::5::5-1")
         self.assertEqual(processed_stats["是否被LLM采用"].tolist(), ["是", "是"])
         self.assertIn("duplicate_family_id_dropped", warnings)
@@ -834,32 +882,34 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             notes=[],
             success=True,
         )
-        catalog = query_estimate_llm.QueryCatalog("", "", "", "", "", None, {}, False, [])
+        catalog = query_estimate_llm.QueryCatalog("CP-002-03", "屋面", "防水层", "维修", "共用部位", None, {}, True, [])
         suggested_bill = pd.DataFrame(
             [
                 {
                     "序号": 1,
                     "family_id": "F001",
-                    "项目角色": "核心施工项",
+                    "建议项类型": "核心施工项",
                     "清单项名称": "核心做法",
+                    "工程量来源": "用户明确给定",
                     "建议工程量": 10,
                     "是否计入金额汇总": "是",
                     "估算金额最低值": 100,
                     "估算金额中位数": 100,
                     "估算金额最高值": 100,
-                    "不确定性说明": "核心范围需确认",
+                    "需确认事项": "核心范围需确认",
                 },
                 {
                     "序号": 2,
                     "family_id": "F002",
-                    "项目角色": "可选/替代工艺",
+                    "建议项类型": "替代方案",
                     "清单项名称": "替代做法",
+                    "工程量来源": "用户明确给定",
                     "建议工程量": 10,
                     "是否计入金额汇总": "否",
                     "估算金额最低值": 1000,
                     "估算金额中位数": 1000,
                     "估算金额最高值": 1000,
-                    "不确定性说明": "替代方案需确认",
+                    "需确认事项": "替代方案需确认",
                 },
             ],
             columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS,
@@ -868,8 +918,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         summary = query_estimate_llm.build_estimate_summary(rewrite, catalog, suggested_bill)
         values = dict(summary.values.tolist())
 
-        self.assertIn("核心做法", values["建议参考清单"])
-        self.assertIn("替代做法", values["建议参考清单"])
+        self.assertEqual(summary["字段"].tolist(), ["需求理解", "匹配分类", "建议方案概览", "计入金额项目", "参考金额区间", "需现场确认"])
+        self.assertIn("catalog_id=CP-002-03", values["匹配分类"])
+        self.assertIn("核心施工项：核心做法", values["建议方案概览"])
+        self.assertIn("替代方案：替代做法", values["建议方案概览"])
+        self.assertIn("核心做法", values["计入金额项目"])
+        self.assertNotIn("替代做法", values["计入金额项目"])
         self.assertIn("100.00 - 100.00", values["参考金额区间"])
         self.assertNotIn("1,100.00", values["参考金额区间"])
         self.assertIn("替代方案", values["需现场确认"])
@@ -887,13 +941,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                         "序号": 1,
                         "family_id": "F001",
                         "candidate_id": "C001",
-                        "推荐类型": "直接匹配项",
-                        "项目角色": "核心施工项",
-                        "计量/估算口径": "按面积估算",
+                        "建议项类型": "核心施工项",
                         "清单项名称": "屋面卷材防水",
                         "项目特征/施工工艺": "3mm SBS",
                         "单位": "m²",
+                        "工程量来源": "用户明确给定",
                         "建议工程量": 500,
+                        "工程量口径说明": "按用户明确面积作为工程量",
                         "来源样本": "batch-a::2::2-1",
                     }
                 ],
