@@ -1282,29 +1282,30 @@ JSON 格式：
 - LLM 负责判断 item_type、quantity_source、quantity_note、include_in_amount、recommendation_reason、confirmation_note。
 - LLM 不负责生成最终金额计算说明，不要输出金额计算相关字段。
 - 历史综合单价、人工单价、机械单价由程序根据 family_id/candidate_id 回填；金额数值由程序计算。不要自行估价，不要输出单价或金额字段。
-- item_type 只能使用：核心施工项、必要前置项、恢复/收尾项、措施/条件项、替代方案、待确认补充项。
+- item_type 只能使用：核心施工项、常见前置项、恢复/收尾项、措施/条件项、可选/替代工艺、补充候选项。
 - item_type 含义：
-  1. 核心施工项：直接解决用户需求的主要施工内容，工程量明确时通常计入金额。
-  2. 必要前置项：核心施工前通常必须发生的拆除、铲除、基层处理等，工程量明确时可计入金额。
-  3. 恢复/收尾项：恢复原状、饰面恢复、回填、调试、验收等，工程量明确时才计入金额。
-  4. 措施/条件项：登高车、垂直运输、脚手架、吊篮、机械进出场、垃圾清运等，默认需现场确认，不按面积直接线性估算。
-  5. 替代方案：与核心施工项解决同一目标的其他材料、规格或工艺，默认不计入金额。
-  6. 待确认补充项：可能相关但现场条件不足的补充候选，默认不计入金额。
+  1. 核心施工项：直接解决用户需求的主要维修、更新、改造内容。
+  2. 常见前置项：核心施工前经常需要发生的拆除、清理、检测、基层处理、开挖、保护等。只有在用户明确提出或工程量可合理推导时才计入金额。
+  3. 恢复/收尾项：核心施工后恢复原状、饰面恢复、回填、调试、试运行、验收等。工程量不明确时不计入金额。
+  4. 措施/条件项：为完成施工所需的脚手架、吊篮、垂直运输、登高车、机械设备进出场及安拆、吊装、安全文明、临时设施、垃圾清运等。没有明确数量或条件时不计入金额。
+  5. 可选/替代工艺：与核心施工项解决同一目标，但属于不同材料、规格、设备型号或技术路线；或属于用户未明确要求的附加层、加强层、节点处理、局部补充做法。默认不计入金额。
+  6. 补充候选项：可能相关但证据不足、现场条件不足、工程量无法确定，暂不作为主要建议项。默认不计入金额。
 - quantity_source 只能使用：用户明确给定、由用户面积推导、历史常见数量参考、需现场确认、不可可靠估算。
 - 工程量来源规则：
   1. 用户明确给出面积，且本行单位为 m²/㎡，并与维修对象直接对应时，可使用“用户明确给定”。
   2. 拆除类面积项，如果用户明确说旧层铲除/拆除，可用“由用户面积推导”；如果拆除范围不明确，应在 quantity_note 或 confirmation_note 说明是假设或需现场确认。
   3. 台次、项、套、部、台班、车次等非面积单位，不要按用户面积线性推导；没有明确数量时应使用“需现场确认”或“历史常见数量参考”，并且 include_in_amount=false。
   4. 历史工程量只能作为参考，不要直接当成本次工程量，除非用户条件明确匹配。
-  5. 替代方案默认 include_in_amount=false。
-- include_in_amount=true 表示该行金额参与 estimate_summary 的总金额区间汇总；include_in_amount=false 表示该行只是建议参考、待确认项或替代方案，不参与总金额汇总。
+  5. 可选/替代工艺默认 include_in_amount=false。
+- 对于可选/替代工艺、补充候选项、附加层/加强层/节点处理类候选，不要默认使用用户总面积作为建议工程量；除非用户明确说明该做法按全范围施工，否则 suggested_quantity 应留空，quantity_source 使用“需现场确认”或“不可可靠估算”。
+- include_in_amount=true 表示该行金额参与 estimate_summary 的总金额区间汇总；include_in_amount=false 表示该行只是建议参考、补充候选项或可选/替代工艺，不参与总金额汇总。
 - include_in_amount 判断规则：
   1. 核心施工项 + 有建议工程量：默认 true。
-  2. 必要前置项 + 有建议工程量：默认 true。
-  3. 恢复/收尾项：默认 false，除非现场条件和工程量明确。
-  4. 措施/条件项：默认 false；只有明确数量且 quantity_source 不是“需现场确认”时才可 true。
-  5. 替代方案、待确认补充项：默认 false。
-- 同一目标的替代方案默认只选择最匹配用户需求的一项；其它可作为待确认或替代参考，不进入金额汇总。
+  2. 常见前置项 + 有建议工程量：默认 true。
+  3. 恢复/收尾项：默认 false；只有明确 include_in_amount=true 且 quantity_source 不是“需现场确认”时才可 true。
+  4. 措施/条件项：默认 false；只有明确 include_in_amount=true 且 quantity_source 不是“需现场确认”时才可 true。
+  5. 可选/替代工艺、补充候选项：默认 false。
+- 同一目标的可选/替代工艺默认只选择最匹配用户需求的一项；其它可作为补充候选或替代参考，不进入金额汇总。
 - 不要输出 source_ref、source_refs、evidence_ref、evidence_refs、stable_sample_id、project_key、item_key 或任何来源编号。
 - recommendation_reason 要写清楚为什么采用该 candidate/family，特别是它在建议方案中的作用，而不是只写“与需求匹配”。
 - confirmation_note 要说明现场需要确认什么，例如施工范围、材料规格、设备型号、基层或原状条件、施工高度、运输距离、临时措施、恢复范围、调试验收要求等是否明确。
@@ -1408,11 +1409,11 @@ def merge_bill_notes(item: dict[str, Any], *keys: tuple[str, str]) -> str:
 def canonical_item_type(value: Any) -> str:
     text = cell_text(value)
     aliases = {
-        "常见前置项": "必要前置项",
-        "可选/替代工艺": "替代方案",
-        "补充候选项": "待确认补充项",
-        "fallback_family": "待确认补充项",
-        "fallback_candidate": "待确认补充项",
+        "必要前置项": "常见前置项",
+        "替代方案": "可选/替代工艺",
+        "待确认补充项": "补充候选项",
+        "fallback_family": "补充候选项",
+        "fallback_candidate": "补充候选项",
         "直接匹配项": "核心施工项",
     }
     return aliases.get(text, text)
@@ -1424,17 +1425,17 @@ def normalize_include_in_amount(value: Any, item_type: Any, suggested_quantity: 
     source = cell_text(quantity_source)
 
     if isinstance(value, bool):
-        if value and role in {"替代方案", "待确认补充项"}:
+        if value and role in {"可选/替代工艺", "补充候选项"}:
             return "否"
-        if value and role == "措施/条件项" and source == "需现场确认":
+        if value and role in {"恢复/收尾项", "措施/条件项"} and source == "需现场确认":
             return "否"
         return "是" if value else "否"
 
     text = cell_text(value).lower()
     if text in {"true", "1", "yes", "y", "是", "计入"}:
-        if role in {"替代方案", "待确认补充项"}:
+        if role in {"可选/替代工艺", "补充候选项"}:
             return "否"
-        if role == "措施/条件项" and source == "需现场确认":
+        if role in {"恢复/收尾项", "措施/条件项"} and source == "需现场确认":
             return "否"
         return "是"
     if text in {"false", "0", "no", "n", "否", "不计入"}:
@@ -1442,7 +1443,7 @@ def normalize_include_in_amount(value: Any, item_type: Any, suggested_quantity: 
 
     if role == "核心施工项":
         return "是" if quantity is not None else "否"
-    if role == "必要前置项":
+    if role == "常见前置项":
         return "是" if quantity is not None else "否"
     return "否"
 
@@ -1547,7 +1548,7 @@ def fallback_suggested_bill(
                     "序号": len(rows) + 1,
                     "family_id": row.get("family_id", ""),
                     "candidate_id": candidate_id[0] if candidate_id else "",
-                    "建议项类型": "待确认补充项",
+                    "建议项类型": "补充候选项",
                     "清单项名称": row.get("representative_cost_item_name", ""),
                     "项目特征/施工工艺": row.get("representative_project_description", ""),
                     "单位": row.get("unit_normalized", "") or row.get("unit", ""),
@@ -1593,7 +1594,7 @@ def fallback_suggested_bill(
                 "序号": len(rows) + 1,
                 "family_id": family_id_by_signature.get(cell_text(row.get("family_signature")), ""),
                 "candidate_id": row.get("candidate_id", ""),
-                "建议项类型": "待确认补充项",
+                "建议项类型": "补充候选项",
                 "清单项名称": row.get("cost_item_name", ""),
                 "项目特征/施工工艺": row.get("project_description", ""),
                 "单位": row.get("unit_normalized", "") or row.get("unit", ""),
@@ -1714,7 +1715,7 @@ def postprocess_suggested_bill(
             output[column] = ""
     for index, row in output.iterrows():
         item_type = canonical_item_type(row.get("建议项类型") or row.get("项目角色") or row.get("推荐类型"))
-        if item_type and not cell_text(output.at[index, "建议项类型"]):
+        if item_type:
             output.at[index, "建议项类型"] = item_type
         if not cell_text(output.at[index, "工程量口径说明"]):
             old_quantity_note = join_non_empty([row.get("计量/估算口径"), row.get("工程量依据")], limit=2)
@@ -2015,7 +2016,7 @@ def build_estimate_summary(
     catalog_summary = "；".join(catalog_parts) + "。"
 
     overview_parts: list[str] = []
-    for item_type in ["核心施工项", "必要前置项", "恢复/收尾项", "措施/条件项", "替代方案", "待确认补充项"]:
+    for item_type in ["核心施工项", "常见前置项", "恢复/收尾项", "措施/条件项", "可选/替代工艺", "补充候选项"]:
         if "建议项类型" not in suggested_bill.columns or "清单项名称" not in suggested_bill.columns:
             continue
         names = suggested_bill[suggested_bill["建议项类型"].map(canonical_item_type).eq(item_type)]["清单项名称"].tolist()

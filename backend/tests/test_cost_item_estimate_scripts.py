@@ -615,7 +615,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(bill.loc[0, "推荐依据"], "直接解决屋面防水需求")
         self.assertEqual(bill.loc[0, "需确认事项"], "需确认基层条件")
         self.assertEqual(bill.loc[0, "来源样本"], "")
-        self.assertEqual(bill.loc[1, "建议项类型"], "必要前置项")
+        self.assertEqual(bill.loc[1, "建议项类型"], "常见前置项")
         self.assertEqual(bill.loc[1, "工程量口径说明"], "按核心面积推导；旧层拆除范围与维修范围一致")
         self.assertEqual(bill.loc[1, "推荐依据"], "核心施工前通常需要拆除旧层")
         self.assertEqual(bill.loc[1, "需确认事项"], "需确认旧层是否全部拆除")
@@ -637,7 +637,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 ]
             )
         )
-        self.assertEqual(fallback.loc[0, "建议项类型"], "待确认补充项")
+        self.assertEqual(fallback.loc[0, "建议项类型"], "补充候选项")
         self.assertEqual(fallback.loc[0, "工程量来源"], "需现场确认")
         self.assertEqual(fallback.loc[0, "工程量口径说明"], "LLM suggested_bill 生成失败，未判断工程量口径")
         self.assertEqual(fallback.loc[0, "是否计入金额汇总"], "否")
@@ -658,7 +658,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {
                     "seq": 2,
                     "family_id": "F002",
-                    "item_type": "必要前置项",
+                    "item_type": "常见前置项",
                     "suggested_quantity": 10,
                 },
                 {
@@ -670,7 +670,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {
                     "seq": 4,
                     "family_id": "F004",
-                    "item_type": "替代方案",
+                    "item_type": "可选/替代工艺",
                     "suggested_quantity": 10,
                     "include_in_amount": True,
                 },
@@ -690,12 +690,20 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "suggested_quantity": 1,
                     "include_in_amount": True,
                 },
+                {
+                    "seq": 7,
+                    "family_id": "F007",
+                    "item_type": "恢复/收尾项",
+                    "quantity_source": "用户明确给定",
+                    "suggested_quantity": 1,
+                    "include_in_amount": True,
+                },
             ]
         }
 
         bill = query_estimate_llm.suggested_bill_from_llm_result(result)
 
-        self.assertEqual(bill["是否计入金额汇总"].tolist(), ["是", "是", "否", "否", "否", "是"])
+        self.assertEqual(bill["是否计入金额汇总"].tolist(), ["是", "是", "否", "否", "否", "是", "是"])
 
     def test_postprocess_overrides_prices_amounts_and_marks_adoption(self):
         stats = pd.DataFrame(
@@ -901,7 +909,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {
                     "序号": 2,
                     "family_id": "F002",
-                    "建议项类型": "替代方案",
+                    "建议项类型": "可选/替代工艺",
                     "清单项名称": "替代做法",
                     "工程量来源": "用户明确给定",
                     "建议工程量": 10,
@@ -909,7 +917,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "估算金额最低值": 1000,
                     "估算金额中位数": 1000,
                     "估算金额最高值": 1000,
-                    "需确认事项": "替代方案需确认",
+                    "需确认事项": "可选/替代工艺需确认",
                 },
             ],
             columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS,
@@ -921,12 +929,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(summary["字段"].tolist(), ["需求理解", "匹配分类", "建议方案概览", "计入金额项目", "参考金额区间", "需现场确认"])
         self.assertIn("catalog_id=CP-002-03", values["匹配分类"])
         self.assertIn("核心施工项：核心做法", values["建议方案概览"])
-        self.assertIn("替代方案：替代做法", values["建议方案概览"])
+        self.assertIn("可选/替代工艺：替代做法", values["建议方案概览"])
         self.assertIn("核心做法", values["计入金额项目"])
         self.assertNotIn("替代做法", values["计入金额项目"])
         self.assertIn("100.00 - 100.00", values["参考金额区间"])
         self.assertNotIn("1,100.00", values["参考金额区间"])
-        self.assertIn("替代方案", values["需现场确认"])
+        self.assertIn("可选/替代工艺", values["需现场确认"])
 
     def test_write_query_result_workbook_has_new_eight_sheets(self):
         rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], [], "", [], [], True)
