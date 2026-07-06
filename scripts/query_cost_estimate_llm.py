@@ -149,6 +149,7 @@ SUGGESTED_BILL_COLUMNS = [
     "单位",
     "建议工程量",
     "工程量依据",
+    "是否计入金额汇总",
     "综合单价最低值",
     "综合单价中位数",
     "综合单价最高值",
@@ -1266,6 +1267,7 @@ JSON 格式：
       "unit": "",
       "suggested_quantity": null,
       "quantity_basis": "",
+      "include_in_amount": true,
       "unit_price_low": null,
       "unit_price_mid": null,
       "unit_price_high": null,
@@ -1298,6 +1300,12 @@ JSON 格式：
 - candidate_item_stats 只作为细粒度参考，用于理解 family 覆盖的明细候选，不作为优先选择入口。
 - suggested_bill 默认输出 3-6 行。除非 candidate_families 和 candidate_item_stats 中确实没有可用候选，否则不要只输出 1-2 行。
 - 不要只选择同一种清单项的多个近似重复项。对于语义高度重复的候选族，只选择最能代表本次需求的一项；优先选择 final_score 高、历史样本数多、项目特征更匹配用户需求的 family。
+- 必须输出 include_in_amount。include_in_amount=true 表示该行金额参与 estimate_summary 的总金额区间汇总；include_in_amount=false 表示该行只是建议参考、待确认项或替代方案，不参与总金额汇总。
+- include_in_amount 规则：
+  1. 核心施工项：如果工程量明确，通常 include_in_amount=true。
+  2. 常见前置项：如果工程量可由用户明确工程量合理推导，可以 include_in_amount=true；否则 false。
+  3. 恢复/收尾项、措施/条件项：工程量或计价口径不明确时 include_in_amount=false。
+  4. 可选/替代工艺：默认 include_in_amount=false，除非用户明确选择该工艺作为核心方案。
 - 生成 suggested_bill 时按跨目录通用候选角色判断：
   1. 核心施工项：直接解决用户需求的主要维修、更新、改造内容。
   2. 常见前置项：核心施工前通常需要发生的拆除、清理、检测、基层处理、开挖、保护等。
@@ -1396,6 +1404,24 @@ def bill_value(item: dict[str, Any], english_key: str, chinese_key: str = "") ->
     return ""
 
 
+def normalize_include_in_amount(value: Any, item_role: Any, suggested_quantity: Any) -> str:
+    if isinstance(value, bool):
+        return "是" if value else "否"
+
+    text = cell_text(value).lower()
+    if text in {"true", "1", "yes", "y", "是", "计入"}:
+        return "是"
+    if text in {"false", "0", "no", "n", "否", "不计入"}:
+        return "否"
+
+    role = cell_text(item_role)
+    if role == "核心施工项":
+        return "是"
+    if role == "常见前置项":
+        return "是" if numeric_or_none(suggested_quantity) is not None else "否"
+    return "否"
+
+
 def suggested_bill_from_llm_result(result: dict[str, Any], warnings: list[str] | None = None) -> pd.DataFrame:
     bill = result.get("suggested_bill")
     if not isinstance(bill, list):
@@ -1418,19 +1444,26 @@ def suggested_bill_from_llm_result(result: dict[str, Any], warnings: list[str] |
             continue
         if forbidden_source_keys & set(item.keys()):
             append_warning(warnings, "llm_source_fields_ignored")
+        item_role = bill_value(item, "item_role", "项目角色")
+        suggested_quantity = bill_value(item, "suggested_quantity", "建议工程量")
         rows.append(
             {
                 "序号": bill_value(item, "seq", "序号") or index,
                 "family_id": bill_value(item, "family_id", "family_id"),
                 "candidate_id": bill_value(item, "candidate_id", "candidate_id"),
                 "推荐类型": bill_value(item, "recommend_type", "推荐类型"),
-                "项目角色": bill_value(item, "item_role", "项目角色"),
+                "项目角色": item_role,
                 "计量/估算口径": bill_value(item, "estimate_method", "计量/估算口径"),
                 "清单项名称": bill_value(item, "cost_item_name", "清单项名称"),
                 "项目特征/施工工艺": bill_value(item, "project_description", "项目特征/施工工艺"),
                 "单位": bill_value(item, "unit", "单位"),
-                "建议工程量": bill_value(item, "suggested_quantity", "建议工程量"),
+                "建议工程量": suggested_quantity,
                 "工程量依据": bill_value(item, "quantity_basis", "工程量依据"),
+                "是否计入金额汇总": normalize_include_in_amount(
+                    bill_value(item, "include_in_amount", "是否计入金额汇总"),
+                    item_role,
+                    suggested_quantity,
+                ),
                 "综合单价最低值": bill_value(item, "unit_price_low", "综合单价最低值"),
                 "综合单价中位数": bill_value(item, "unit_price_mid", "综合单价中位数"),
                 "综合单价最高值": bill_value(item, "unit_price_high", "综合单价最高值"),
@@ -1482,6 +1515,7 @@ def fallback_suggested_bill(
                     "单位": row.get("unit_normalized", "") or row.get("unit", ""),
                     "建议工程量": "",
                     "工程量依据": "LLM suggested_bill 生成失败，未生成建议工程量",
+                    "是否计入金额汇总": "否",
                     "综合单价最低值": row.get("历史综合单价最低值"),
                     "综合单价中位数": row.get("历史综合单价中位数"),
                     "综合单价最高值": row.get("历史综合单价最高值"),
@@ -1528,6 +1562,7 @@ def fallback_suggested_bill(
                 "单位": row.get("unit_normalized", "") or row.get("unit", ""),
                 "建议工程量": "",
                 "工程量依据": "LLM suggested_bill 生成失败，未生成建议工程量",
+                "是否计入金额汇总": "否",
                 "综合单价最低值": row.get("历史综合单价最低值"),
                 "综合单价中位数": row.get("历史综合单价中位数"),
                 "综合单价最高值": row.get("历史综合单价最高值"),
@@ -1617,6 +1652,12 @@ def postprocess_suggested_bill(
     for column in SUGGESTED_BILL_COLUMNS:
         if column not in output.columns:
             output[column] = ""
+    for index, row in output.iterrows():
+        output.at[index, "是否计入金额汇总"] = normalize_include_in_amount(
+            row.get("是否计入金额汇总"),
+            row.get("项目角色"),
+            row.get("建议工程量"),
+        )
     stats["是否被LLM采用"] = ""
     candidate_map = {cell_text(row.get("candidate_id")): row for _index, row in stats.iterrows()}
     family_map = {cell_text(row.get("family_id")): row for _index, row in families.iterrows()}
@@ -1899,12 +1940,23 @@ def build_estimate_summary(
     else:
         suggested_reference_items = "当前未形成可展示的建议清单项。"
 
-    low_amount = amount_sum(suggested_bill, "估算金额最低值")
-    mid_amount = amount_sum(suggested_bill, "估算金额中位数")
-    high_amount = amount_sum(suggested_bill, "估算金额最高值")
+    amount_bill = suggested_bill.copy()
+    if "是否计入金额汇总" not in amount_bill.columns:
+        amount_bill["是否计入金额汇总"] = ""
+    for index, row in amount_bill.iterrows():
+        amount_bill.at[index, "是否计入金额汇总"] = normalize_include_in_amount(
+            row.get("是否计入金额汇总"),
+            row.get("项目角色"),
+            row.get("建议工程量"),
+        )
+    amount_bill = amount_bill[amount_bill["是否计入金额汇总"].map(cell_text).eq("是")]
+
+    low_amount = amount_sum(amount_bill, "估算金额最低值")
+    mid_amount = amount_sum(amount_bill, "估算金额中位数")
+    high_amount = amount_sum(amount_bill, "估算金额最高值")
     if low_amount is not None and mid_amount is not None and high_amount is not None:
         amount_range = (
-            f"当前可计算项目的参考金额约为 {low_amount:,.2f} - {high_amount:,.2f} 元，"
+            f"当前计入金额汇总项目的参考金额约为 {low_amount:,.2f} - {high_amount:,.2f} 元，"
             f"中位参考值约 {mid_amount:,.2f} 元。"
         )
     elif low_amount is not None or mid_amount is not None or high_amount is not None:
@@ -1916,11 +1968,11 @@ def build_estimate_summary(
         if high_amount is not None:
             amount_parts.append(f"最高参考值约 {high_amount:,.2f} 元")
         amount_range = (
-            f"当前可计算项目已有部分金额参考：{join_non_empty(amount_parts)}；"
+            f"当前计入金额汇总项目已有部分金额参考：{join_non_empty(amount_parts)}；"
             "因部分项目缺少可计算工程量，区间可能不完整。"
         )
     else:
-        amount_range = "当前存在无法可靠计算工程量的项目，暂不汇总总价，仅提供历史单价参考。"
+        amount_range = "当前没有可计入金额汇总的可计算项目，暂不汇总总价，仅提供历史单价参考。"
 
     confirmation_values = []
     for value in [*rewrite.uncertainties, *suggested_bill["不确定性说明"].tolist()]:

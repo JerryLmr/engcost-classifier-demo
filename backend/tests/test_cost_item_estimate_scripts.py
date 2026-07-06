@@ -574,6 +574,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "project_description": "3mm SBS",
                     "unit": "m²",
                     "suggested_quantity": 500,
+                    "include_in_amount": True,
                     "unit_price_low": 80,
                     "labor_unit_price_mid": 20,
                     "estimated_labor_amount_mid": 10000,
@@ -589,6 +590,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(bill.loc[0, "family_id"], "F001")
         self.assertEqual(bill.loc[0, "candidate_id"], "C001")
         self.assertEqual(bill.loc[0, "项目角色"], "核心施工项")
+        self.assertEqual(bill.loc[0, "是否计入金额汇总"], "是")
         self.assertEqual(bill.loc[0, "其中包含人工费单价中位数"], 20)
         self.assertEqual(bill.loc[0, "估算人工费中位数"], 10000)
         self.assertEqual(bill.loc[0, "来源样本"], "")
@@ -611,9 +613,44 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             )
         )
         self.assertEqual(fallback.loc[0, "推荐类型"], "fallback_candidate")
+        self.assertEqual(fallback.loc[0, "是否计入金额汇总"], "否")
         self.assertIn("不代表最终建议清单", fallback.loc[0, "采用理由"])
         self.assertEqual(fallback.loc[0, "不确定性说明"], "需修复 LLM 上下文或降低候选规模后重新生成")
         self.assertEqual(fallback.loc[0, "来源样本"], "batch-a::2::2-1")
+
+    def test_include_in_amount_defaults_by_item_role(self):
+        result = {
+            "suggested_bill": [
+                {
+                    "seq": 1,
+                    "family_id": "F001",
+                    "item_role": "核心施工项",
+                    "suggested_quantity": 10,
+                },
+                {
+                    "seq": 2,
+                    "family_id": "F002",
+                    "item_role": "常见前置项",
+                    "suggested_quantity": 10,
+                },
+                {
+                    "seq": 3,
+                    "family_id": "F003",
+                    "item_role": "常见前置项",
+                    "suggested_quantity": None,
+                },
+                {
+                    "seq": 4,
+                    "family_id": "F004",
+                    "item_role": "可选/替代工艺",
+                    "suggested_quantity": 10,
+                },
+            ]
+        }
+
+        bill = query_estimate_llm.suggested_bill_from_llm_result(result)
+
+        self.assertEqual(bill["是否计入金额汇总"].tolist(), ["是", "是", "否", "否"])
 
     def test_postprocess_overrides_prices_amounts_and_marks_adoption(self):
         stats = pd.DataFrame(
@@ -784,6 +821,58 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(processed_bill.loc[0, "来源样本"], "batch-a::2::2-1, batch-a::5::5-1")
         self.assertEqual(processed_stats["是否被LLM采用"].tolist(), ["是", "是"])
         self.assertIn("duplicate_family_id_dropped", warnings)
+
+    def test_estimate_summary_sums_only_included_amount_rows(self):
+        rewrite = query_estimate_llm.QueryRewrite(
+            raw_query="维修",
+            project_package_query_text="维修",
+            item_query_text="维修",
+            parsed_quantities=[],
+            materials_or_specs=[],
+            repair_object="屋面",
+            uncertainties=[],
+            notes=[],
+            success=True,
+        )
+        catalog = query_estimate_llm.QueryCatalog("", "", "", "", "", None, {}, False, [])
+        suggested_bill = pd.DataFrame(
+            [
+                {
+                    "序号": 1,
+                    "family_id": "F001",
+                    "项目角色": "核心施工项",
+                    "清单项名称": "核心做法",
+                    "建议工程量": 10,
+                    "是否计入金额汇总": "是",
+                    "估算金额最低值": 100,
+                    "估算金额中位数": 100,
+                    "估算金额最高值": 100,
+                    "不确定性说明": "核心范围需确认",
+                },
+                {
+                    "序号": 2,
+                    "family_id": "F002",
+                    "项目角色": "可选/替代工艺",
+                    "清单项名称": "替代做法",
+                    "建议工程量": 10,
+                    "是否计入金额汇总": "否",
+                    "估算金额最低值": 1000,
+                    "估算金额中位数": 1000,
+                    "估算金额最高值": 1000,
+                    "不确定性说明": "替代方案需确认",
+                },
+            ],
+            columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS,
+        )
+
+        summary = query_estimate_llm.build_estimate_summary(rewrite, catalog, suggested_bill)
+        values = dict(summary.values.tolist())
+
+        self.assertIn("核心做法", values["建议参考清单"])
+        self.assertIn("替代做法", values["建议参考清单"])
+        self.assertIn("100.00 - 100.00", values["参考金额区间"])
+        self.assertNotIn("1,100.00", values["参考金额区间"])
+        self.assertIn("替代方案", values["需现场确认"])
 
     def test_write_query_result_workbook_has_new_eight_sheets(self):
         rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], [], "", [], [], True)
