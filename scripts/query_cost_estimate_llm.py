@@ -403,30 +403,30 @@ def build_query_rewrite_prompt(query: str) -> str:
       "raw_text": "500平",
       "value": 500,
       "unit": "m²",
-      "meaning": "屋面防水面积",
+      "meaning": "维修面积",
       "confidence": 0.95
     }}
   ],
-  "materials_or_specs": ["3mm SBS"],
-  "repair_object": "屋面防水层",
-  "uncertainties": ["是否拆除旧防水层未知"]
+  "materials_or_specs": ["材料或规格"],
+  "repair_object": "维修对象",
+  "uncertainties": ["现场条件未知"]
 }}
 
 当前 embedding 结构：
 1. project_package_text 由“工程名称、project_name_text、cost_item_name 去重列表”组成。
-   project_package_query_text 用于匹配相似历史工程包，应描述完整维修工程场景和可能的清单项名称组合，但不要写太长。
+   project_package_query_text 用于匹配相似历史工程包，应描述用户明确表达或直接相关的维修工程场景，保持短检索 query，不要预设建议清单、前置项、措施项或替代工艺。
 2. item_retrieval_text 由“cost_item_name、project_description、unit_normalized”组成。
-   item_query_text 用于匹配相似清单行，应贴近具体清单项名称和做法。
+   item_query_text 用于匹配相似清单行，应贴近用户明确表达的维修对象、材料规格和做法，不要扩展未明确发生的清单项。
 3. item_query_text 必须非空。如果用户问得很粗，也输出宽泛 item query，不要留空。
 4. parsed_quantities 只解析用户原文明确或强烈暗示的工程量、面积、长度、数量等，不要为了估价编造工程量。
-5. repair_object、materials_or_specs、uncertainties 用于后续估价 LLM 判断口径，不要输出价格。
+5. repair_object、materials_or_specs、uncertainties 用于后续估价 LLM 判断口径，不要输出价格，不要预设 suggested_bill、前置项、措施项或替代工艺。
 
 示例：
 用户：屋面漏水，想做3mm SBS防水，面积大概500平
-输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修 防水层拆除 屋面卷材防水 垂直运输","item_query_text":"屋面卷材防水 3.0mm SBS防水卷材","parsed_quantities":[{{"raw_text":"500平","value":500,"unit":"m²","meaning":"屋面防水面积","confidence":0.95}}],"materials_or_specs":["3mm SBS"],"repair_object":"屋面防水层","uncertainties":["是否拆除旧防水层未知","基层状况未知"]}}
+输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修 3mm SBS防水","item_query_text":"屋面防水 3.0mm SBS防水卷材","parsed_quantities":[{{"raw_text":"500平","value":500,"unit":"m²","meaning":"屋面防水面积","confidence":0.95}}],"materials_or_specs":["3mm SBS"],"repair_object":"屋面防水层","uncertainties":["现场做法未知","基层状况未知"]}}
 
 用户：屋面漏水帮我估价
-输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修 防水层拆除 屋面卷材防水 垂直运输","item_query_text":"屋面防水 防水层维修","parsed_quantities":[],"materials_or_specs":[],"repair_object":"屋面防水层","uncertainties":["维修面积未知","是否拆除旧防水层未知","基层状况未知"]}}
+输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修","item_query_text":"屋面防水 防水层维修","parsed_quantities":[],"materials_or_specs":[],"repair_object":"屋面防水层","uncertainties":["维修面积未知","现场做法未知","基层状况未知"]}}
 
 用户：地下室渗水维修
 输出：{{"project_package_query_text":"地下室渗水维修工程 地下室防水维修 防水层维修 墙面修复 地面修复","item_query_text":"地下室防水 渗水维修 防水层维修","parsed_quantities":[],"materials_or_specs":[],"repair_object":"地下室防水层","uncertainties":["渗水范围未知","基层状况未知"]}}
@@ -1097,7 +1097,7 @@ JSON 格式：
     {{
       "seq": 1,
       "candidate_id": "C001",
-      "recommend_type": "直接匹配项",
+      "recommend_type": "核心施工项",
       "item_role": "核心施工项",
       "estimate_method": "基于用户给出的约500㎡面积，参考历史样本综合单价区间估算",
       "cost_item_name": "",
@@ -1134,29 +1134,26 @@ JSON 格式：
 - 从 candidate_item_stats 中选择本次建议清单，必须填写对应 candidate_id，不要输出明显无关项。
 - suggested_bill 默认输出 3-6 行。除非 candidate_item_stats 中确实没有可用候选，否则不要只输出 1-2 行。
 - 不要只选择同一种清单项的多个近似重复项。对于语义高度重复的候选，只选择最能代表本次需求的一项；优先选择 final_score 高、历史样本数多、项目特征更匹配用户需求的 candidate。
-- 生成 suggested_bill 时要按“施工链条”思考，而不是只找最直接的清单项：
-  1. 核心施工项：直接完成用户需求的主要清单，例如屋面卷材防水；
-  2. 常见前置项：施工前通常需要发生的旧层拆除、铲除、基层处理等；
-  3. 工程包共现措施项：在相似历史工程包中经常一起出现的垂直运输、脚手架、垃圾清运等；
-  4. 可选/待确认项：是否发生取决于现场状况的项目。
-- 对屋面漏水、屋面防水、SBS 卷材防水、3mm 防水卷材等需求：
-  - 如果 candidate_item_stats 中存在“屋面卷材防水”，必须优先作为核心施工项列出；
-  - 如果 candidate_item_stats 中存在“防水层拆除”或“铲除卷材防水层 屋面”，应至少选择其中一个作为常见前置项，不要只在不确定性说明里提到；
-  - 如果 candidate_item_stats 中存在“垂直运输”，应作为工程包共现措施项或可选/待确认项列出；
-  - 防水层拆除、基层处理、垂直运输是否最终计取，可在 uncertainty_note 中说明需要现场确认，但不能因为不确定就完全不输出候选。
+- 生成 suggested_bill 时按跨目录通用候选角色判断：
+  1. 核心施工项：直接解决用户需求的主要维修、更新、改造内容。
+  2. 常见前置项：核心施工前通常需要发生的拆除、清理、检测、基层处理、开挖、保护等。
+  3. 恢复/收尾项：核心施工后恢复原状、饰面恢复、回填、调试、试运行、验收等。
+  4. 措施/条件项：为完成施工所需的脚手架、吊篮、垂直运输、机械设备进出场及安拆、吊装、安全文明、临时设施等。
+  5. 可选/替代工艺：与核心施工项解决同一目标，但属于不同材料、规格、设备型号或技术路线，默认不应重复计价。
+- 同一目标的替代工艺默认只选择最匹配用户需求的一项；其它可作为待确认或替代参考，不进入金额汇总。
+- 措施/条件项没有明确工程量时可以列为待确认，但金额留空。
 - 如果用户明确给出面积，例如 500㎡：
-  - 单位为 m² / ㎡ 的核心施工项、拆除项，可以使用该面积作为建议工程量；
-  - 垂直运输、项、台班、次、部、套等非面积单位，不要机械按面积线性放大；如果候选单位确实是 m²，才可参考面积，并在 uncertainty_note 中说明需确认楼层、运输距离、是否已包含在综合单价中。
+  - 单位为 m² / ㎡ 且与该面积对应的候选项，可以使用该面积作为建议工程量；
+  - 项、台班、次、部、套等非面积单位，不要机械按面积线性放大；如果候选单位确实是 m²，才可参考面积，并在 uncertainty_note 中说明需确认适用范围和是否已包含在综合单价中。
 - LLM 可以判断工程量、单位、估价口径和金额计算方式，但历史综合单价、人工单价、机械单价仍必须来自对应 candidate_id 的 candidate_item_stats，不允许自行估价。
 - 不要输出 source_ref、source_refs、evidence_ref、evidence_refs、stable_sample_id、project_key、item_key 或任何来源编号。
 - 人工/机械单价或金额没有证据时保留 null，不要填 0。
-- recommend_type 建议使用：直接匹配项、常见前置项、工程包共现措施项、补充候选项、可选/待确认项。
-- item_role 建议使用：核心施工项、常见前置项、工程包共现措施项、补充候选项、可选/待确认项。
-- adopt_reason 要写清楚为什么采用该 candidate，特别是它在施工链条中的作用，而不是只写“与需求匹配”。
-- uncertainty_note 要说明现场需要确认什么，例如旧防水层是否拆除、基层是否需要处理、垂直运输是否单独计取、节点/女儿墙/排水口等细部是否包含。
+- recommend_type 建议使用：核心施工项、常见前置项、恢复/收尾项、措施/条件项、可选/替代工艺、补充候选项。
+- item_role 建议使用：核心施工项、常见前置项、恢复/收尾项、措施/条件项、可选/替代工艺、补充候选项。
+- adopt_reason 要写清楚为什么采用该 candidate，特别是它在通用候选角色中的作用，而不是只写“与需求匹配”。
+- uncertainty_note 要说明现场需要确认什么，例如施工范围、材料规格、设备型号、基层或原状条件、施工高度、运输距离、临时措施、恢复范围、调试验收要求等是否明确。
 - 如果楼栋数、设备数量、运输高度、基层状况、节点复杂度未知，也要在 uncertainty_note 中指出。
 - 如果无法可靠估算工程量，可以给历史价格参考但金额为空，或给保守范围并说明原因。
-- 简短结构示例：对于“屋面漏水，3mm SBS 防水，面积约500㎡”，如果候选中存在相关项，suggested_bill 应优先包含：1. 屋面卷材防水 / 直接匹配项 / 核心施工项；2. 防水层拆除或铲除卷材防水层屋面 / 常见前置项；3. 垂直运输 / 工程包共现措施项或可选/待确认项；必要时再补充基层处理、垃圾清运等候选，但必须来自 candidate_item_stats。
 
 输入数据：
 {json_text(payload)}
