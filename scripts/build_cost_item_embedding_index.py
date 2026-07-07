@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -145,6 +146,49 @@ def normalize_signature_text(value: Any) -> str:
     return text.strip()
 
 
+def normalize_family_signature_text(value: Any) -> str:
+    text = safe_text(value)
+    if not text:
+        return ""
+
+    text = unicodedata.normalize("NFKC", text).lower()
+
+    text = text.replace("㎡", "m²")
+    text = re.sub(r"(?<![a-z0-9])m\s*2(?![a-z0-9])", "m²", text)
+    text = text.replace("平方米", "m²")
+    text = text.replace("平方", "m²")
+
+    text = text.replace("（", "(").replace("）", ")")
+    text = text.replace("，", ",").replace("。", ".")
+    text = text.replace("；", ";").replace("：", ":")
+    text = text.replace("｜", "|")
+    text = re.sub(r"[－—–]", "-", text)
+    text = re.sub(r"[～〜∼﹋]", "~", text)
+
+    text = re.sub(r"\s+", " ", text).strip()
+
+    text = re.sub(r"(?<![a-z0-9])m\s*²(?![a-z0-9])", "m²", text)
+    text = re.sub(r"(\d+(?:\.\d+)?)\s*(?:毫米|mm)(?![a-z0-9])", r"\1mm", text)
+    text = re.sub(r"(\d+(?:\.\d+)?)\s*m(?![a-z0-9²³])", r"\1m", text)
+
+    text = re.sub(r"厚\s*(\d+(?:\.\d+)?)\s*\(?\s*(?:mm|毫米)\s*\)?", r"\1mm厚", text)
+    text = re.sub(r"(\d+(?:\.\d+)?)\s*(?:mm|毫米)\s*厚", r"\1mm厚", text)
+
+    text = re.sub(r"\s*~\s*(?=\d)", "~", text)
+    text = re.sub(r"(?<=[\u4e00-\u9fff])~(?=[\u4e00-\u9fff])", "", text)
+
+    text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[a-z0-9])", "", text)
+    text = re.sub(r"(?<=[a-z0-9])\s+(?=[\u4e00-\u9fff])", "", text)
+    text = re.sub(r"(?<=\d)\s+(?=[a-z㎡²³])", "", text)
+    text = re.sub(r"(?<=[a-z㎡²³])\s+(?=\d)", "", text)
+    text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
+
+    text = re.sub(r"\s*([|,;:/()~-])\s*", r"\1", text)
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
+
+
 def first_non_empty(values: pd.Series) -> str:
     for value in values.tolist():
         text = safe_text(value)
@@ -241,8 +285,8 @@ def build_family_signature(row: pd.Series) -> str:
     unit = safe_text(row.get("unit_normalized")) or safe_text(row.get("unit"))
     return " | ".join(
         [
-            normalize_signature_text(row.get("cost_item_name")),
-            normalize_signature_text(unit),
+            normalize_family_signature_text(row.get("cost_item_name")),
+            normalize_family_signature_text(unit),
         ]
     )
 
@@ -416,7 +460,7 @@ def build_index_meta(
             "project_package_id": "当前阶段固定等于 project_key，用于历史工程包召回和展开。",
             "item_retrieval_text": "cost_item_name、project_description、unit_normalized(or unit) 拼接文本，用于 item embedding。",
             "fine_signature": "cost_item_name + project_description + unit，用于候选项精细聚合。",
-            "family_signature": "cost_item_name + unit，用于相似工程包共现统计。",
+            "family_signature": "normalize_family_signature_text(cost_item_name) + unit_normalized(or unit)，用于相似工程包共现统计和候选 family 聚合。",
             "cost_item_names_summary": "同一个 project_package 下 cost_item_name 去重列表。",
             "package_text": "工程名称、project_name_text、cost_item_names_summary 拼接文本，用于 project_package embedding。",
         },

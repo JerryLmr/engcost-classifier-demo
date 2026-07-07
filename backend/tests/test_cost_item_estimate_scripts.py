@@ -187,6 +187,31 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(row["fine_signature"], "屋面卷材防水 | 3.0mm sbs 沥青防水卷材 | m²")
         self.assertEqual(row["family_signature"], "屋面卷材防水 | m²")
 
+    def test_family_signature_normalizes_spacing_and_units(self):
+        normalize = build_index.normalize_family_signature_text
+
+        self.assertEqual(normalize("外墙脚手架 高度13m以内"), normalize("外墙脚手架 高度 13m 以内"))
+        self.assertEqual(normalize("外墙脚手架 高度20m以内"), normalize("外墙脚手架 高度 20m 以内"))
+        self.assertNotEqual(normalize("外墙脚手架 高度13m以内"), normalize("外墙脚手架 高度20m以内"))
+
+    def test_family_signature_normalizes_waterproof_thickness(self):
+        normalize = build_index.normalize_family_signature_text
+
+        self.assertEqual(normalize("立面聚合物水泥防水涂料 ~1.2mm厚"), normalize("立面聚合物水泥防水涂料 ~1.2mm 厚"))
+        self.assertEqual(normalize("平面聚氨酯防水涂料 ~1.5mm厚"), normalize("平面聚氨酯防水涂料~1.5mm 厚"))
+        self.assertNotEqual(normalize("平面聚氨酯防水涂料 ~1.5mm厚"), normalize("平面聚氨酯防水涂料 ~1.2mm厚"))
+
+    def test_family_signature_normalizes_tilde_between_chinese(self):
+        normalize = build_index.normalize_family_signature_text
+
+        self.assertEqual(normalize("抹灰面铲除 抹灰面 只拆除面层时"), normalize("抹灰面铲除 抹灰面~只拆除面层时"))
+
+    def test_family_signature_normalizes_thickness_order_without_merging_meaning(self):
+        normalize = build_index.normalize_family_signature_text
+
+        self.assertEqual(normalize("厚 1.5（mm）聚氨酯防水涂料"), normalize("1.5mm厚聚氨酯防水涂料"))
+        self.assertNotEqual(normalize("屋面卷材防水 1.5mm厚"), normalize("墙面卷材防水 1.5mm厚"))
+
     def test_project_packages_use_cost_item_names_summary_for_embedding(self):
         packages = build_index.build_project_packages(self.prepared_samples())
 
