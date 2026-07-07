@@ -148,7 +148,7 @@ SUGGESTED_BILL_COLUMNS = [
     "工程量来源",
     "建议工程量",
     "工程量口径说明",
-    "是否计入金额汇总",
+    "是否计入参考金额区间",
     "综合单价最低值",
     "综合单价中位数",
     "综合单价最高值",
@@ -161,12 +161,12 @@ SUGGESTED_BILL_COLUMNS = [
     "估算金额最低值",
     "估算金额中位数",
     "估算金额最高值",
-    "估算人工费最低值",
-    "估算人工费中位数",
-    "估算人工费最高值",
-    "估算机械费最低值",
-    "估算机械费中位数",
-    "估算机械费最高值",
+    "估算金额中包含人工费最低值",
+    "估算金额中包含人工费中位数",
+    "估算金额中包含人工费最高值",
+    "估算金额中包含机械费最低值",
+    "估算金额中包含机械费中位数",
+    "估算金额中包含机械费最高值",
     "金额计算口径",
     "推荐依据",
     "需确认事项",
@@ -1277,7 +1277,13 @@ JSON 格式：
 - candidate_id 是可选兼容字段，只作为代表细项或细粒度参考；不能因为同一 family 下存在多个 candidate_id 就重复输出多行。
 - 同一个 family_id 只能输出一次；不要从多个同一 family 的 candidate_id 中重复选择。
 - candidate_item_stats 只作为细粒度参考，用于理解 family 覆盖的明细候选，不作为优先选择入口。
-- suggested_bill 默认输出 3-6 行。除非 candidate_families 和 candidate_item_stats 中确实没有可用候选，否则不要只输出 1-2 行。
+- suggested_bill 默认输出 4-8 行。除非 candidate_families 和 candidate_item_stats 中确实没有可用候选，否则不要只输出 1-3 行。
+- 当用户描述较粗、现场条件不明确时，不要只输出可直接计价的核心施工项；应把 candidate_families 中与本场景相关的前置处理、恢复/收尾、措施/条件、可选/替代工艺或补充候选项一并列出。
+- 如果 candidate_families 中存在与用户需求场景相关的以下候选，应尽量列出：常见前置项包括拆除、铲除、基层处理、清理、检测、开挖、保护等；恢复/收尾项包括屋面清理、垃圾清理、垃圾外运、饰面恢复、回填、调试、验收等；措施/条件项包括垂直运输、人工垂直运输、外脚手架、脚手架、吊篮、登高车、机械设备进出场及安拆、安全文明、临时设施、其他措施费等；可选/替代工艺包括用户未明确但与核心目标相近的不同材料或工艺。
+- 对于这些相关但工程量或现场条件不明确的候选项，不要强行估算工程量；suggested_quantity 留空，quantity_source 使用“需现场确认”或“不可可靠估算”，include_in_amount=false。
+- include_in_amount=false 表示该行仅作为参考候选或现场确认事项，不纳入 estimate_summary 的参考金额区间，并不表示该项不重要或不需要。
+- 对于屋面防水、外墙防水、地下室渗水等维修场景，如候选中出现垂直运输、人工垂直运输、外脚手架、脚手架、吊篮、登高车、屋面清理、垃圾清理、垃圾外运、基层处理、拆除、恢复等，且与用户需求不冲突，应优先作为“措施/条件项”“恢复/收尾项”“常见前置项”或“补充候选项”列出；没有明确数量时不计入参考金额区间。
+- 不要为了凑行数输出明显无关项。
 - 不要只选择同一种清单项的多个近似重复项。对于语义高度重复的候选族，只选择最能代表本次需求的一项；优先选择 final_score 高、历史样本数多、项目特征更匹配用户需求的 family。
 - LLM 负责判断 item_type、quantity_source、quantity_note、include_in_amount、recommendation_reason、confirmation_note。
 - LLM 不负责生成最终金额计算说明，不要输出金额计算相关字段。
@@ -1298,14 +1304,14 @@ JSON 格式：
   4. 历史工程量只能作为参考，不要直接当成本次工程量，除非用户条件明确匹配。
   5. 可选/替代工艺默认 include_in_amount=false。
 - 对于可选/替代工艺、补充候选项、附加层/加强层/节点处理类候选，不要默认使用用户总面积作为建议工程量；除非用户明确说明该做法按全范围施工，否则 suggested_quantity 应留空，quantity_source 使用“需现场确认”或“不可可靠估算”。
-- include_in_amount=true 表示该行金额参与 estimate_summary 的总金额区间汇总；include_in_amount=false 表示该行只是建议参考、补充候选项或可选/替代工艺，不参与总金额汇总。
+- include_in_amount=true 表示该行金额参与 estimate_summary 的参考金额区间汇总；include_in_amount=false 表示该行仅作为建议参考、现场确认事项、补充候选项或可选/替代工艺展示，不参与参考金额区间汇总。
 - include_in_amount 判断规则：
   1. 核心施工项 + 有建议工程量：默认 true。
   2. 常见前置项 + 有建议工程量：默认 true。
   3. 恢复/收尾项：默认 false；只有明确 include_in_amount=true 且 quantity_source 不是“需现场确认”时才可 true。
   4. 措施/条件项：默认 false；只有明确 include_in_amount=true 且 quantity_source 不是“需现场确认”时才可 true。
   5. 可选/替代工艺、补充候选项：默认 false。
-- 同一目标的可选/替代工艺默认只选择最匹配用户需求的一项；其它可作为补充候选或替代参考，不进入金额汇总。
+- 同一目标的可选/替代工艺默认只选择最匹配用户需求的一项；其它可作为补充候选或替代参考，不进入参考金额区间汇总。
 - 不要输出 source_ref、source_refs、evidence_ref、evidence_refs、stable_sample_id、project_key、item_key 或任何来源编号。
 - recommendation_reason 要写清楚为什么采用该 candidate/family，特别是它在建议方案中的作用，而不是只写“与需求匹配”。
 - confirmation_note 要说明现场需要确认什么，例如施工范围、材料规格、设备型号、基层或原状条件、施工高度、运输距离、临时措施、恢复范围、调试验收要求等是否明确。
@@ -1324,7 +1330,14 @@ def guarded_suggested_bill_prompt(
     candidate_families: pd.DataFrame,
     candidate_item_stats: pd.DataFrame,
     evidence_items: pd.DataFrame,
-) -> str:
+) -> tuple[str, dict[str, Any]]:
+    prompt_meta = {
+        "llm_package_limit": 8,
+        "llm_family_limit": 30,
+        "llm_candidate_limit": 45,
+        "llm_evidence_limit": 80,
+        "llm_prompt_tier": 1,
+    }
     prompt = build_suggested_bill_prompt(
         rewrite,
         query_catalog,
@@ -1332,13 +1345,20 @@ def guarded_suggested_bill_prompt(
         candidate_families,
         candidate_item_stats,
         evidence_items,
-        package_limit=8,
-        family_limit=20,
-        candidate_limit=30,
-        evidence_limit=60,
+        package_limit=prompt_meta["llm_package_limit"],
+        family_limit=prompt_meta["llm_family_limit"],
+        candidate_limit=prompt_meta["llm_candidate_limit"],
+        evidence_limit=prompt_meta["llm_evidence_limit"],
     )
     if len(prompt) <= 30000:
-        return prompt
+        return prompt, prompt_meta
+    prompt_meta = {
+        "llm_package_limit": 5,
+        "llm_family_limit": 14,
+        "llm_candidate_limit": 20,
+        "llm_evidence_limit": 30,
+        "llm_prompt_tier": 2,
+    }
     prompt = build_suggested_bill_prompt(
         rewrite,
         query_catalog,
@@ -1346,13 +1366,20 @@ def guarded_suggested_bill_prompt(
         candidate_families,
         candidate_item_stats,
         evidence_items,
-        package_limit=5,
-        family_limit=14,
-        candidate_limit=20,
-        evidence_limit=30,
+        package_limit=prompt_meta["llm_package_limit"],
+        family_limit=prompt_meta["llm_family_limit"],
+        candidate_limit=prompt_meta["llm_candidate_limit"],
+        evidence_limit=prompt_meta["llm_evidence_limit"],
     )
     if len(prompt) <= 22000:
-        return prompt
+        return prompt, prompt_meta
+    prompt_meta = {
+        "llm_package_limit": 4,
+        "llm_family_limit": 8,
+        "llm_candidate_limit": 12,
+        "llm_evidence_limit": 18,
+        "llm_prompt_tier": 3,
+    }
     prompt = build_suggested_bill_prompt(
         rewrite,
         query_catalog,
@@ -1360,25 +1387,33 @@ def guarded_suggested_bill_prompt(
         candidate_families,
         candidate_item_stats,
         evidence_items,
-        package_limit=4,
-        family_limit=8,
-        candidate_limit=12,
-        evidence_limit=18,
+        package_limit=prompt_meta["llm_package_limit"],
+        family_limit=prompt_meta["llm_family_limit"],
+        candidate_limit=prompt_meta["llm_candidate_limit"],
+        evidence_limit=prompt_meta["llm_evidence_limit"],
     )
     if len(prompt) <= 12000:
-        return prompt
-    return build_suggested_bill_prompt(
+        return prompt, prompt_meta
+    prompt_meta = {
+        "llm_package_limit": 2,
+        "llm_family_limit": 4,
+        "llm_candidate_limit": 6,
+        "llm_evidence_limit": 6,
+        "llm_prompt_tier": 4,
+    }
+    prompt = build_suggested_bill_prompt(
         rewrite,
         query_catalog,
         matched_project_packages,
         candidate_families,
         candidate_item_stats,
         evidence_items,
-        package_limit=2,
-        family_limit=4,
-        candidate_limit=6,
-        evidence_limit=6,
+        package_limit=prompt_meta["llm_package_limit"],
+        family_limit=prompt_meta["llm_family_limit"],
+        candidate_limit=prompt_meta["llm_candidate_limit"],
+        evidence_limit=prompt_meta["llm_evidence_limit"],
     )
+    return prompt, prompt_meta
 
 
 def bill_value(item: dict[str, Any], english_key: str, chinese_key: str = "") -> Any:
@@ -1487,6 +1522,11 @@ def suggested_bill_from_llm_result(result: dict[str, Any], warnings: list[str] |
                 ("estimate_method", "计量/估算口径"),
                 ("quantity_basis", "工程量依据"),
             )
+        include_raw = first_bill_value(
+            item,
+            ("include_in_amount", "是否计入参考金额区间"),
+            ("是否计入金额汇总", ""),
+        )
         rows.append(
             {
                 "序号": bill_value(item, "seq", "序号") or index,
@@ -1499,8 +1539,8 @@ def suggested_bill_from_llm_result(result: dict[str, Any], warnings: list[str] |
                 "工程量来源": quantity_source,
                 "建议工程量": suggested_quantity,
                 "工程量口径说明": quantity_note,
-                "是否计入金额汇总": normalize_include_in_amount(
-                    bill_value(item, "include_in_amount", "是否计入金额汇总"),
+                "是否计入参考金额区间": normalize_include_in_amount(
+                    include_raw,
                     item_type,
                     suggested_quantity,
                     quantity_source,
@@ -1517,12 +1557,36 @@ def suggested_bill_from_llm_result(result: dict[str, Any], warnings: list[str] |
                 "估算金额最低值": bill_value(item, "estimated_amount_low", "估算金额最低值"),
                 "估算金额中位数": bill_value(item, "estimated_amount_mid", "估算金额中位数"),
                 "估算金额最高值": bill_value(item, "estimated_amount_high", "估算金额最高值"),
-                "估算人工费最低值": bill_value(item, "estimated_labor_amount_low", "估算人工费最低值"),
-                "估算人工费中位数": bill_value(item, "estimated_labor_amount_mid", "估算人工费中位数"),
-                "估算人工费最高值": bill_value(item, "estimated_labor_amount_high", "估算人工费最高值"),
-                "估算机械费最低值": bill_value(item, "estimated_machinery_amount_low", "估算机械费最低值"),
-                "估算机械费中位数": bill_value(item, "estimated_machinery_amount_mid", "估算机械费中位数"),
-                "估算机械费最高值": bill_value(item, "estimated_machinery_amount_high", "估算机械费最高值"),
+                "估算金额中包含人工费最低值": first_bill_value(
+                    item,
+                    ("estimated_labor_amount_low", "估算金额中包含人工费最低值"),
+                    ("估算人工费最低值", ""),
+                ),
+                "估算金额中包含人工费中位数": first_bill_value(
+                    item,
+                    ("estimated_labor_amount_mid", "估算金额中包含人工费中位数"),
+                    ("估算人工费中位数", ""),
+                ),
+                "估算金额中包含人工费最高值": first_bill_value(
+                    item,
+                    ("estimated_labor_amount_high", "估算金额中包含人工费最高值"),
+                    ("估算人工费最高值", ""),
+                ),
+                "估算金额中包含机械费最低值": first_bill_value(
+                    item,
+                    ("estimated_machinery_amount_low", "估算金额中包含机械费最低值"),
+                    ("估算机械费最低值", ""),
+                ),
+                "估算金额中包含机械费中位数": first_bill_value(
+                    item,
+                    ("estimated_machinery_amount_mid", "估算金额中包含机械费中位数"),
+                    ("估算机械费中位数", ""),
+                ),
+                "估算金额中包含机械费最高值": first_bill_value(
+                    item,
+                    ("estimated_machinery_amount_high", "估算金额中包含机械费最高值"),
+                    ("估算机械费最高值", ""),
+                ),
                 "金额计算口径": "",
                 "推荐依据": first_bill_value(item, ("recommendation_reason", "推荐依据"), ("adopt_reason", "采用理由")),
                 "需确认事项": first_bill_value(item, ("confirmation_note", "需确认事项"), ("uncertainty_note", "不确定性说明")),
@@ -1555,7 +1619,7 @@ def fallback_suggested_bill(
                     "工程量来源": "需现场确认",
                     "建议工程量": "",
                     "工程量口径说明": "LLM suggested_bill 生成失败，未判断工程量口径",
-                    "是否计入金额汇总": "否",
+                    "是否计入参考金额区间": "否",
                     "综合单价最低值": row.get("历史综合单价最低值"),
                     "综合单价中位数": row.get("历史综合单价中位数"),
                     "综合单价最高值": row.get("历史综合单价最高值"),
@@ -1568,12 +1632,12 @@ def fallback_suggested_bill(
                     "估算金额最低值": "",
                     "估算金额中位数": "",
                     "估算金额最高值": "",
-                    "估算人工费最低值": "",
-                    "估算人工费中位数": "",
-                    "估算人工费最高值": "",
-                    "估算机械费最低值": "",
-                    "估算机械费中位数": "",
-                    "估算机械费最高值": "",
+                    "估算金额中包含人工费最低值": "",
+                    "估算金额中包含人工费中位数": "",
+                    "估算金额中包含人工费最高值": "",
+                    "估算金额中包含机械费最低值": "",
+                    "估算金额中包含机械费中位数": "",
+                    "估算金额中包含机械费最高值": "",
                     "金额计算口径": "缺少可计算工程量，暂不计算金额，仅保留历史单价参考",
                     "推荐依据": "LLM suggested_bill 生成失败，本行仅为候选统计结果，不代表最终建议清单",
                     "需确认事项": "需修复 LLM 上下文或降低候选规模后重新生成",
@@ -1601,7 +1665,7 @@ def fallback_suggested_bill(
                 "工程量来源": "需现场确认",
                 "建议工程量": "",
                 "工程量口径说明": "LLM suggested_bill 生成失败，未判断工程量口径",
-                "是否计入金额汇总": "否",
+                "是否计入参考金额区间": "否",
                 "综合单价最低值": row.get("历史综合单价最低值"),
                 "综合单价中位数": row.get("历史综合单价中位数"),
                 "综合单价最高值": row.get("历史综合单价最高值"),
@@ -1614,12 +1678,12 @@ def fallback_suggested_bill(
                 "估算金额最低值": "",
                 "估算金额中位数": "",
                 "估算金额最高值": "",
-                "估算人工费最低值": "",
-                "估算人工费中位数": "",
-                "估算人工费最高值": "",
-                "估算机械费最低值": "",
-                "估算机械费中位数": "",
-                "估算机械费最高值": "",
+                "估算金额中包含人工费最低值": "",
+                "估算金额中包含人工费中位数": "",
+                "估算金额中包含人工费最高值": "",
+                "估算金额中包含机械费最低值": "",
+                "估算金额中包含机械费中位数": "",
+                "估算金额中包含机械费最高值": "",
                 "金额计算口径": "缺少可计算工程量，暂不计算金额，仅保留历史单价参考",
                 "推荐依据": "LLM suggested_bill 生成失败，本行仅为候选统计结果，不代表最终建议清单",
                 "需确认事项": "需修复 LLM 上下文或降低候选规模后重新生成",
@@ -1681,7 +1745,10 @@ def build_amount_calc_note(row: pd.Series, source_id: str) -> str:
         numeric_or_none(row.get("综合单价中位数")),
         numeric_or_none(row.get("综合单价最高值")),
     ]
-    include_text = cell_text(row.get("是否计入金额汇总"))
+    include_value = row.get("是否计入参考金额区间")
+    if not cell_text(include_value):
+        include_value = row.get("是否计入金额汇总")
+    include_text = cell_text(include_value)
     if quantity is None:
         note = "缺少可计算工程量，暂不计算金额，仅保留历史单价参考"
     elif not any(price is not None for price in prices):
@@ -1721,8 +1788,11 @@ def postprocess_suggested_bill(
             old_quantity_note = join_non_empty([row.get("计量/估算口径"), row.get("工程量依据")], limit=2)
             if old_quantity_note:
                 output.at[index, "工程量口径说明"] = old_quantity_note
-        output.at[index, "是否计入金额汇总"] = normalize_include_in_amount(
-            row.get("是否计入金额汇总"),
+        include_value = row.get("是否计入参考金额区间")
+        if not cell_text(include_value):
+            include_value = row.get("是否计入金额汇总")
+        output.at[index, "是否计入参考金额区间"] = normalize_include_in_amount(
+            include_value,
             item_type,
             row.get("建议工程量"),
             row.get("工程量来源"),
@@ -1760,12 +1830,12 @@ def postprocess_suggested_bill(
         ("估算金额最低值", "综合单价最低值"),
         ("估算金额中位数", "综合单价中位数"),
         ("估算金额最高值", "综合单价最高值"),
-        ("估算人工费最低值", "其中包含人工费单价最低值"),
-        ("估算人工费中位数", "其中包含人工费单价中位数"),
-        ("估算人工费最高值", "其中包含人工费单价最高值"),
-        ("估算机械费最低值", "其中包含机械费单价最低值"),
-        ("估算机械费中位数", "其中包含机械费单价中位数"),
-        ("估算机械费最高值", "其中包含机械费单价最高值"),
+        ("估算金额中包含人工费最低值", "其中包含人工费单价最低值"),
+        ("估算金额中包含人工费中位数", "其中包含人工费单价中位数"),
+        ("估算金额中包含人工费最高值", "其中包含人工费单价最高值"),
+        ("估算金额中包含机械费最低值", "其中包含机械费单价最低值"),
+        ("估算金额中包含机械费中位数", "其中包含机械费单价中位数"),
+        ("估算金额中包含机械费最高值", "其中包含机械费单价最高值"),
     ]
 
     for index, row in output.iterrows():
@@ -1881,8 +1951,8 @@ def generate_suggested_bill(
     candidate_item_stats: pd.DataFrame,
     evidence_items: pd.DataFrame,
     warnings: list[str] | None = None,
-) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any]]:
-    prompt = guarded_suggested_bill_prompt(
+) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any], dict[str, Any]]:
+    prompt, prompt_meta = guarded_suggested_bill_prompt(
         rewrite,
         query_catalog,
         matched_project_packages,
@@ -1906,7 +1976,7 @@ def generate_suggested_bill(
             max_tokens=max_tokens,
             input_summary=f"families={len(candidate_families)}, candidates={len(candidate_item_stats)}, evidence={len(evidence_items)}",
         )
-        return suggested_bill, True, False, "", prompt, trace
+        return suggested_bill, True, False, "", prompt, trace, prompt_meta
     except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
         trace = trace_row(
             "suggested_bill_generation",
@@ -1917,7 +1987,7 @@ def generate_suggested_bill(
             max_tokens=max_tokens,
             input_summary=f"families={len(candidate_families)}, candidates={len(candidate_item_stats)}, evidence={len(evidence_items)}",
         )
-        return fallback_suggested_bill(candidate_item_stats, candidate_families), False, True, str(exc), prompt, trace
+        return fallback_suggested_bill(candidate_item_stats, candidate_families), False, True, str(exc), prompt, trace, prompt_meta
 
 
 def display_frame(frame: pd.DataFrame, display: bool) -> pd.DataFrame:
@@ -2029,30 +2099,33 @@ def build_estimate_summary(
         suggested_overview = "当前未形成可展示的建议方案概览。"
 
     amount_bill = suggested_bill.copy()
-    if "是否计入金额汇总" not in amount_bill.columns:
-        amount_bill["是否计入金额汇总"] = ""
+    if "是否计入参考金额区间" not in amount_bill.columns:
+        amount_bill["是否计入参考金额区间"] = ""
     for index, row in amount_bill.iterrows():
         item_type = row.get("建议项类型") or row.get("项目角色") or row.get("推荐类型")
-        amount_bill.at[index, "是否计入金额汇总"] = normalize_include_in_amount(
-            row.get("是否计入金额汇总"),
+        include_value = row.get("是否计入参考金额区间")
+        if not cell_text(include_value):
+            include_value = row.get("是否计入金额汇总")
+        amount_bill.at[index, "是否计入参考金额区间"] = normalize_include_in_amount(
+            include_value,
             item_type,
             row.get("建议工程量"),
             row.get("工程量来源"),
         )
-    amount_bill = amount_bill[amount_bill["是否计入金额汇总"].map(cell_text).eq("是")]
+    amount_bill = amount_bill[amount_bill["是否计入参考金额区间"].map(cell_text).eq("是")]
 
     included_items = join_non_empty(amount_bill["清单项名称"].tolist(), limit=20) if "清单项名称" in amount_bill.columns else ""
     if included_items:
         included_items_text = included_items + "。"
     else:
-        included_items_text = "当前没有清单项计入金额汇总。"
+        included_items_text = "当前没有清单项计入参考金额区间。"
 
     low_amount = amount_sum(amount_bill, "估算金额最低值")
     mid_amount = amount_sum(amount_bill, "估算金额中位数")
     high_amount = amount_sum(amount_bill, "估算金额最高值")
     if low_amount is not None and mid_amount is not None and high_amount is not None:
         amount_range = (
-            f"当前计入金额汇总项目的参考金额约为 {low_amount:,.2f} - {high_amount:,.2f} 元，"
+            f"当前计入参考金额区间项目的参考金额约为 {low_amount:,.2f} - {high_amount:,.2f} 元，"
             f"中位参考值约 {mid_amount:,.2f} 元。"
         )
     elif low_amount is not None or mid_amount is not None or high_amount is not None:
@@ -2064,11 +2137,11 @@ def build_estimate_summary(
         if high_amount is not None:
             amount_parts.append(f"最高参考值约 {high_amount:,.2f} 元")
         amount_range = (
-            f"当前计入金额汇总项目已有部分金额参考：{join_non_empty(amount_parts)}；"
+            f"当前计入参考金额区间项目已有部分金额参考：{join_non_empty(amount_parts)}；"
             "因部分项目缺少可计算工程量，区间可能不完整。"
         )
     else:
-        amount_range = "当前没有可计入金额汇总的可计算项目，暂不汇总总价，仅提供历史单价参考。"
+        amount_range = "当前没有可计入参考金额区间的可计算项目，暂不汇总总价，仅提供历史单价参考。"
 
     confirmation_values = []
     confirmation_column = "需确认事项" if "需确认事项" in suggested_bill.columns else "不确定性说明"
@@ -2121,8 +2194,10 @@ def build_parse_info(
     llm_error: str,
     include_debug_text: bool,
     suggested_prompt: str,
+    suggested_prompt_meta: dict[str, Any] | None = None,
     warnings: list[str] | None = None,
 ) -> pd.DataFrame:
+    prompt_meta = suggested_prompt_meta or {}
     rows = [
         ("原始用户需求", rewrite.raw_query),
         ("project_package_query_text", rewrite.project_package_query_text),
@@ -2144,6 +2219,11 @@ def build_parse_info(
         ("LLM error", llm_error),
         ("prompt_chars", len(suggested_prompt)),
         ("estimated_tokens", estimated_tokens(suggested_prompt)),
+        ("llm_package_limit", prompt_meta.get("llm_package_limit", "")),
+        ("llm_family_limit", prompt_meta.get("llm_family_limit", "")),
+        ("llm_candidate_limit", prompt_meta.get("llm_candidate_limit", "")),
+        ("llm_evidence_limit", prompt_meta.get("llm_evidence_limit", "")),
+        ("llm_prompt_tier", prompt_meta.get("llm_prompt_tier", "")),
         ("output_path", str(output_path or "")),
         ("运行时间", f"{(datetime.now() - started_at).total_seconds():.2f}s"),
         ("index_dir", str(index_dir)),
@@ -2251,7 +2331,15 @@ def run_query(
     evidence_items = build_evidence_items(candidates)
     matched_project_packages = matched_project_packages_for_output(matched_raw)
 
-    suggested_bill, suggested_success, fallback, llm_error, suggested_prompt, suggested_trace = generate_suggested_bill(
+    (
+        suggested_bill,
+        suggested_success,
+        fallback,
+        llm_error,
+        suggested_prompt,
+        suggested_trace,
+        suggested_prompt_meta,
+    ) = generate_suggested_bill(
         rewrite,
         query_catalog,
         matched_project_packages,
@@ -2286,6 +2374,7 @@ def run_query(
         llm_error=llm_error,
         include_debug_text=include_debug_text,
         suggested_prompt=suggested_prompt,
+        suggested_prompt_meta=suggested_prompt_meta,
         warnings=warnings,
     )
     llm_trace = pd.DataFrame([rewrite_trace, catalog_trace, suggested_trace], columns=LLM_TRACE_COLUMNS)
