@@ -205,6 +205,67 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertNotEqual(normalize("自粘卷材"), normalize("热熔卷材"))
         self.assertNotEqual(normalize("一层防水"), normalize("两层防水"))
 
+    def test_fine_signature_normalizes_sbs_waterproof_aliases(self):
+        normalize = build_index.normalize_fine_signature_text
+        expected = "3.0mm弹性体改性沥青防水卷材"
+
+        equivalent_values = [
+            "1.3.0mm厚弹性体改性沥青防水卷材",
+            "1.3.0mm弹性体改性沥青防水卷材",
+            "3.0mm厚弹性体改性沥青防水卷材",
+            "厚 3.0 mm 弹性体改性沥青防水卷材",
+            "3.0mm弹性改性沥青防水卷材",
+            "3.0mm SBS防水卷材",
+            "3.0mm SBS改性沥青防水卷材",
+            "3.0mm SBS弹性体改性沥青防水卷材",
+            "卷材品种、规格、厚度：3.0mm SBS防水卷材",
+        ]
+
+        for value in equivalent_values:
+            with self.subTest(value=value):
+                self.assertEqual(normalize(value), expected)
+
+    def test_fine_signature_keeps_price_sensitive_waterproof_differences(self):
+        normalize = build_index.normalize_fine_signature_text
+        base = normalize("3.0mm SBS防水卷材")
+
+        different_values = [
+            "4.0mm SBS防水卷材",
+            "3.0mm自粘SBS防水卷材",
+            "3.0mm热熔SBS防水卷材",
+            "3.0mm单层SBS防水卷材",
+            "3.0mm双层SBS防水卷材",
+            "3.0mm一道SBS防水卷材",
+            "3.0mm两道SBS防水卷材",
+            "3.0mm耐根穿刺SBS防水卷材",
+            "3.0mm SBS防水卷材附加层",
+            "3.0mm SBS防水卷材含基层处理",
+            "拆除3.0mm SBS防水卷材",
+            "新做3.0mm SBS防水卷材",
+            "平面3.0mm SBS防水卷材",
+            "立面3.0mm SBS防水卷材",
+            "砂面3.0mm SBS防水卷材",
+        ]
+
+        for value in different_values:
+            with self.subTest(value=value):
+                self.assertNotEqual(normalize(value), base)
+
+    def test_build_fine_signature_normalizes_sbs_waterproof_aliases(self):
+        row = pd.Series(
+            {
+                "cost_item_name": "屋面卷材防水",
+                "project_description": "卷材品种、规格、厚度：1.3.0mm厚SBS防水卷材",
+                "unit": "平方米",
+                "unit_normalized": "m²",
+            }
+        )
+
+        self.assertEqual(
+            build_index.build_fine_signature(row),
+            "屋面卷材防水 | 3.0mm弹性体改性沥青防水卷材 | m²",
+        )
+
     def test_fine_signature_normalizes_tilde_between_chinese(self):
         normalize = build_index.normalize_fine_signature_text
 

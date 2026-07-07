@@ -264,6 +264,13 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 - `parse_info`：本次查询解析结果和检索参数，包括原始需求、ParsedQuery、分类结果、候选池行数、family 数、两次 LLM 输入/输出规模、token、fallback、错误和 warnings。
 - `llm_trace`：记录 query rewrite、目录分类、family selection、quantity decision 是否成功、prompt 长度、真实 token（服务返回时）或估算 token、输入摘要和错误。
 
+`fine_signature` 会对已确认的等价表达做受控归一化，例如：
+
+- `厚3.0mm` / `3.0mm厚` / `3.0mm` 统一为 `3.0mm`。
+- `SBS防水卷材` / `SBS改性沥青防水卷材` / `弹性改性沥青防水卷材` / `弹性体改性沥青防水卷材` 统一为正式名称 `弹性体改性沥青防水卷材`。
+
+不同厚度、施工方式、层数、耐根穿刺、附加层、基层处理、平面/立面、砂面等仍保持独立 family，不会因为材料同义词归一化而合并。
+
 两次 LLM 职责边界：
 
 - 第一次 LLM：只从输入的 `candidate_families` 中选择真实存在的 `family_id`，并判断 `核心施工项`、`常见前置项`、`恢复/收尾项`、`措施/条件项`、`可选/替代工艺`。

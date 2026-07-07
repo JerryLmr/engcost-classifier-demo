@@ -140,6 +140,41 @@ def normalize_source_row_id(value: Any) -> str:
     return text
 
 
+MATERIAL_ALIASES = [
+    (r"sbs\s*弹性体改性沥青防水卷材", "弹性体改性沥青防水卷材"),
+    (r"sbs\s*改性沥青防水卷材", "弹性体改性沥青防水卷材"),
+    (r"sbs\s*防水卷材", "弹性体改性沥青防水卷材"),
+    (r"弹性改性沥青防水卷材", "弹性体改性沥青防水卷材"),
+]
+
+TEMPLATE_PREFIX_PATTERNS = [
+    r"^(?:防水)?卷材品种、规格、厚度[:：]?",
+    r"^(?:防水)?卷材品种、规格[:：]?",
+    r"^材料品种、规格[:：]?",
+    r"^卷材品种[:：]?",
+]
+
+
+def normalize_fine_signature_line_prefixes(text: str) -> str:
+    lines: list[str] = []
+    for line in text.split("\n"):
+        line = re.sub(r"^\s*(?:(?:\d+、|\d+\.(?!\d)|\(\d+\)|（\d+）)\s*)", "", line)
+        line = re.sub(r"^\s*\d+\.(?=\d+\.\d+\s*(?:mm|毫米))", "", line)
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def strip_fine_signature_template_prefixes(text: str) -> str:
+    lines: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        leading_space = line[: len(line) - len(stripped)]
+        for pattern in TEMPLATE_PREFIX_PATTERNS:
+            stripped = re.sub(pattern, "", stripped)
+        lines.append(f"{leading_space}{stripped}")
+    return "\n".join(lines)
+
+
 def normalize_fine_signature_text(value: Any) -> str:
     text = safe_text(value)
     if not text:
@@ -148,13 +183,17 @@ def normalize_fine_signature_text(value: Any) -> str:
     text = unicodedata.normalize("NFKC", text).lower()
 
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"(?m)^\s*(?:(?:\d+、|\d+\.(?!\d)|\(\d+\)|（\d+）)\s*)", "", text)
+    text = normalize_fine_signature_line_prefixes(text)
 
     text = text.replace("㎡", "m²")
     text = re.sub(r"(?<![a-z0-9])m\s*2(?![a-z0-9])", "m²", text)
     text = re.sub(r"(?<![a-z0-9])m\^2(?![a-z0-9])", "m²", text)
     text = text.replace("平方米", "m²")
     text = text.replace("平方", "m²")
+    text = re.sub(r"(\d+(?:\.\d+)?)\s*(?:毫米|mm)(?![a-z0-9])", r"\1mm", text)
+
+    text = re.sub(r"厚\s*(\d+(?:\.\d+)?)\s*\(?\s*mm\s*\)?", r"\1mm", text)
+    text = re.sub(r"(\d+(?:\.\d+)?)\s*mm\s*厚", r"\1mm", text)
 
     text = text.replace("（", "(").replace("）", ")")
     text = text.replace("，", ",").replace("。", ".")
@@ -163,14 +202,15 @@ def normalize_fine_signature_text(value: Any) -> str:
     text = re.sub(r"[－—–−]", "-", text)
     text = re.sub(r"[～〜∼﹋～]", "~", text)
 
+    text = strip_fine_signature_template_prefixes(text)
+    text = normalize_fine_signature_line_prefixes(text)
+    for source, target in MATERIAL_ALIASES:
+        text = re.sub(source, target, text)
+
     text = re.sub(r"\s+", " ", text).strip()
 
     text = re.sub(r"(?<![a-z0-9])m\s*²(?![a-z0-9])", "m²", text)
-    text = re.sub(r"(\d+(?:\.\d+)?)\s*(?:毫米|mm)(?![a-z0-9])", r"\1mm", text)
     text = re.sub(r"(\d+(?:\.\d+)?)\s*m(?![a-z0-9²³])", r"\1m", text)
-
-    text = re.sub(r"厚\s*(\d+(?:\.\d+)?)\s*\(?\s*(?:mm|毫米)\s*\)?", r"\1mm厚", text)
-    text = re.sub(r"(\d+(?:\.\d+)?)\s*(?:mm|毫米)\s*厚", r"\1mm厚", text)
 
     text = re.sub(r"\s*~\s*(?=\d)", "~", text)
     text = re.sub(r"(?<=[\u4e00-\u9fff])~(?=[\u4e00-\u9fff])", "", text)
