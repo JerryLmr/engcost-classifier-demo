@@ -203,7 +203,7 @@ index_meta.json
 
 ### 5. 自然语言造价查询
 
-本系统不是通用联网报价工具，而是基于内部历史审价样本和相似工程包的离线估价辅助工具。LLM 的作用是识别需求、选择候选清单项、判断工程量估算口径、计算参考金额并生成解释；历史价格必须来自 `candidate_item_stats`，程序会校验并覆盖 LLM 输出中的历史单价和金额异常。
+本系统不是通用联网报价工具，而是基于内部历史审价样本和相似工程包的离线估价辅助工具。LLM 只负责识别需求、选择真实存在的候选施工做法、判断工程量区间和是否计入金额；清单名称、项目特征、单位、历史单价、来源样本和估算金额全部由程序按 `fine_signature` 回填或计算。
 
 运行 `query_cost_estimate_llm.py` 前需先启动 LM Studio Server 或兼容 OpenAI `chat/completions` 的本地 LLM 服务；脚本启动时会先检查 `LMSTUDIO_BASE_URL/models`，服务不可用会快速退出。
 
@@ -244,22 +244,31 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 → 标准目录分类器选择一个主目录
 → package query 检索 project_package_embeddings
 → item query 检索 item_embeddings
-→ 聚合 candidate_item_stats
-→ 压缩候选统计和 item 级证据交给 LLM
-→ LLM 选择 candidate_id、判断估算口径并生成 suggested_bill
-→ 程序回填来源样本、校验并覆盖历史单价和金额异常
-→ 输出 estimate_summary、suggested_bill、matched_project_packages、candidate_item_stats、evidence_items、parse_info、llm_trace
+→ candidate_pool 展开历史清单行
+→ 按规范化 fine_signature 精确聚合 candidate_families
+→ 第一次 LLM 只选择 family_id 和建议项类型
+→ 程序构建已选 family 的历史数量关系
+→ 第二次 LLM 判断工程量低/中/高区间和是否计入金额
+→ 程序按 family_id 回填名称、项目特征、单位、历史单价和来源样本
+→ 程序计算金额并生成 estimate_summary
+→ 输出 estimate_summary、suggested_bill、matched_project_packages、candidate_families、evidence_items、parse_info、llm_trace
 ```
 
 输出 xlsx 固定包含：
 
 - `estimate_summary`：面向用户/领导的估价摘要，展示原始需求、ParsedQuery、核心分类、估算金额区间、核心项目、共现措施项、未计入或需现场确认项目、主要不确定因素和来源说明。
-- `suggested_bill`：估价主表，展示最终采用的推荐清单项、项目角色、计量/估算口径、建议工程量、历史综合单价最低值/中位数/最高值、人工费和机械费单价区间、估算金额区间、金额计算说明、采用理由、不确定性说明和来源样本。历史价格由程序从 `candidate_item_stats` 回填。
+- `suggested_bill`：估价主表，展示最终采用的推荐清单项、项目角色、工程量来源、建议工程量低/中/高、历史综合单价最低值/中位数/最高值、人工费和机械费单价区间、估算金额区间、金额计算说明、采用理由、不确定性说明和来源样本。历史价格由程序从同一 `fine_signature` 的 `candidate_families` 回填。
 - `matched_project_packages`：相似历史工程包摘要，包括 `package_score`、`project_package_id`、工程名称、`project_name_text`、`cost_item_names_summary`、`consultation_time`、`location`、`cache_subject` 和 `item_count`。
-- `candidate_item_stats`：按 `fine_signature = cost_item_name + project_description + unit` 聚合的候选清单项统计，提供历史价格统计、历史工程量统计、工程包共现信息、`candidate_id`、`source_refs` 和是否被采用。
+- `candidate_families`：按规范化 `fine_signature = cost_item_name + project_description + unit` 聚合的候选施工做法统计。每个 family 是唯一可报价边界，3mm/4mm、自粘/热熔、单层/双层等不同规格不会合并。
 - `evidence_items`：来源样本明细，保存本次查询进入候选池的历史清单行。`source_ref = project_key + "::" + item_row_id`，可用于回查 `samples/cost_item_samples_all.xlsx` / `samples.parquet`。
-- `parse_info`：本次查询解析结果和检索参数，包括原始需求、ParsedQuery、分类结果、样本数、工程包数、候选数、索引目录、输出路径、`max_packages_per_cache_subject` 和 warnings。
-- `llm_trace`：记录结构化解析、推荐生成等步骤是否成功、prompt 长度、估算 token 数、输入摘要和 warnings。
+- `parse_info`：本次查询解析结果和检索参数，包括原始需求、ParsedQuery、分类结果、候选池行数、family 数、两次 LLM 输入/输出规模、token、fallback、错误和 warnings。
+- `llm_trace`：记录 query rewrite、目录分类、family selection、quantity decision 是否成功、prompt 长度、真实 token（服务返回时）或估算 token、输入摘要和错误。
+
+两次 LLM 职责边界：
+
+- 第一次 LLM：只从输入的 `candidate_families` 中选择真实存在的 `family_id`，并判断 `核心施工项`、`常见前置项`、`恢复/收尾项`、`措施/条件项`、`可选/替代工艺`。
+- 第二次 LLM：只为第一次已选 family 判断工程量低/中/高区间、工程量来源和是否计入参考金额。
+- LLM 不生成单价、来源、清单名称、项目特征、单位或金额。综合单价必须来自同一 `fine_signature` 下的历史样本统计。
 
 来源样本统一使用：
 

@@ -140,21 +140,19 @@ def normalize_source_row_id(value: Any) -> str:
     return text
 
 
-def normalize_signature_text(value: Any) -> str:
-    text = safe_text(value).lower()
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
-def normalize_family_signature_text(value: Any) -> str:
+def normalize_fine_signature_text(value: Any) -> str:
     text = safe_text(value)
     if not text:
         return ""
 
     text = unicodedata.normalize("NFKC", text).lower()
 
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"(?m)^\s*(?:(?:\d+、|\d+\.(?!\d)|\(\d+\)|（\d+）)\s*)", "", text)
+
     text = text.replace("㎡", "m²")
     text = re.sub(r"(?<![a-z0-9])m\s*2(?![a-z0-9])", "m²", text)
+    text = re.sub(r"(?<![a-z0-9])m\^2(?![a-z0-9])", "m²", text)
     text = text.replace("平方米", "m²")
     text = text.replace("平方", "m²")
 
@@ -162,8 +160,8 @@ def normalize_family_signature_text(value: Any) -> str:
     text = text.replace("，", ",").replace("。", ".")
     text = text.replace("；", ";").replace("：", ":")
     text = text.replace("｜", "|")
-    text = re.sub(r"[－—–]", "-", text)
-    text = re.sub(r"[～〜∼﹋]", "~", text)
+    text = re.sub(r"[－—–−]", "-", text)
+    text = re.sub(r"[～〜∼﹋～]", "~", text)
 
     text = re.sub(r"\s+", " ", text).strip()
 
@@ -184,6 +182,7 @@ def normalize_family_signature_text(value: Any) -> str:
     text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
 
     text = re.sub(r"\s*([|,;:/()~-])\s*", r"\1", text)
+    text = re.sub(r"([|,;:/()~-])\1+", r"\1", text)
     text = re.sub(r"\s+", " ", text)
 
     return text.strip()
@@ -274,19 +273,9 @@ def build_fine_signature(row: pd.Series) -> str:
     unit = safe_text(row.get("unit_normalized")) or safe_text(row.get("unit"))
     return " | ".join(
         [
-            normalize_signature_text(row.get("cost_item_name")),
-            normalize_signature_text(row.get("project_description")),
-            normalize_signature_text(unit),
-        ]
-    )
-
-
-def build_family_signature(row: pd.Series) -> str:
-    unit = safe_text(row.get("unit_normalized")) or safe_text(row.get("unit"))
-    return " | ".join(
-        [
-            normalize_family_signature_text(row.get("cost_item_name")),
-            normalize_family_signature_text(unit),
+            normalize_fine_signature_text(row.get("cost_item_name")),
+            normalize_fine_signature_text(row.get("project_description")),
+            normalize_fine_signature_text(unit),
         ]
     )
 
@@ -311,7 +300,6 @@ def load_samples(samples_path: Path) -> pd.DataFrame:
     samples["project_package_id"] = samples["project_key"].map(safe_text)
     samples["item_retrieval_text"] = samples.apply(build_item_retrieval_text, axis=1)
     samples["fine_signature"] = samples.apply(build_fine_signature, axis=1)
-    samples["family_signature"] = samples.apply(build_family_signature, axis=1)
     return samples
 
 
@@ -459,8 +447,7 @@ def build_index_meta(
             "sample_index": "samples.parquet 行号，与 item_embeddings.npy 行号一一对应。",
             "project_package_id": "当前阶段固定等于 project_key，用于历史工程包召回和展开。",
             "item_retrieval_text": "cost_item_name、project_description、unit_normalized(or unit) 拼接文本，用于 item embedding。",
-            "fine_signature": "cost_item_name + project_description + unit，用于候选项精细聚合。",
-            "family_signature": "normalize_family_signature_text(cost_item_name) + unit_normalized(or unit)，用于相似工程包共现统计和候选 family 聚合。",
+            "fine_signature": "规范化 cost_item_name + project_description + unit_normalized(or unit)，是唯一可报价施工做法分组边界。",
             "cost_item_names_summary": "同一个 project_package 下 cost_item_name 去重列表。",
             "package_text": "工程名称、project_name_text、cost_item_names_summary 拼接文本，用于 project_package embedding。",
         },

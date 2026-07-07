@@ -22,6 +22,12 @@ class LLMServiceError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class LLMJsonResponse:
+    content: Dict[str, Any]
+    usage: Dict[str, Any]
+
+
+@dataclass(frozen=True)
 class ItemSelection:
     catalog_id: str
     secondary_catalog_ids: tuple[str, ...]
@@ -142,6 +148,20 @@ def _request_lmstudio_json(
     timeout_seconds: int | None = None,
     system_prompt: str | None = None,
 ) -> Dict[str, Any]:
+    return _request_lmstudio_json_with_usage(
+        prompt,
+        max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
+        system_prompt=system_prompt,
+    ).content
+
+
+def _request_lmstudio_json_with_usage(
+    prompt: str,
+    max_tokens: int | None = None,
+    timeout_seconds: int | None = None,
+    system_prompt: str | None = None,
+) -> LLMJsonResponse:
     payload = {
         "model": LMSTUDIO_MODEL,
         "messages": [
@@ -182,7 +202,11 @@ def _request_lmstudio_json(
         ) from exc
     data = response.json()
     content = data["choices"][0]["message"]["content"]
-    return _extract_json_object(content)
+    usage = data.get("usage")
+    return LLMJsonResponse(
+        content=_extract_json_object(content),
+        usage=usage if isinstance(usage, dict) else {},
+    )
 
 
 def request_llm_json(
@@ -192,6 +216,20 @@ def request_llm_json(
     system_prompt: str | None = None,
 ) -> Dict[str, Any]:
     return _request_lmstudio_json(
+        prompt,
+        max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
+        system_prompt=system_prompt,
+    )
+
+
+def request_llm_json_with_usage(
+    prompt: str,
+    max_tokens: int | None = None,
+    timeout_seconds: int | None = None,
+    system_prompt: str | None = None,
+) -> LLMJsonResponse:
+    return _request_lmstudio_json_with_usage(
         prompt,
         max_tokens=max_tokens,
         timeout_seconds=timeout_seconds,

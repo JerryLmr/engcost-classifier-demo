@@ -19,6 +19,7 @@ from classifier.alias_matcher import load_text_aliases, match_aliases
 from classifier.catalog_postprocess import postprocess_item_selection
 from classifier.llm_client import (
     ItemSelection,
+    LLMJsonResponse,
     LLMServiceError,
     StatusSelection,
     build_full_catalog_item_selection_prompt,
@@ -417,6 +418,16 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
 
         self.assertEqual(request_llm_json("prompt"), {"ok": True})
         mock_request.assert_called_once_with("prompt", max_tokens=None, timeout_seconds=None, system_prompt=None)
+
+    @patch("classifier.llm_client._request_lmstudio_json_with_usage", return_value=LLMJsonResponse({"ok": True}, {"total_tokens": 9}))
+    def test_request_llm_json_with_usage_returns_content_and_usage(self, mock_request):
+        from classifier.llm_client import request_llm_json_with_usage
+
+        response = request_llm_json_with_usage("prompt", max_tokens=10)
+
+        self.assertEqual(response.content, {"ok": True})
+        self.assertEqual(response.usage, {"total_tokens": 9})
+        mock_request.assert_called_once_with("prompt", max_tokens=10, timeout_seconds=None, system_prompt=None)
 
     @patch(
         "classifier.llm_client.llm_select_repair_status",
