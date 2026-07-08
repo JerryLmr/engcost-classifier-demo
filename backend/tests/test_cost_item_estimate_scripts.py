@@ -344,6 +344,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(args.top_items, 300)
         self.assertEqual(args.family_selection_limit, 50)
         self.assertEqual(args.family_exploration_limit, 5)
+        self.assertEqual(args.package_weight_temperature, 0.1)
         self.assertFalse(hasattr(args, "family_final_score_limit"))
         self.assertFalse(hasattr(args, "family_item_score_limit"))
         self.assertEqual(args.llm_check_timeout, 3.0)
@@ -473,16 +474,22 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(catalog.二级分类, "防水层")
         self.assertEqual(trace["step"], "query_catalog_classification")
 
-    def test_catalog_score_uses_query_catalog_and_neutral_on_failure(self):
-        row = self.prepared_samples().iloc[0]
-        catalog = query_estimate_llm.QueryCatalog("CP-002-03", "屋面", "防水层", "维修", "共用部位", None, {}, True, [])
-        failed = query_estimate_llm.QueryCatalog("", "", "", "", "", None, {}, False, ["fail"])
+    def test_package_evidence_weights_use_continuous_softmax(self):
+        weights = query_estimate_llm.build_package_evidence_weights(
+            ["p1", "p2", "p3"],
+            {"p1": 0.9, "p2": 0.6, "p3": 0.7},
+            temperature=0.1,
+        )
 
-        self.assertEqual(query_estimate_llm.catalog_score(row, catalog), 1.0)
-        self.assertEqual(query_estimate_llm.catalog_score(row, failed), 0.5)
-        changed = row.copy()
-        changed["catalog_id"] = "DIFFERENT"
-        self.assertEqual(query_estimate_llm.catalog_score(changed, catalog), 0.95)
+        self.assertEqual(weights.columns.tolist(), query_estimate_llm.PACKAGE_EVIDENCE_WEIGHT_COLUMNS)
+        self.assertAlmostEqual(float(weights["package_evidence_weight"].sum()), 1.0)
+        p1 = weights[weights["project_package_id"].eq("p1")].iloc[0]
+        p2 = weights[weights["project_package_id"].eq("p2")].iloc[0]
+        self.assertGreater(float(p1["package_evidence_weight"]), float(p2["package_evidence_weight"]))
+        with self.assertRaisesRegex(ValueError, "必须大于 0"):
+            query_estimate_llm.build_package_evidence_weights(["p1"], {"p1": 0.9}, temperature=0)
+        empty = query_estimate_llm.build_package_evidence_weights([], {}, temperature=0.1)
+        self.assertTrue(empty.empty)
 
     def test_package_recall_dedupes_repeated_packages_before_top_k(self):
         packages = build_index.build_project_packages(self.prepared_samples())
@@ -502,34 +509,36 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(matched["rank"].tolist(), [1, 2, 3])
         self.assertEqual(matched["工程名称"].tolist().count("屋面漏水维修工程"), 1)
 
-    def test_candidate_pool_uses_item_scores_and_query_catalog(self):
+    def test_candidate_pool_uses_base_similarities_without_composite_scores(self):
         samples = self.prepared_samples()
         packages = build_index.build_project_packages(samples)
         matched = packages[packages["project_package_id"].isin(["batch-a::2", "batch-a::3"])].copy()
-        matched.insert(0, "package_score", [0.9, 0.6])
+        matched.insert(0, "package_query_similarity", [0.9, 0.6])
         matched.insert(0, "rank", [1, 2])
         direct = samples[samples["sample_index"].isin([0, 3])].copy()
-        item_scores = np.array([0.95, 0.2, 0.3, 0.7], dtype=np.float32)
+        item_query_similarities = np.array([0.95, 0.2, 0.3, 0.7], dtype=np.float32)
         catalog = query_estimate_llm.QueryCatalog("CP-002-03", "屋面", "防水层", "维修", "共用部位", None, {}, True, [])
+        package_similarity_by_id = {"batch-a::2": 0.9, "batch-a::3": 0.6, "batch-a::4": 0.4}
 
-        candidates = query_estimate_llm.candidate_pool(samples, matched, direct, item_scores, catalog)
+        candidates = query_estimate_llm.candidate_pool(
+            samples,
+            matched,
+            direct,
+            item_query_similarities,
+            catalog,
+            package_query_similarity_by_id=package_similarity_by_id,
+        )
 
         self.assertEqual(sorted(candidates["sample_index"].tolist()), [0, 1, 2, 3])
         roof = candidates[candidates["sample_index"] == 0].iloc[0]
         pipe = candidates[candidates["sample_index"] == 3].iloc[0]
-        self.assertAlmostEqual(float(roof["package_score"]), 0.9)
-        self.assertAlmostEqual(float(roof["item_score"]), 0.95)
-        self.assertAlmostEqual(float(roof["cooccur_score"]), 0.5)
-        self.assertEqual(float(roof["catalog_score"]), 1.0)
-        self.assertAlmostEqual(float(roof["package_path_score"]), 0.8)
-        self.assertAlmostEqual(float(roof["item_path_score"]), 0.915)
-        self.assertAlmostEqual(float(roof["final_score"]), 0.915)
+        self.assertAlmostEqual(float(roof["package_query_similarity"]), 0.9)
+        self.assertAlmostEqual(float(roof["item_query_similarity"]), 0.95)
         self.assertEqual(roof["source_ref"], "batch-a::2::2-1")
-        self.assertEqual(pipe["package_score"], 0.0)
+        self.assertEqual(pipe["package_query_similarity"], 0.4)
         self.assertEqual(pipe["direct_hit"], True)
-        self.assertEqual(pipe["catalog_score"], 0.1625)
-        self.assertAlmostEqual(float(pipe["item_path_score"]), 0.5725)
-        self.assertAlmostEqual(float(pipe["final_score"]), float(pipe["item_path_score"]))
+        self.assertNotIn("final_score", candidates.columns)
+        self.assertNotIn("cooccur_score", candidates.columns)
 
     def test_candidate_families_group_by_fine_signature_only(self):
         candidates = self.prepared_samples().head(1).copy()
@@ -556,15 +565,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         different["project_package_id"] = "batch-a::6"
         different["item_row_id"] = "6-1"
         candidates = pd.concat([candidates, same.to_frame().T, different.to_frame().T], ignore_index=True)
-        candidates["package_score"] = [0.8, 0.7, 0.6]
+        candidates["package_query_similarity"] = [0.8, 0.7, 0.6]
         candidates["package_rank"] = [1, 2, 3]
-        candidates["item_score"] = [0.9, 0.8, 0.7]
-        candidates["cooccur_score"] = 1.0
-        candidates["catalog_score"] = 1.0
-        candidates["unit_score"] = 0.5
-        candidates["package_path_score"] = [0.8, 0.7, 0.6]
-        candidates["item_path_score"] = [0.9, 0.85, 0.75]
-        candidates["final_score"] = [0.85, 0.75, 0.65]
+        candidates["item_query_similarity"] = [0.9, 0.8, 0.7]
         candidates["source_ref"] = ["batch-a::2::2-1", "batch-a::5::5-1", "batch-a::6::6-1"]
 
         families = query_estimate_llm.build_candidate_families(candidates)
@@ -581,8 +584,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(roof3["历史综合单价最高值"], 90.0)
         self.assertEqual(roof3["历史人工单价中位数"], 21.0)
         self.assertEqual(roof3["历史机械单价中位数"], 5.5)
-        self.assertEqual(roof3["package_path_score最大值"], 0.8)
-        self.assertEqual(roof3["item_path_score最大值"], 0.9)
+        self.assertEqual(roof3["package_query_similarity最大值"], 0.8)
+        self.assertEqual(roof3["item_query_similarity最大值"], 0.9)
         self.assertEqual(roof3["representative_project_description"], "3.0mm SBS 沥青防水卷材")
         self.assertEqual(roof4["历史综合单价最低值"], 120.0)
 
@@ -608,10 +611,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "历史样本数": 2,
                     "来源工程包数": 2,
                     "历史综合单价中位数": 80,
-                    "final_score": 0.9,
-                    "item_score最大值": 0.8,
-                    "cooccur_score": 0.5,
-                    "catalog_score": 1.0,
+                    "item_query_similarity最大值": 0.8,
                 },
                 {
                     "family_id": "F002",
@@ -623,10 +623,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "历史样本数": 3,
                     "来源工程包数": 3,
                     "历史综合单价中位数": 120,
-                    "final_score": 0.8,
-                    "item_score最大值": 0.7,
-                    "cooccur_score": 0.4,
-                    "catalog_score": 1.0,
+                    "item_query_similarity最大值": 0.7,
                 },
                 {
                     "family_id": "F003",
@@ -638,10 +635,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "历史样本数": 1,
                     "来源工程包数": 1,
                     "历史综合单价中位数": 140,
-                    "final_score": 0.7,
-                    "item_score最大值": 0.6,
-                    "cooccur_score": 0.3,
-                    "catalog_score": 1.0,
+                    "item_query_similarity最大值": 0.6,
                 },
                 {
                     "family_id": "F004",
@@ -653,10 +647,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "历史样本数": 1,
                     "来源工程包数": 1,
                     "历史综合单价中位数": 500,
-                    "final_score": 0.6,
-                    "item_score最大值": 0.5,
-                    "cooccur_score": 0.2,
-                    "catalog_score": 1.0,
+                    "item_query_similarity最大值": 0.5,
                 },
             ],
             columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
@@ -676,8 +667,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         roof = groups[groups["display_name"].eq("屋面卷材防水")].iloc[0]
         self.assertEqual(roof["family_count"], 3)
         self.assertEqual(roof["family_ids"], "F001,F002,F003")
-        self.assertEqual(roof["历史样本数合计"], 6)
-        self.assertEqual(roof["来源工程包数去重"], 2)
+        self.assertEqual(roof["historical_package_count"], 2)
+        self.assertEqual(roof["direct_item_similarity_max"], 0.8)
         self.assertEqual(set(group_families[group_families["display_id"].eq(roof["display_id"])]["family_id"]), {"F001", "F002", "F003"})
         self.assertEqual(families[families["family_id"].eq("F001")].iloc[0]["历史综合单价中位数"], 80)
         self.assertEqual(families[families["family_id"].eq("F002")].iloc[0]["历史综合单价中位数"], 120)
@@ -685,8 +676,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
     def test_display_groups_do_not_merge_different_units(self):
         families = pd.DataFrame(
             [
-                {"family_id": "F001", "representative_cost_item_name": "垃圾外运", "representative_project_description": "按项", "unit": "项", "unit_normalized": "项", "历史样本数": 1, "来源工程包数": 1, "final_score": 0.9, "item_score最大值": 0.9, "cooccur_score": 0.1, "catalog_score": 1.0},
-                {"family_id": "F002", "representative_cost_item_name": "垃圾外运", "representative_project_description": "按方", "unit": "m³", "unit_normalized": "m³", "历史样本数": 1, "来源工程包数": 1, "final_score": 0.8, "item_score最大值": 0.8, "cooccur_score": 0.1, "catalog_score": 1.0},
+                {"family_id": "F001", "representative_cost_item_name": "垃圾外运", "representative_project_description": "按项", "unit": "项", "unit_normalized": "项", "历史样本数": 1, "来源工程包数": 1, "item_query_similarity最大值": 0.9},
+                {"family_id": "F002", "representative_cost_item_name": "垃圾外运", "representative_project_description": "按方", "unit": "m³", "unit_normalized": "m³", "历史样本数": 1, "来源工程包数": 1, "item_query_similarity最大值": 0.8},
             ],
             columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
         )
@@ -698,8 +689,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
     def test_display_source_package_count_uses_evidence_distinct_packages(self):
         families = pd.DataFrame(
             [
-                {"family_id": "F001", "representative_cost_item_name": "屋面卷材防水", "representative_project_description": "3mm", "unit": "m²", "unit_normalized": "m²", "历史样本数": 2, "来源工程包数": 2, "final_score": 0.9, "item_score最大值": 0.9, "cooccur_score": 0.1, "catalog_score": 1.0},
-                {"family_id": "F002", "representative_cost_item_name": "屋面卷材防水", "representative_project_description": "4mm", "unit": "m²", "unit_normalized": "m²", "历史样本数": 2, "来源工程包数": 2, "final_score": 0.8, "item_score最大值": 0.8, "cooccur_score": 0.1, "catalog_score": 1.0},
+                {"family_id": "F001", "representative_cost_item_name": "屋面卷材防水", "representative_project_description": "3mm", "unit": "m²", "unit_normalized": "m²", "历史样本数": 2, "来源工程包数": 2, "item_query_similarity最大值": 0.9},
+                {"family_id": "F002", "representative_cost_item_name": "屋面卷材防水", "representative_project_description": "4mm", "unit": "m²", "unit_normalized": "m²", "历史样本数": 2, "来源工程包数": 2, "item_query_similarity最大值": 0.8},
             ],
             columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
         )
@@ -715,7 +706,47 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         groups, _families = query_estimate_llm.build_candidate_display_groups(families, evidence)
 
         self.assertEqual(len(groups), 1)
-        self.assertEqual(groups.iloc[0]["来源工程包数去重"], 3)
+        self.assertEqual(groups.iloc[0]["historical_package_count"], 3)
+
+    def test_display_support_ratio_counts_each_package_once(self):
+        groups = pd.DataFrame(
+            [
+                {"display_id": "D001", "display_key": "a|m²", "display_name": "A", "unit": "m²", "family_count": 2, "family_ids": "F001,F002", "top_family_examples": "[]"},
+                {"display_id": "D002", "display_key": "b|m²", "display_name": "B", "unit": "m²", "family_count": 1, "family_ids": "F003", "top_family_examples": "[]"},
+            ],
+            columns=query_estimate_llm.CANDIDATE_DISPLAY_GROUP_COLUMNS,
+        )
+        display_families = pd.DataFrame(
+            [
+                {"display_id": "D001", "family_id": "F001"},
+                {"display_id": "D001", "family_id": "F002"},
+                {"display_id": "D002", "family_id": "F003"},
+            ]
+        )
+        evidence = pd.DataFrame(
+            [
+                {"family_id": "F001", "project_package_id": "p1", "item_query_similarity": 0.8},
+                {"family_id": "F002", "project_package_id": "p1", "item_query_similarity": 0.7},
+                {"family_id": "F002", "project_package_id": "p2", "item_query_similarity": 0.9},
+                {"family_id": "F003", "project_package_id": "p3", "item_query_similarity": 0.6},
+            ]
+        )
+        weights = pd.DataFrame(
+            [
+                {"project_package_id": "p1", "package_query_similarity": 0.9, "package_evidence_weight": 0.5},
+                {"project_package_id": "p2", "package_query_similarity": 0.8, "package_evidence_weight": 0.3},
+                {"project_package_id": "p3", "package_query_similarity": 0.7, "package_evidence_weight": 0.2},
+            ],
+            columns=query_estimate_llm.PACKAGE_EVIDENCE_WEIGHT_COLUMNS,
+        )
+
+        output = query_estimate_llm.attach_display_support_ratios(groups, display_families, evidence, weights)
+        d001 = output[output["display_id"].eq("D001")].iloc[0]
+
+        self.assertAlmostEqual(float(d001["historical_support_ratio"]), 0.8)
+        self.assertEqual(d001["historical_item_row_count"], 3)
+        self.assertEqual(d001["historical_package_count"], 2)
+        self.assertAlmostEqual(float(d001["direct_item_similarity_max"]), 0.9)
 
     def test_normalize_display_description_repairs_only_leading_ocr_numbering(self):
         normalize = query_estimate_llm.normalize_display_description
@@ -730,9 +761,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             [
                 {
                     "family_id": f"F{index:03d}",
-                    "final_score": 1.0 - index / 100.0,
-                    "item_score最大值": 1.0 - index / 100.0 if index <= 30 else 0.01,
-                    "cooccur_score": 1.0 - index / 200.0,
+                    "item_query_similarity最大值": 1.0 - index / 100.0 if index <= 30 else 0.01,
+                    "package_query_similarity最大值": 1.0 - index / 200.0,
                     "来源工程包数": 1,
                     "历史样本数": 1,
                 }
@@ -759,9 +789,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             [
                 {
                     "family_id": f"F{index:03d}",
-                    "final_score": 1.0 - index / 100.0,
-                    "item_score最大值": 0.5,
-                    "cooccur_score": 0.2,
+                    "item_query_similarity最大值": 0.5,
+                    "package_query_similarity最大值": 0.2,
                     "来源工程包数": 1,
                     "历史样本数": 1,
                 }
@@ -779,9 +808,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             [
                 {
                     "family_id": f"F{index:03d}",
-                    "final_score": 1.0 - index / 1000.0,
-                    "item_score最大值": 1.0 - index / 1000.0,
-                    "cooccur_score": 1.0 - index / 1000.0,
+                    "item_query_similarity最大值": 1.0 - index / 1000.0,
+                    "package_query_similarity最大值": 1.0 - index / 1000.0,
                     "来源工程包数": 1,
                     "历史样本数": 1,
                 }
@@ -825,7 +853,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "unit_normalized": "m²",
                     "历史样本数": 2,
                     "来源工程包数": 2,
-                    "final_score": 0.9,
+                    "item_query_similarity最大值": 0.9,
                     "source_refs": "SHOULD_NOT_SEND",
                     "历史综合单价中位数": 90,
                 }
@@ -837,8 +865,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(records[0]["id"], "F001")
         self.assertEqual(records[0]["samples"], 2)
         self.assertEqual(records[0]["packages"], 2)
-        self.assertIn("item_score", records[0])
-        self.assertIn("cooccur_score", records[0])
+        self.assertIn("item_query_similarity", records[0])
         self.assertNotIn("final_score", records[0])
         self.assertNotIn("source_refs", prompt)
         self.assertNotIn("final_score", prompt)
@@ -873,7 +900,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             [
                 {
                     "selection_rank": 1,
-                    "candidate_source": "final_score,item_score",
+                    "candidate_source": "item_query_similarity,package_query_similarity",
                     "family_id": "F001",
                     "fine_signature": "sig-1",
                     "representative_cost_item_name": "屋面卷材防水",
@@ -882,9 +909,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "unit_normalized": "m²",
                     "历史样本数": 2,
                     "来源工程包数": 2,
-                    "final_score": 0.9,
-                    "item_score最大值": 0.8,
-                    "cooccur_score": 0.7,
+                    "item_query_similarity最大值": 0.8,
                 },
                 {
                     "selection_rank": 2,
@@ -897,9 +922,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "unit_normalized": "项",
                     "历史样本数": 1,
                     "来源工程包数": 1,
-                    "final_score": 0.2,
-                    "item_score最大值": 0.1,
-                    "cooccur_score": 0.3,
+                    "item_query_similarity最大值": 0.1,
                 },
             ]
         )
@@ -924,15 +947,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "unit": "m²",
                     "family_count": 3,
                     "family_ids": "F004,F007,F008",
-                    "历史样本数合计": 20,
-                    "来源工程包数去重": 12,
-                    "final_score最大值": 0.9,
-                    "item_score最大值": 0.8,
-                    "cooccur_score最大值": 0.4,
-                    "catalog_score最大值": 1.0,
+                    "historical_support_ratio": 0.615432,
+                    "historical_item_row_count": 20,
+                    "historical_package_count": 12,
                     "top_family_examples": query_estimate_llm.json_text(
                         [{"family_id": "F004", "项目特征简述": "3mm SBS", "samples": 10, "packages": 8}]
                     ),
+                    "direct_item_similarity_max": 0.8,
                 }
             ],
             columns=query_estimate_llm.CANDIDATE_DISPLAY_GROUP_COLUMNS,
@@ -949,11 +970,17 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         self.assertEqual(selected["display_id"].tolist(), ["D001"])
         self.assertEqual(records[0]["id"], "D001")
-        self.assertEqual(records[0]["families"], 3)
-        self.assertEqual(records[0]["examples"][0]["family_id"], "F004")
+        self.assertEqual(records[0]["historical_support_ratio"], 0.615)
+        self.assertEqual(records[0]["examples"], ["3mm SBS"])
+        self.assertEqual(set(records[0]), {"id", "name", "unit", "historical_support_ratio", "examples"})
         self.assertIn("selected_displays", prompt)
+        self.assertIn("historical_support_ratio 表示", prompt)
         self.assertNotIn("selected_families", prompt)
         self.assertNotIn("item_type", prompt)
+        self.assertNotIn("direct_item_similarity", prompt)
+        self.assertNotIn("package_query_similarity", prompt)
+        self.assertNotIn("cooccur_score", prompt)
+        self.assertNotIn("final_score", prompt)
         self.assertNotIn("最小完整施工链", prompt)
         self.assertEqual(parsed["display_id"].tolist(), ["D001"])
         self.assertEqual(parsed.columns.tolist(), ["display_id", "selection_reason"])
@@ -1052,7 +1079,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "历史综合单价最低值": 80,
                     "历史综合单价中位数": 80,
                     "历史综合单价最高值": 80,
-                    "final_score": 0.95,
                     "source_refs": "batch-a::1::1-1",
                 },
                 {
@@ -1067,7 +1093,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "历史综合单价最低值": 120,
                     "历史综合单价中位数": 120,
                     "历史综合单价最高值": 120,
-                    "final_score": 0.9,
                     "source_refs": "batch-a::2::2-1",
                 },
             ],
@@ -1331,6 +1356,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             top_packages=10,
             top_items=20,
             max_packages_per_cache_subject=3,
+            package_weight_temperature=0.1,
+            evidence_package_universe_count=5,
+            package_evidence_weight_count=5,
+            package_evidence_weight_sum=1.0,
             meta={},
             sample_count=100,
             package_count=10,
@@ -1349,7 +1378,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "candidate_ids": ["D001", "D002"],
                 "selected_ids": ["D001"],
                 "selected_detail": [{"display_id": "D001", "selection_reason": "直接"}],
-                "candidate_source_counts": {"final_score": 1, "exploration": 1},
+                "candidate_source_counts": {"historical_support_ratio": 1, "exploration": 1},
                 "exploration_count": 1,
             },
             display_family_selection_display_count=2,
@@ -1398,6 +1427,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(values["evidence_item_row_count"], 50)
         self.assertEqual(values["candidate_family_count"], 12)
         self.assertEqual(values["candidate_display_group_count"], 7)
+        self.assertEqual(values["package_weight_temperature"], 0.1)
+        self.assertEqual(values["evidence_package_universe_count"], 5)
+        self.assertEqual(values["package_evidence_weight_count"], 5)
+        self.assertEqual(values["package_evidence_weight_sum"], "1.000000000000")
         self.assertEqual(values["display_selection_prompt_tokens"], 40)
         self.assertEqual(values["display_selection_candidate_ids"], '["D001", "D002"]')
         self.assertEqual(values["display_selection_selected_ids"], '["D001"]')
@@ -1440,6 +1473,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             matched_project_packages=pd.DataFrame(columns=query_estimate_llm.MATCHED_PROJECT_PACKAGE_COLUMNS),
             candidate_families=pd.DataFrame(columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS),
             candidate_display_groups=pd.DataFrame(columns=query_estimate_llm.CANDIDATE_DISPLAY_GROUP_COLUMNS),
+            package_evidence_weights=pd.DataFrame(columns=query_estimate_llm.PACKAGE_EVIDENCE_WEIGHT_COLUMNS),
             display_group_families=pd.DataFrame(columns=query_estimate_llm.DISPLAY_GROUP_FAMILY_COLUMNS),
             display_selection_trace=pd.DataFrame(columns=query_estimate_llm.DISPLAY_SELECTION_TRACE_COLUMNS),
             display_family_selection_trace=pd.DataFrame(columns=query_estimate_llm.DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS),
@@ -1472,6 +1506,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "display_selection_trace",
                     "display_family_selection_trace",
                     "matched_project_packages",
+                    "package_evidence_weights",
                     "evidence_items",
                     "parse_info",
                     "llm_trace",

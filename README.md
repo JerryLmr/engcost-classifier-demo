@@ -197,7 +197,7 @@ index_meta.json
 - `project_package_embeddings.npy`：每个 `project_key` 一个历史工程包 embedding，文本只基于 `工程名称 + project_name_text + cost_item_names_summary`，用于召回相似历史工程包。
 - `item_embeddings.npy`：每条历史清单行一个 embedding，文本只基于 `cost_item_name + project_description + unit_normalized`，用于召回相似清单行证据。
 
-目录分类字段仍保留在 `samples.parquet` / `project_packages.parquet` 中用于追溯和 `catalog_score`，但不进入 package/item embedding 文本。
+目录分类字段仍保留在 `samples.parquet` / `project_packages.parquet` 中用于追溯和 LLM 输入上下文，但不进入 package/item embedding 文本，也不参与候选综合评分。
 
 当前阶段不使用 Milvus，不使用 LangChain；每次合并后允许重建整个本地 parquet + npy + `index_meta.json`。
 
@@ -236,12 +236,15 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 
 如果输出文件已存在，需要显式传 `--overwrite`。
 
-display_selection 默认最多发送 50 个 display，其中主排序候选由 `final_score最大值`、`item_score最大值`、`cooccur_score最大值`、`来源工程包数去重` 四个完整排行榜交替补足，重复 display 不占配额；候选超过 50 时末尾保留 5 个确定性等距探索候选。当前 CLI 参数名沿用：
+display_selection 默认最多发送 50 个 display。候选过多时，主排序候选由 `historical_support_ratio`、`direct_item_similarity_max`、`historical_package_count` 三个排行榜交替补足，重复 display 不占配额；末尾保留 5 个确定性等距探索候选。当前 CLI 参数名沿用：
 
 ```text
 --family-selection-limit
 --family-exploration-limit
+--package-weight-temperature
 ```
+
+`--package-weight-temperature` 控制工程包证据权重 softmax 的平滑程度，默认 `0.10`，必须大于 0。
 
 新查询流程：
 
@@ -250,8 +253,10 @@ display_selection 默认最多发送 50 个 display，其中主排序候选由 `
 → LLM query rewrite
 → 工程包与清单行 embedding 召回
 → candidate pool
+→ evidence package universe 与 package_evidence_weight
 → fine_signature family 聚合
 → 按 cost_item_name + unit 形成 display groups
+→ 按 display 重新计算 historical_support_ratio
 → LLM 选择最小完整施工链中的 display
 → 对已选 display 选择默认 family 和其他历史做法
 → display 级重复/包含关系处理
@@ -263,11 +268,12 @@ display_selection 默认最多发送 50 个 display，其中主排序候选由 `
 
 - `estimate_summary`：面向用户/领导的估价摘要，展示原始需求、ParsedQuery、核心分类、估算金额区间、核心项目、共现措施项、未计入或需现场确认项目、主要不确定因素和来源说明。
 - `suggested_bill`：估价主表，一行一个最终保留的 display。清单名称来自 display，默认参考做法和价格来源来自 `selected_family_id`；同组其他 family 只作为“其他历史做法”展示，不单独生成金额行。
-- `matched_project_packages`：相似历史工程包摘要，包括 `package_score`、`project_package_id`、工程名称、`project_name_text`、`cost_item_names_summary`、`consultation_time`、`location`、`cache_subject` 和 `item_count`。
-- `candidate_families`：按规范化 `fine_signature = cost_item_name + project_description + unit` 聚合的候选施工做法统计。当前没有新增第二套 family 规范化规则；每个 family 是唯一可报价边界，3mm/4mm、自粘/热熔、单层/双层等不同规格不会合并；表内保留 `package_path_score最大值`、`item_path_score最大值` 和 `final_score` 便于排查召回排序。
-- `candidate_display_groups`：按 normalized `cost_item_name + unit` 组织出来的客户展示候选。display 只用于减少同名清单项重复展示，不合并同组 family 的价格样本。
+- `matched_project_packages`：相似历史工程包摘要，包括 `package_query_similarity`、`project_package_id`、工程名称、`project_name_text`、`cost_item_names_summary`、`consultation_time`、`location`、`cache_subject` 和 `item_count`。
+- `package_evidence_weights`：本次查询证据工程包全集的权重表，包括 `project_package_id`、`package_query_similarity`、`package_evidence_weight`；权重和为 1，direct item 引入但未进入 package top-k 的工程包也会按相似度获得连续权重。
+- `candidate_families`：按规范化 `fine_signature = cost_item_name + project_description + unit` 聚合的候选施工做法统计。当前没有新增第二套 family 规范化规则；每个 family 是唯一可报价边界，3mm/4mm、自粘/热熔、单层/双层等不同规格不会合并；表内保留 `package_query_similarity最大值`、`item_query_similarity最大值` 和价格样本统计用于追溯。
+- `candidate_display_groups`：按 normalized `cost_item_name + unit` 组织出来的客户展示候选。display 只用于减少同名清单项重复展示，不合并同组 family 的价格样本；`historical_support_ratio` 表示当前查询相关历史工程证据对该 display 的加权支持比例。
 - `display_group_families`：display 到内部 family 的映射表，用于从 display 回查 `fine_signature`、默认 family 和 evidence。
-- `display_selection_trace`：记录实际发送给 display_selection LLM 的 display、`selection_rank`、`candidate_source`、是否被选中、display 层 `item_type` 和选择原因。
+- `display_selection_trace`：记录实际发送给 display_selection LLM 的 display、`selection_rank`、`historical_support_ratio`、`candidate_source`、是否被选中和选择原因。
 - `display_family_selection_trace`：记录每个已选 display 内部的 family、默认 family、其他历史做法及差异说明。
 - `evidence_items`：来源样本明细，保存本次查询进入候选池的历史清单行。`source_ref = project_key + "::" + item_row_id`，`family_id` 和 `fine_signature` 可用于从历史样本回查所属 family。
 - `parse_info`：本次查询解析结果和检索参数，包括原始需求、ParsedQuery、分类结果、候选池行数、family 数、display 数、LLM 输入/输出规模、token、fallback、错误、dedup 抑制摘要和 warnings。
@@ -284,7 +290,7 @@ display_selection 默认最多发送 50 个 display，其中主排序候选由 `
 
 LLM 职责边界：
 
-- display_selection：只从输入的 `candidate_displays` 中选择真实存在的 `display_id`，并在 display 层判断 `核心施工项`、`常见前置项`、`恢复/收尾项`、`施工措施/现场条件项`、`可选/替代工艺`。
+- display_selection：只从输入的 `candidate_displays` 中选择真实存在的 `display_id`；主证据是 `historical_support_ratio` 和简短历史做法示例，但不能只按比例机械选择。
 - display_family_selection：只在已选 display 内选择一个 `selected_family_id` 作为默认做法和价格来源，并选择 0～3 个同组其他历史做法。
 - dedup_selection：只对已选 display 做重复或包含关系抑制，不创建新 display，不合并价格样本、来源、工程量或单价区间。
 - quantity_decision：只为 dedup 后保留的 display 判断工程量低/中/高区间、工程量来源和是否计入参考金额。

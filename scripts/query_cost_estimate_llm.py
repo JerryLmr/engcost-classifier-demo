@@ -25,9 +25,11 @@ from classifier.llm_client import LLMServiceError, check_lmstudio_service, reque
 from services.standard_classifier import classify_project_standard  # noqa: E402
 
 
+DEFAULT_PACKAGE_WEIGHT_TEMPERATURE = 0.10
+
 MATCHED_PROJECT_PACKAGE_COLUMNS = [
     "rank",
-    "package_score",
+    "package_query_similarity",
     "project_package_id",
     "工程名称",
     "project_name_text",
@@ -62,14 +64,15 @@ CANDIDATE_FAMILY_COLUMNS = [
     "历史机械单价最低值",
     "历史机械单价中位数",
     "历史机械单价最高值",
-    "package_score最大值",
-    "package_path_score最大值",
-    "item_path_score最大值",
-    "item_score最大值",
-    "cooccur_score",
-    "catalog_score",
-    "final_score",
+    "package_query_similarity最大值",
+    "item_query_similarity最大值",
     "source_refs",
+]
+
+PACKAGE_EVIDENCE_WEIGHT_COLUMNS = [
+    "project_package_id",
+    "package_query_similarity",
+    "package_evidence_weight",
 ]
 
 EVIDENCE_ITEM_COLUMNS = [
@@ -100,13 +103,8 @@ EVIDENCE_ITEM_COLUMNS = [
     "labor_unit_price",
     "machinery_unit_price",
     "package_rank",
-    "package_score",
-    "package_path_score",
-    "item_path_score",
-    "item_score",
-    "cooccur_score",
-    "catalog_score",
-    "final_score",
+    "package_query_similarity",
+    "item_query_similarity",
 ]
 
 SUGGESTED_BILL_COLUMNS = [
@@ -157,13 +155,11 @@ CANDIDATE_DISPLAY_GROUP_COLUMNS = [
     "unit",
     "family_count",
     "family_ids",
-    "历史样本数合计",
-    "来源工程包数去重",
-    "final_score最大值",
-    "item_score最大值",
-    "cooccur_score最大值",
-    "catalog_score最大值",
+    "historical_support_ratio",
+    "historical_item_row_count",
+    "historical_package_count",
     "top_family_examples",
+    "direct_item_similarity_max",
 ]
 
 DISPLAY_GROUP_FAMILY_COLUMNS = [
@@ -177,10 +173,7 @@ DISPLAY_GROUP_FAMILY_COLUMNS = [
     "unit",
     "历史样本数",
     "来源工程包数",
-    "final_score",
-    "item_score最大值",
-    "cooccur_score",
-    "catalog_score",
+    "item_query_similarity最大值",
 ]
 
 DISPLAY_SELECTION_TRACE_COLUMNS = [
@@ -191,11 +184,10 @@ DISPLAY_SELECTION_TRACE_COLUMNS = [
     "unit",
     "family_count",
     "family_ids",
-    "历史样本数合计",
-    "来源工程包数去重",
-    "final_score最大值",
-    "item_score最大值",
-    "cooccur_score最大值",
+    "historical_support_ratio",
+    "historical_item_row_count",
+    "historical_package_count",
+    "direct_item_similarity_max",
     "candidate_source",
     "selected_by_llm",
     "selection_reason",
@@ -211,9 +203,7 @@ FAMILY_SELECTION_TRACE_COLUMNS = [
     "unit",
     "历史样本数",
     "来源工程包数",
-    "final_score",
-    "item_score最大值",
-    "cooccur_score",
+    "item_query_similarity最大值",
     "candidate_source",
     "selected_by_llm",
     "selection_reason",
@@ -230,8 +220,7 @@ DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS = [
     "display_project_description",
     "历史样本数",
     "来源工程包数",
-    "final_score",
-    "item_score最大值",
+    "item_query_similarity最大值",
     "unit_price_min",
     "unit_price_median",
     "unit_price_max",
@@ -302,6 +291,7 @@ class QueryResult:
     matched_project_packages: pd.DataFrame
     candidate_families: pd.DataFrame
     candidate_display_groups: pd.DataFrame
+    package_evidence_weights: pd.DataFrame
     display_group_families: pd.DataFrame
     display_selection_trace: pd.DataFrame
     display_family_selection_trace: pd.DataFrame
@@ -334,6 +324,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--family-selection-limit", type=int, default=50, help="发送给 display_selection LLM 的 display 上限，默认 50")
     parser.add_argument("--family-exploration-limit", type=int, default=5, help="display_selection 等距探索候选上限，默认 5")
+    parser.add_argument(
+        "--package-weight-temperature",
+        type=float,
+        default=DEFAULT_PACKAGE_WEIGHT_TEMPERATURE,
+        help=f"工程包证据权重 softmax temperature，必须大于 0，默认 {DEFAULT_PACKAGE_WEIGHT_TEMPERATURE}",
+    )
     return parser.parse_args()
 
 
@@ -684,7 +680,7 @@ def classify_query_catalog(
             item_summary=item_summary,
         )
     except Exception as exc:  # noqa: BLE001
-        catalog = empty_query_catalog(raw_query, f"标准目录分类异常，catalog_score 使用 0.5: {exc}")
+        catalog = empty_query_catalog(raw_query, f"标准目录分类异常，后续仅保留原始分类追溯: {exc}")
         return catalog, trace_row(
             "query_catalog_classification",
             "复用标准目录分类器选择主目录",
@@ -698,7 +694,7 @@ def classify_query_catalog(
     success = cell_text(result.get("catalog_id")) and cell_text(result.get("catalog_id")) != "OUT_OF_SCOPE"
     notes: list[str] = []
     if not success:
-        notes.append("标准目录分类未命中有效主目录，catalog_score 使用 0.5")
+        notes.append("标准目录分类未命中有效主目录，后续仅保留原始分类追溯")
     catalog = QueryCatalog(
         catalog_id=cell_text(result.get("catalog_id")),
         一级分类=cell_text(result.get("category") or result.get("一级分类")),
@@ -751,9 +747,9 @@ def score_project_packages(
     scores = project_package_embeddings @ package_query_embedding
     indices = top_score_indices(scores, max(top_packages * 20, top_packages))
     rows = project_packages.iloc[indices].copy()
-    rows["package_score"] = scores[indices].astype(float)
+    rows["package_query_similarity"] = scores[indices].astype(float)
     rows["package_dedupe_key"] = rows.apply(package_dedupe_key, axis=1)
-    rows = rows.sort_values("package_score", ascending=False)
+    rows = rows.sort_values("package_query_similarity", ascending=False)
     rows = rows.drop_duplicates("package_dedupe_key", keep="first").copy()
     if "cache_subject" in rows.columns and max_packages_per_cache_subject > 0:
         rows["_cache_subject_key"] = rows["cache_subject"].map(normalize_dedupe_text)
@@ -777,46 +773,21 @@ def matched_project_packages_for_output(matched: pd.DataFrame) -> pd.DataFrame:
     return output[MATCHED_PROJECT_PACKAGE_COLUMNS].fillna("")
 
 
-def score_direct_items(samples: pd.DataFrame, item_scores: np.ndarray, top_items: int) -> pd.DataFrame:
-    indices = top_score_indices(item_scores, top_items)
+def score_direct_items(samples: pd.DataFrame, item_query_similarities: np.ndarray, top_items: int) -> pd.DataFrame:
+    indices = top_score_indices(item_query_similarities, top_items)
     rows = samples.iloc[indices].copy()
-    rows["item_score"] = item_scores[indices].astype(float)
+    rows["item_query_similarity"] = item_query_similarities[indices].astype(float)
     return rows
 
 
-def catalog_score(row: pd.Series, query_catalog: QueryCatalog) -> float:
-    if not query_catalog.success:
-        return 0.5
-    item_catalog_id = cell_text(row.get("catalog_id"))
-    if item_catalog_id and item_catalog_id == query_catalog.catalog_id:
-        return 1.0
-
-    weighted_comparisons = [
-        ("一级分类", query_catalog.一级分类, 0.20),
-        ("二级分类", query_catalog.二级分类, 0.30),
-        ("维修状态", query_catalog.维修状态, 0.15),
-        ("标准对象", query_catalog.标准对象, 0.15),
-    ]
-    score = 0.5
-    compared = False
-    for column, expected, weight in weighted_comparisons:
-        if not expected:
-            continue
-        compared = True
-        actual = cell_text(row.get(column))
-        if not actual:
-            continue
-        elif actual == expected:
-            score += weight
-        else:
-            score -= weight * 0.75
-    if not compared:
-        return 0.5
-    return round(max(0.0, min(0.95, score)), 4)
-
-
-def unit_score(_row: pd.Series) -> float:
-    return 0.5
+def project_package_similarity_map(project_packages: pd.DataFrame, package_query_similarities: np.ndarray) -> dict[str, float]:
+    if len(project_packages) != len(package_query_similarities):
+        raise ValueError("工程包数量与 package_query_similarities 数量不一致")
+    return {
+        cell_text(row.get("project_package_id")): float(package_query_similarities[index])
+        for index, (_row_index, row) in enumerate(project_packages.iterrows())
+        if cell_text(row.get("project_package_id"))
+    }
 
 
 def source_identity_for_row(row: pd.Series, warnings: list[str] | None = None) -> tuple[str, str, str]:
@@ -860,32 +831,66 @@ def matched_package_maps(matched_project_packages: pd.DataFrame) -> tuple[dict[s
         package_id = cell_text(row.get("project_package_id"))
         if not package_id:
             continue
-        score_map[package_id] = float(row.get("package_score") or 0.0)
+        score_map[package_id] = float(row.get("package_query_similarity") or 0.0)
         rank_map[package_id] = int(row.get("rank") or 0)
     return score_map, rank_map
 
 
-def cooccur_scores(samples: pd.DataFrame, matched_package_ids: list[str]) -> dict[str, float]:
-    if not matched_package_ids:
-        return {}
-    matched = samples[samples["project_package_id"].astype(str).isin(matched_package_ids)]
-    if matched.empty or "fine_signature" not in matched.columns:
-        return {}
-    counts = matched.groupby("fine_signature", dropna=False)["project_package_id"].nunique()
-    denominator = max(len(matched_package_ids), 1)
-    return {cell_text(signature): float(count) / denominator for signature, count in counts.items()}
+def evidence_package_universe(matched_project_packages: pd.DataFrame, direct_item_hits: pd.DataFrame) -> list[str]:
+    package_ids: list[str] = []
+    seen: set[str] = set()
+    for frame in [matched_project_packages, direct_item_hits]:
+        if frame.empty or "project_package_id" not in frame.columns:
+            continue
+        for value in frame["project_package_id"].tolist():
+            package_id = cell_text(value)
+            if package_id and package_id not in seen:
+                package_ids.append(package_id)
+                seen.add(package_id)
+    return package_ids
+
+
+def build_package_evidence_weights(
+    evidence_package_ids: list[str],
+    package_query_similarity_by_id: dict[str, float],
+    temperature: float,
+) -> pd.DataFrame:
+    if temperature <= 0:
+        raise ValueError("package weight temperature 必须大于 0")
+    package_ids = [package_id for package_id in evidence_package_ids if cell_text(package_id)]
+    if not package_ids:
+        return pd.DataFrame(columns=PACKAGE_EVIDENCE_WEIGHT_COLUMNS)
+
+    similarities = np.array(
+        [float(package_query_similarity_by_id.get(package_id, 0.0)) for package_id in package_ids],
+        dtype=np.float64,
+    )
+    max_similarity = float(np.max(similarities))
+    raw_weights = np.exp((similarities - max_similarity) / float(temperature))
+    denominator = float(raw_weights.sum())
+    weights = raw_weights / denominator if denominator > 0 else np.zeros_like(raw_weights)
+    return pd.DataFrame(
+        {
+            "project_package_id": package_ids,
+            "package_query_similarity": similarities.astype(float),
+            "package_evidence_weight": weights.astype(float),
+        },
+        columns=PACKAGE_EVIDENCE_WEIGHT_COLUMNS,
+    )
 
 
 def candidate_pool(
     samples: pd.DataFrame,
     matched_project_packages: pd.DataFrame,
     direct_item_hits: pd.DataFrame,
-    item_scores: np.ndarray,
+    item_query_similarities: np.ndarray,
     query_catalog: QueryCatalog,
+    package_query_similarity_by_id: dict[str, float] | None = None,
     warnings: list[str] | None = None,
 ) -> pd.DataFrame:
-    package_score_map, package_rank_map = matched_package_maps(matched_project_packages)
-    matched_package_ids = list(package_score_map.keys())
+    package_query_similarity_map, package_rank_map = matched_package_maps(matched_project_packages)
+    package_query_similarity_by_id = package_query_similarity_by_id or package_query_similarity_map
+    matched_package_ids = list(package_query_similarity_map.keys())
     direct_indices = {
         int(index)
         for index in pd.to_numeric(direct_item_hits.get("sample_index", pd.Series(dtype=int)), errors="coerce").dropna()
@@ -900,29 +905,16 @@ def candidate_pool(
     sample_index_series = pd.to_numeric(samples["sample_index"], errors="coerce").astype("Int64")
     rows = samples[sample_index_series.isin(candidate_indices)].copy()
     rows["sample_index"] = pd.to_numeric(rows["sample_index"], errors="raise").astype(int)
-    if rows["sample_index"].min() < 0 or rows["sample_index"].max() >= len(item_scores):
+    if rows["sample_index"].min() < 0 or rows["sample_index"].max() >= len(item_query_similarities):
         raise ValueError("sample_index 超出 item_embeddings 范围")
 
-    rows["package_score"] = rows["project_package_id"].map(package_score_map).fillna(0.0).astype(float)
+    rows["package_query_similarity"] = rows["project_package_id"].map(package_query_similarity_by_id).fillna(0.0).astype(float)
     rows["package_rank"] = rows["project_package_id"].map(package_rank_map)
-    rows["item_score"] = rows["sample_index"].map(lambda sample_index: float(item_scores[int(sample_index)]))
-    family_cooccur = cooccur_scores(samples, matched_package_ids)
-    rows["cooccur_score"] = rows["fine_signature"].map(lambda signature: family_cooccur.get(cell_text(signature), 0.0))
-    rows["catalog_score"] = rows.apply(lambda row: catalog_score(row, query_catalog), axis=1)
-    rows["unit_score"] = rows.apply(unit_score, axis=1)
+    rows["item_query_similarity"] = rows["sample_index"].map(lambda sample_index: float(item_query_similarities[int(sample_index)]))
     rows["direct_hit"] = rows["sample_index"].isin(direct_indices)
-    rows["package_path_score"] = (
-        0.40 * rows["package_score"]
-        + 0.25 * rows["cooccur_score"]
-        + 0.20 * rows["item_score"]
-        + 0.10 * rows["catalog_score"]
-        + 0.05 * rows["unit_score"]
-    )
-    rows["item_path_score"] = 0.70 * rows["item_score"] + 0.20 * rows["catalog_score"] + 0.10 * rows["unit_score"]
-    rows["final_score"] = rows[["package_path_score", "item_path_score"]].max(axis=1)
     rows = attach_source_refs(rows, warnings)
-    sort_columns = ["final_score", "item_score", "package_score", "cooccur_score"]
-    return rows.sort_values(sort_columns, ascending=[False, False, False, False]).reset_index(drop=True)
+    sort_columns = ["item_query_similarity", "package_query_similarity"]
+    return rows.sort_values(sort_columns, ascending=[False, False]).reset_index(drop=True)
 
 
 def numeric_values(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -992,7 +984,7 @@ def build_candidate_families(candidates: pd.DataFrame) -> pd.DataFrame:
 
     rows: list[dict[str, Any]] = []
     for fine_signature, group in candidates.groupby("fine_signature", sort=False, dropna=False):
-        group = group.sort_values(["final_score", "item_score", "package_score"], ascending=[False, False, False])
+        group = group.sort_values(["item_query_similarity", "package_query_similarity"], ascending=[False, False])
         representative = group.iloc[0]
         quantity_min, quantity_median, quantity_max = min_median_max(group, "quantity")
         unit_price_min, unit_price_median, unit_price_max = min_median_max(group, "unit_price")
@@ -1023,19 +1015,14 @@ def build_candidate_families(candidates: pd.DataFrame) -> pd.DataFrame:
                 "历史机械单价最低值": machinery_min,
                 "历史机械单价中位数": machinery_median,
                 "历史机械单价最高值": machinery_max,
-                "package_score最大值": max_numeric_or_zero(group, "package_score"),
-                "package_path_score最大值": max_numeric_or_zero(group, "package_path_score"),
-                "item_path_score最大值": max_numeric_or_zero(group, "item_path_score"),
-                "item_score最大值": max_numeric_or_zero(group, "item_score"),
-                "cooccur_score": max_numeric_or_zero(group, "cooccur_score"),
-                "catalog_score": max_numeric_or_zero(group, "catalog_score"),
-                "final_score": max_numeric_or_zero(group, "final_score"),
+                "package_query_similarity最大值": max_numeric_or_zero(group, "package_query_similarity"),
+                "item_query_similarity最大值": max_numeric_or_zero(group, "item_query_similarity"),
                 "source_refs": ordered_refs(group.get("source_ref", pd.Series(dtype=object)), limit=10),
             }
         )
 
     output = pd.DataFrame(rows)
-    output = output.sort_values(["final_score", "item_score最大值", "历史样本数"], ascending=[False, False, False])
+    output = output.sort_values(["item_query_similarity最大值", "历史样本数", "来源工程包数"], ascending=[False, False, False])
     output.insert(0, "family_id", [f"F{index:03d}" for index in range(1, len(output) + 1)])
     for column in CANDIDATE_FAMILY_COLUMNS:
         if column not in output.columns:
@@ -1081,13 +1068,8 @@ def build_evidence_items(candidates: pd.DataFrame, candidate_families: pd.DataFr
             "labor_unit_price": candidates.get("labor_unit_price", ""),
             "machinery_unit_price": candidates.get("machinery_unit_price", ""),
             "package_rank": candidates.get("package_rank", ""),
-            "package_score": candidates.get("package_score", ""),
-            "package_path_score": candidates.get("package_path_score", ""),
-            "item_path_score": candidates.get("item_path_score", ""),
-            "item_score": candidates.get("item_score", ""),
-            "cooccur_score": candidates.get("cooccur_score", ""),
-            "catalog_score": candidates.get("catalog_score", ""),
-            "final_score": candidates.get("final_score", ""),
+            "package_query_similarity": candidates.get("package_query_similarity", ""),
+            "item_query_similarity": candidates.get("item_query_similarity", ""),
         }
     )
     for column in EVIDENCE_ITEM_COLUMNS:
@@ -1110,8 +1092,8 @@ def top_family_examples(group: pd.DataFrame, limit: int = 3) -> list[dict[str, A
     if group.empty:
         return []
     ordered = group.sort_values(
-        ["item_score最大值", "历史样本数", "来源工程包数", "final_score"],
-        ascending=[False, False, False, False],
+        ["item_query_similarity最大值", "历史样本数", "来源工程包数"],
+        ascending=[False, False, False],
     )
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -1156,7 +1138,7 @@ def build_candidate_display_groups(
     display_id_by_key: dict[str, str] = {}
     raw_groups: list[tuple[dict[str, Any], pd.DataFrame]] = []
     for display_key, group in families.groupby("_display_key", sort=False, dropna=False):
-        group = group.sort_values(["final_score", "item_score最大值", "历史样本数"], ascending=[False, False, False])
+        group = group.sort_values(["item_query_similarity最大值", "历史样本数", "来源工程包数"], ascending=[False, False, False])
         representative = group.iloc[0]
         family_ids = [cell_text(value) for value in group["family_id"].tolist() if cell_text(value)]
         evidence = evidence_items[evidence_items.get("family_id", pd.Series(dtype=object)).map(cell_text).isin(family_ids)].copy()
@@ -1173,13 +1155,11 @@ def build_candidate_display_groups(
                     "unit": display_unit_for_family(representative),
                     "family_count": int(len(group)),
                     "family_ids": ",".join(family_ids),
-                    "历史样本数合计": int(pd.to_numeric(group.get("历史样本数", pd.Series(dtype=object)), errors="coerce").fillna(0).sum()),
-                    "来源工程包数去重": int(package_values.nunique()),
-                    "final_score最大值": max_numeric_or_zero(group, "final_score"),
-                    "item_score最大值": max_numeric_or_zero(group, "item_score最大值"),
-                    "cooccur_score最大值": max_numeric_or_zero(group, "cooccur_score"),
-                    "catalog_score最大值": max_numeric_or_zero(group, "catalog_score"),
+                    "historical_support_ratio": 0.0,
+                    "historical_item_row_count": 0,
+                    "historical_package_count": int(package_values.nunique()),
                     "top_family_examples": json_text(top_family_examples(group)),
+                    "direct_item_similarity_max": max_numeric_or_zero(group, "item_query_similarity最大值"),
                 },
                 group,
             )
@@ -1187,9 +1167,8 @@ def build_candidate_display_groups(
 
     raw_groups.sort(
         key=lambda item: (
-            -float(item[0].get("final_score最大值") or 0.0),
-            -float(item[0].get("item_score最大值") or 0.0),
-            -int(item[0].get("历史样本数合计") or 0),
+            -float(item[0].get("direct_item_similarity_max") or 0.0),
+            -int(item[0].get("historical_package_count") or 0),
             cell_text(item[0].get("display_name")),
         )
     )
@@ -1216,10 +1195,7 @@ def build_candidate_display_groups(
                     "unit": display_unit_for_family(family),
                     "历史样本数": family.get("历史样本数", ""),
                     "来源工程包数": family.get("来源工程包数", ""),
-                    "final_score": family.get("final_score", ""),
-                    "item_score最大值": family.get("item_score最大值", ""),
-                    "cooccur_score": family.get("cooccur_score", ""),
-                    "catalog_score": family.get("catalog_score", ""),
+                    "item_query_similarity最大值": family.get("item_query_similarity最大值", ""),
                 }
             )
 
@@ -1238,6 +1214,59 @@ def build_candidate_display_groups(
         display_groups[CANDIDATE_DISPLAY_GROUP_COLUMNS].reset_index(drop=True),
         display_families[DISPLAY_GROUP_FAMILY_COLUMNS].reset_index(drop=True),
     )
+
+
+def attach_display_support_ratios(
+    candidate_display_groups: pd.DataFrame,
+    display_group_families: pd.DataFrame,
+    evidence_items: pd.DataFrame,
+    package_evidence_weights: pd.DataFrame,
+) -> pd.DataFrame:
+    if candidate_display_groups.empty:
+        return candidate_display_groups.copy()
+
+    weight_map = {
+        cell_text(row.get("project_package_id")): float(row.get("package_evidence_weight") or 0.0)
+        for _index, row in package_evidence_weights.iterrows()
+        if cell_text(row.get("project_package_id"))
+    }
+    family_ids_by_display = {
+        display_id: set(group["family_id"].map(cell_text).tolist())
+        for display_id, group in display_group_families.groupby("display_id", sort=False, dropna=False)
+    }
+    evidence_family_ids = evidence_items.get("family_id", pd.Series(dtype=object)).map(cell_text)
+    evidence_package_ids = evidence_items.get("project_package_id", pd.Series(dtype=object)).map(cell_text)
+
+    output = candidate_display_groups.copy()
+    support_values: list[float] = []
+    item_counts: list[int] = []
+    package_counts: list[int] = []
+    direct_item_similarity_values: list[float] = []
+    for _index, row in output.iterrows():
+        display_id = cell_text(row.get("display_id"))
+        family_ids = family_ids_by_display.get(display_id, set())
+        if not family_ids:
+            support_values.append(0.0)
+            item_counts.append(0)
+            package_counts.append(0)
+            direct_item_similarity_values.append(0.0)
+            continue
+        evidence = evidence_items[evidence_family_ids.isin(family_ids)].copy()
+        package_ids = {
+            package_id
+            for package_id in evidence_package_ids.loc[evidence.index].tolist()
+            if package_id
+        }
+        support_values.append(float(sum(weight_map.get(package_id, 0.0) for package_id in package_ids)))
+        item_counts.append(int(len(evidence)))
+        package_counts.append(int(len(package_ids)))
+        direct_item_similarity_values.append(max_numeric_or_zero(evidence, "item_query_similarity"))
+
+    output["historical_support_ratio"] = support_values
+    output["historical_item_row_count"] = item_counts
+    output["historical_package_count"] = package_counts
+    output["direct_item_similarity_max"] = direct_item_similarity_values
+    return output[CANDIDATE_DISPLAY_GROUP_COLUMNS].reset_index(drop=True)
 
 
 def replace_nan_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
@@ -1273,30 +1302,23 @@ def select_displays_for_llm(
     ranking_limit = max(display_selection_limit - min(exploration_limit, display_selection_limit), 0)
     rankings = [
         (
-            "final_score",
+            "historical_support_ratio",
             candidate_display_groups.sort_values(
-                ["final_score最大值", "item_score最大值", "历史样本数合计"],
+                ["historical_support_ratio", "historical_package_count", "historical_item_row_count"],
                 ascending=[False, False, False],
             ),
         ),
         (
-            "item_score",
+            "direct_item_similarity",
             candidate_display_groups.sort_values(
-                ["item_score最大值", "final_score最大值", "历史样本数合计"],
+                ["direct_item_similarity_max", "historical_support_ratio", "historical_item_row_count"],
                 ascending=[False, False, False],
             ),
         ),
         (
-            "cooccur_score",
+            "historical_package_count",
             candidate_display_groups.sort_values(
-                ["cooccur_score最大值", "final_score最大值", "历史样本数合计"],
-                ascending=[False, False, False],
-            ),
-        ),
-        (
-            "source_package_count",
-            candidate_display_groups.sort_values(
-                ["来源工程包数去重", "历史样本数合计", "final_score最大值"],
+                ["historical_package_count", "historical_item_row_count", "historical_support_ratio"],
                 ascending=[False, False, False],
             ),
         ),
@@ -1370,28 +1392,19 @@ def display_selection_records(candidate_displays: pd.DataFrame, limit: int | Non
         except ValueError:
             raw_examples = []
         if isinstance(raw_examples, list):
-            for item in raw_examples[:3]:
+            for item in raw_examples[:2]:
                 if not isinstance(item, dict):
                     continue
-                examples.append(
-                    {
-                        "family_id": cell_text(item.get("family_id")),
-                        "spec": truncate_text(item.get("项目特征简述") or item.get("spec"), 60),
-                        "samples": int(item.get("samples") or 0),
-                        "packages": int(item.get("packages") or 0),
-                    }
-                )
+                text = truncate_text(item.get("项目特征简述") or item.get("spec"), 60)
+                if text:
+                    examples.append(text)
         rows.append(
             {
                 "id": cell_text(row.get("display_id")),
                 "name": truncate_text(row.get("display_name"), 40),
                 "unit": cell_text(row.get("unit")),
-                "families": int(row.get("family_count") or 0),
-                "samples": int(row.get("历史样本数合计") or 0),
-                "packages": int(row.get("来源工程包数去重") or 0),
+                "historical_support_ratio": round(float(row.get("historical_support_ratio") or 0.0), 3),
                 "examples": examples,
-                "item_score": round(float(row.get("item_score最大值") or 0.0), 4),
-                "cooccur_score": round(float(row.get("cooccur_score最大值") or 0.0), 4),
             }
         )
     return rows
@@ -1422,6 +1435,25 @@ def build_display_selection_prompt(
 - 不选择具体 family；
 - 不判断价格和工程量；
 - 不撰写最终方案总结。
+
+【historical_support_ratio】
+
+historical_support_ratio 表示该工作项获得的相关历史工程证据支持比例。
+
+计算方法：
+1. 对本次候选涉及的历史工程包，按照其与用户需求的整体语义相似度计算并归一化权重；
+2. 将包含当前工作项的工程包权重相加；
+3. 所得结果范围为 0 到 1。
+
+例如 0.62 表示：
+在本次查询相关的历史工程证据中，约 62% 的相关性权重支持该工作项。
+
+该比例已经同时考虑：
+- 该工作项出现于哪些历史工程；
+- 这些历史工程与当前需求有多相似。
+
+判断时可以比较不同候选的 historical_support_ratio，
+但不能只按比例机械选择，还应结合工作项名称、做法示例及其与用户需求的实际关系。
 
 请综合判断：
 
@@ -1493,11 +1525,10 @@ def build_display_selection_trace_frame(displays_for_llm: pd.DataFrame) -> pd.Da
                 "unit": cell_text(row.get("unit")),
                 "family_count": row.get("family_count", ""),
                 "family_ids": cell_text(row.get("family_ids")),
-                "历史样本数合计": row.get("历史样本数合计", ""),
-                "来源工程包数去重": row.get("来源工程包数去重", ""),
-                "final_score最大值": row.get("final_score最大值", ""),
-                "item_score最大值": row.get("item_score最大值", ""),
-                "cooccur_score最大值": row.get("cooccur_score最大值", ""),
+                "historical_support_ratio": row.get("historical_support_ratio", ""),
+                "historical_item_row_count": row.get("historical_item_row_count", ""),
+                "historical_package_count": row.get("historical_package_count", ""),
+                "direct_item_similarity_max": row.get("direct_item_similarity_max", ""),
                 "candidate_source": cell_text(row.get("candidate_source")),
                 "selected_by_llm": "否",
                 "selection_reason": "",
@@ -1675,27 +1706,22 @@ def select_families_for_llm(
     exploration_limit = max(int(exploration_limit), 0)
     ranking_limit = max(family_selection_limit - min(exploration_limit, family_selection_limit), 0)
 
-    final_ranked = candidate_families.sort_values(
-        ["final_score", "item_score最大值", "历史样本数"],
-        ascending=[False, False, False],
-    )
     item_ranked = candidate_families.sort_values(
-        ["item_score最大值", "final_score", "历史样本数"],
-        ascending=[False, False, False],
-    )
-    cooccur_ranked = candidate_families.sort_values(
-        ["cooccur_score", "final_score", "历史样本数"],
+        ["item_query_similarity最大值", "历史样本数", "来源工程包数"],
         ascending=[False, False, False],
     )
     source_ranked = candidate_families.sort_values(
-        ["来源工程包数", "历史样本数", "final_score"],
+        ["来源工程包数", "历史样本数", "item_query_similarity最大值"],
+        ascending=[False, False, False],
+    )
+    package_ranked = candidate_families.sort_values(
+        ["package_query_similarity最大值", "历史样本数", "来源工程包数"],
         ascending=[False, False, False],
     )
     rankings = [
-        ("final_score", final_ranked),
-        ("item_score", item_ranked),
-        ("cooccur_score", cooccur_ranked),
+        ("item_query_similarity", item_ranked),
         ("source_package_count", source_ranked),
+        ("package_query_similarity", package_ranked),
     ]
     family_rows = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
 
@@ -1769,8 +1795,7 @@ def family_selection_records(candidate_families: pd.DataFrame, limit: int | None
                 "unit": cell_text(row.get("unit_normalized")) or cell_text(row.get("unit")),
                 "samples": int(row.get("历史样本数") or 0),
                 "packages": int(row.get("来源工程包数") or 0),
-                "item_score": round(float(row.get("item_score最大值") or 0.0), 4),
-                "cooccur_score": round(float(row.get("cooccur_score") or 0.0), 4),
+                "item_query_similarity": round(float(row.get("item_query_similarity最大值") or 0.0), 4),
             }
         )
     return rows
@@ -1839,9 +1864,7 @@ def build_family_selection_trace_frame(families_for_llm: pd.DataFrame) -> pd.Dat
                 "unit": cell_text(row.get("unit_normalized")) or cell_text(row.get("unit")),
                 "历史样本数": row.get("历史样本数", ""),
                 "来源工程包数": row.get("来源工程包数", ""),
-                "final_score": row.get("final_score", ""),
-                "item_score最大值": row.get("item_score最大值", ""),
-                "cooccur_score": row.get("cooccur_score", ""),
+                "item_query_similarity最大值": row.get("item_query_similarity最大值", ""),
                 "candidate_source": cell_text(row.get("candidate_source")),
                 "selected_by_llm": "否",
                 "selection_reason": "",
@@ -2037,7 +2060,7 @@ def family_selection_payload_for_display(
 ) -> list[dict[str, Any]]:
     family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
     rows = display_group_families[display_group_families["display_id"].map(cell_text).eq(display_id)].copy()
-    rows = rows.sort_values(["item_score最大值", "历史样本数", "来源工程包数", "final_score"], ascending=[False, False, False, False])
+    rows = rows.sort_values(["item_query_similarity最大值", "历史样本数", "来源工程包数"], ascending=[False, False, False])
     payload: list[dict[str, Any]] = []
     for _index, row in rows.iterrows():
         family_id = cell_text(row.get("family_id"))
@@ -2051,8 +2074,7 @@ def family_selection_payload_for_display(
                 "spec": truncate_text(normalize_display_description(row.get("representative_project_description")), 80),
                 "samples": int(row.get("历史样本数") or 0),
                 "packages": int(row.get("来源工程包数") or 0),
-                "item_score": round(float(row.get("item_score最大值") or 0.0), 4),
-                "final_score": round(float(row.get("final_score") or 0.0), 4),
+                "item_query_similarity": round(float(row.get("item_query_similarity最大值") or 0.0), 4),
                 "unit_price_min": family.get("历史综合单价最低值"),
                 "unit_price_median": family.get("历史综合单价中位数"),
                 "unit_price_max": family.get("历史综合单价最高值"),
@@ -2151,7 +2173,7 @@ def fallback_family_for_display(display_id: str, display_group_families: pd.Data
     rows = display_group_families[display_group_families["display_id"].map(cell_text).eq(display_id)].copy()
     if rows.empty:
         return ""
-    rows = rows.sort_values(["item_score最大值", "历史样本数", "来源工程包数", "final_score"], ascending=[False, False, False, False])
+    rows = rows.sort_values(["item_query_similarity最大值", "历史样本数", "来源工程包数"], ascending=[False, False, False])
     return cell_text(rows.iloc[0].get("family_id"))
 
 
@@ -2269,7 +2291,7 @@ def fallback_display_family_selection(
                 "selection_reason": cell_text(selected.get("selection_reason")),
                 "selected_family_id": selected_family_id,
                 "default_practice": truncate_text(normalize_display_description(family.get("representative_project_description")), 120),
-                "family_selection_reason": "按组内 item_score、样本数、来源工程包数和 final_score 确定默认参考做法",
+                "family_selection_reason": "按组内 item_query_similarity、样本数和来源工程包数确定默认参考做法",
                 "other_practices": [],
             }
         )
@@ -2311,8 +2333,7 @@ def build_display_family_selection_trace_frame(
                 "display_project_description": normalize_display_description(row.get("representative_project_description")),
                 "历史样本数": row.get("历史样本数", ""),
                 "来源工程包数": row.get("来源工程包数", ""),
-                "final_score": row.get("final_score", ""),
-                "item_score最大值": row.get("item_score最大值", ""),
+                "item_query_similarity最大值": row.get("item_query_similarity最大值", ""),
                 "unit_price_min": candidate.get("历史综合单价最低值", ""),
                 "unit_price_median": candidate.get("历史综合单价中位数", ""),
                 "unit_price_max": candidate.get("历史综合单价最高值", ""),
@@ -2425,7 +2446,7 @@ def display_strength(row: pd.Series) -> tuple[int, int, float]:
     return (
         int(row.get("family_count") or 0),
         int(row.get("默认family历史样本数") or 0),
-        float(row.get("final_score最大值") or 0.0),
+        float(row.get("historical_support_ratio") or 0.0),
     )
 
 
@@ -2691,7 +2712,7 @@ def family_strength(row: pd.Series) -> tuple[int, int, float]:
     return (
         int(row.get("历史样本数") or 0),
         int(row.get("来源工程包数") or 0),
-        float(row.get("final_score") or 0.0),
+        float(row.get("item_query_similarity最大值") or 0.0),
     )
 
 
@@ -3061,7 +3082,7 @@ def build_historical_quantity_context(
         target_signature = signature_by_family.get(family_id, "")
         target_rows = candidates[candidates["fine_signature"].map(cell_text).eq(target_signature)].copy()
         if user_quantity is None and not target_rows.empty:
-            for _target_index, target_row in target_rows.sort_values("final_score", ascending=False).iterrows():
+            for _target_index, target_row in target_rows.sort_values("item_query_similarity", ascending=False).iterrows():
                 project_key = cell_text(target_row.get("project_key")) or cell_text(target_row.get("project_package_id"))
                 if not project_key:
                     continue
@@ -3089,7 +3110,7 @@ def build_historical_quantity_context(
                                 "related_unit": cell_text(related_row.get("unit_normalized")) or cell_text(related_row.get("unit")),
                                 "target_quantity": target_quantity,
                                 "target_unit": unit,
-                                "_score": float(target_row.get("final_score") or 0.0),
+                                "_score": float(target_row.get("item_query_similarity") or 0.0),
                             }
                         )
         seen_relation_keys: set[tuple[Any, ...]] = set()
@@ -3343,7 +3364,7 @@ def build_display_historical_quantity_context(
         target_signature = signature_by_family.get(family_id, "")
         target_rows = candidates[candidates["fine_signature"].map(cell_text).eq(target_signature)].copy()
         if user_quantity is None and not target_rows.empty:
-            for _target_index, target_row in target_rows.sort_values("final_score", ascending=False).iterrows():
+            for _target_index, target_row in target_rows.sort_values("item_query_similarity", ascending=False).iterrows():
                 project_key = cell_text(target_row.get("project_key")) or cell_text(target_row.get("project_package_id"))
                 if not project_key:
                     continue
@@ -3372,7 +3393,7 @@ def build_display_historical_quantity_context(
                                 "related_unit": cell_text(related_row.get("unit_normalized")) or cell_text(related_row.get("unit")),
                                 "target_quantity": target_quantity,
                                 "target_unit": unit,
-                                "_score": float(target_row.get("final_score") or 0.0),
+                                "_score": float(target_row.get("item_query_similarity") or 0.0),
                             }
                         )
         seen_relation_keys: set[tuple[Any, ...]] = set()
@@ -3898,6 +3919,10 @@ def build_parse_info(
     top_packages: int,
     top_items: int,
     max_packages_per_cache_subject: int,
+    package_weight_temperature: float,
+    evidence_package_universe_count: int,
+    package_evidence_weight_count: int,
+    package_evidence_weight_sum: float,
     meta: dict[str, Any],
     sample_count: int,
     package_count: int,
@@ -3949,6 +3974,10 @@ def build_parse_info(
         ("top_packages", top_packages),
         ("top_items", top_items),
         ("max_packages_per_cache_subject", max_packages_per_cache_subject),
+        ("package_weight_temperature", package_weight_temperature),
+        ("evidence_package_universe_count", evidence_package_universe_count),
+        ("package_evidence_weight_count", package_evidence_weight_count),
+        ("package_evidence_weight_sum", f"{package_evidence_weight_sum:.12f}"),
         ("embedding_model", meta.get("model", "")),
         ("sample_count", sample_count),
         ("package_count", package_count),
@@ -4051,6 +4080,11 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
             sheet_name="matched_project_packages",
             index=False,
         )
+        display_frame(result.package_evidence_weights, display).to_excel(
+            writer,
+            sheet_name="package_evidence_weights",
+            index=False,
+        )
         display_frame(result.evidence_items, display).to_excel(writer, sheet_name="evidence_items", index=False)
         result.parse_info.to_excel(writer, sheet_name="parse_info", index=False)
         result.llm_trace.to_excel(writer, sheet_name="llm_trace", index=False)
@@ -4086,9 +4120,12 @@ def run_query(
     max_packages_per_cache_subject: int = 1,
     family_selection_limit: int = 50,
     family_exploration_limit: int = 5,
+    package_weight_temperature: float = DEFAULT_PACKAGE_WEIGHT_TEMPERATURE,
     include_debug_text: bool = False,
     display: bool = False,
 ) -> QueryResult:
+    if package_weight_temperature <= 0:
+        raise ValueError("package weight temperature 必须大于 0")
     started_at = datetime.now()
     warnings: list[str] = []
     samples, project_packages, project_package_embeddings, item_embeddings, meta = load_index(index_dir)
@@ -4112,6 +4149,8 @@ def run_query(
     if item_query_embedding.shape[0] != item_embeddings.shape[1]:
         raise ValueError("item query embedding 维度与索引 embedding 维度不一致")
 
+    package_query_similarities = project_package_embeddings @ package_query_embedding
+    package_query_similarity_by_id = project_package_similarity_map(project_packages, package_query_similarities)
     matched_raw = score_project_packages(
         project_packages,
         project_package_embeddings,
@@ -4119,12 +4158,32 @@ def run_query(
         top_packages,
         max_packages_per_cache_subject=max_packages_per_cache_subject,
     )
-    item_scores = item_embeddings @ item_query_embedding
-    direct_item_hits = score_direct_items(samples, item_scores, top_items)
-    candidates = candidate_pool(samples, matched_raw, direct_item_hits, item_scores, query_catalog, warnings=warnings)
+    item_query_similarities = item_embeddings @ item_query_embedding
+    direct_item_hits = score_direct_items(samples, item_query_similarities, top_items)
+    evidence_package_ids = evidence_package_universe(matched_raw, direct_item_hits)
+    package_evidence_weights = build_package_evidence_weights(
+        evidence_package_ids,
+        package_query_similarity_by_id,
+        package_weight_temperature,
+    )
+    candidates = candidate_pool(
+        samples,
+        matched_raw,
+        direct_item_hits,
+        item_query_similarities,
+        query_catalog,
+        package_query_similarity_by_id=package_query_similarity_by_id,
+        warnings=warnings,
+    )
     candidate_families = build_candidate_families(candidates)
     evidence_items = build_evidence_items(candidates, candidate_families)
     candidate_display_groups, display_group_families = build_candidate_display_groups(candidate_families, evidence_items)
+    candidate_display_groups = attach_display_support_ratios(
+        candidate_display_groups,
+        display_group_families,
+        evidence_items,
+        package_evidence_weights,
+    )
     matched_project_packages = matched_project_packages_for_output(matched_raw)
 
     (
@@ -4204,6 +4263,10 @@ def run_query(
         top_packages=top_packages,
         top_items=top_items,
         max_packages_per_cache_subject=max_packages_per_cache_subject,
+        package_weight_temperature=package_weight_temperature,
+        evidence_package_universe_count=len(evidence_package_ids),
+        package_evidence_weight_count=len(package_evidence_weights),
+        package_evidence_weight_sum=float(package_evidence_weights.get("package_evidence_weight", pd.Series(dtype=float)).sum()),
         meta=meta,
         sample_count=len(samples),
         package_count=len(project_packages),
@@ -4216,7 +4279,6 @@ def run_query(
         display_selection_trace=display_selection_trace,
         display_selection_fallback=display_selection_fallback,
         display_selection_error=display_selection_error,
-        display_selection_meta=display_selection_meta,
         display_family_selection_display_count=len(selected_displays),
         display_family_selection_trace=display_family_selection_trace,
         display_family_selection_fallback=display_family_selection_fallback,
@@ -4257,6 +4319,7 @@ def run_query(
         matched_project_packages=matched_project_packages,
         candidate_families=candidate_families,
         candidate_display_groups=candidate_display_groups,
+        package_evidence_weights=package_evidence_weights,
         display_group_families=display_group_families,
         display_selection_trace=display_selection_trace_frame,
         display_family_selection_trace=display_family_selection_trace_frame,
@@ -4279,7 +4342,7 @@ def print_terminal_summary(result: QueryResult, output_path: Path | None) -> Non
             f"{result.query_catalog.一级分类}/{result.query_catalog.二级分类}/{result.query_catalog.维修状态}"
         )
     else:
-        print("[WARN] query catalog classification failed; catalog_score used neutral 0.5")
+        print("[WARN] query catalog classification failed; continuing with retrieval evidence only")
     print(f"[DONE] matched project packages: {len(result.matched_project_packages)}")
     print(f"[DONE] candidate families: {len(result.candidate_families)}")
     print(f"[DONE] candidate display groups: {len(result.candidate_display_groups)}")
@@ -4324,6 +4387,7 @@ def main() -> int:
             max_packages_per_cache_subject=args.max_packages_per_cache_subject,
             family_selection_limit=args.family_selection_limit,
             family_exploration_limit=args.family_exploration_limit,
+            package_weight_temperature=args.package_weight_temperature,
             include_debug_text=args.include_debug_text,
             display=args.display,
         )
