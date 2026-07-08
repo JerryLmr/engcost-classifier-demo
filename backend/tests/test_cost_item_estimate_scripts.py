@@ -183,7 +183,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
         self.assertNotIn("一级分类", row["item_retrieval_text"])
         self.assertNotIn("工程语义", row["item_retrieval_text"])
-        self.assertEqual(row["fine_signature"], "屋面卷材防水 | 3.0mm sbs沥青防水卷材 | m²")
+        self.assertEqual(row["fine_signature"], "屋面卷材防水 | 3.0mm弹性体改性沥青防水卷材 | m²")
 
     def test_fine_signature_normalizes_spacing_and_units(self):
         normalize = build_index.normalize_fine_signature_text
@@ -211,6 +211,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         equivalent_values = [
             "1.3.0mm厚弹性体改性沥青防水卷材",
+            "1.3.0厚弹性体改性沥青防水卷材",
             "1.3.0mm弹性体改性沥青防水卷材",
             "3.0mm厚弹性体改性沥青防水卷材",
             "厚 3.0 mm 弹性体改性沥青防水卷材",
@@ -275,6 +276,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         normalize = build_index.normalize_fine_signature_text
 
         self.assertEqual(normalize("厚 1.5（mm）聚氨酯防水涂料"), normalize("1.5mm厚聚氨酯防水涂料"))
+        self.assertEqual(normalize("1.1.5mm厚聚氨酯防水涂料"), normalize("1.5mm聚氨酯防水涂料"))
+        self.assertEqual(normalize("m^{2}"), "m²")
+        self.assertEqual(normalize("原有面层铲除及垃圾外运"), normalize("原面层拆除及垃圾清运"))
         self.assertNotEqual(normalize("屋面卷材防水 1.5mm厚"), normalize("墙面卷材防水 1.5mm厚"))
 
     def test_project_packages_use_cost_item_names_summary_for_embedding(self):
@@ -338,6 +342,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(args.index_dir, "embeddings")
         self.assertEqual(args.top_packages, 20)
         self.assertEqual(args.top_items, 300)
+        self.assertEqual(args.family_selection_limit, 50)
+        self.assertEqual(args.family_final_score_limit, 30)
+        self.assertEqual(args.family_item_score_limit, 30)
         self.assertEqual(args.llm_check_timeout, 3.0)
         self.assertFalse(hasattr(args, "top_k"))
         self.assertFalse(hasattr(args, "project_name_weight"))
@@ -513,10 +520,15 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertAlmostEqual(float(roof["item_score"]), 0.95)
         self.assertAlmostEqual(float(roof["cooccur_score"]), 0.5)
         self.assertEqual(float(roof["catalog_score"]), 1.0)
+        self.assertAlmostEqual(float(roof["package_path_score"]), 0.8)
+        self.assertAlmostEqual(float(roof["item_path_score"]), 0.915)
+        self.assertAlmostEqual(float(roof["final_score"]), 0.915)
         self.assertEqual(roof["source_ref"], "batch-a::2::2-1")
         self.assertEqual(pipe["package_score"], 0.0)
         self.assertEqual(pipe["direct_hit"], True)
         self.assertEqual(pipe["catalog_score"], 0.1625)
+        self.assertAlmostEqual(float(pipe["item_path_score"]), 0.5725)
+        self.assertAlmostEqual(float(pipe["final_score"]), float(pipe["item_path_score"]))
 
     def test_candidate_families_group_by_fine_signature_only(self):
         candidates = self.prepared_samples().head(1).copy()
@@ -549,6 +561,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         candidates["cooccur_score"] = 1.0
         candidates["catalog_score"] = 1.0
         candidates["unit_score"] = 0.5
+        candidates["package_path_score"] = [0.8, 0.7, 0.6]
+        candidates["item_path_score"] = [0.9, 0.85, 0.75]
         candidates["final_score"] = [0.85, 0.75, 0.65]
         candidates["source_ref"] = ["batch-a::2::2-1", "batch-a::5::5-1", "batch-a::6::6-1"]
 
@@ -566,8 +580,32 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(roof3["历史综合单价最高值"], 90.0)
         self.assertEqual(roof3["历史人工单价中位数"], 21.0)
         self.assertEqual(roof3["历史机械单价中位数"], 5.5)
+        self.assertEqual(roof3["package_path_score最大值"], 0.8)
+        self.assertEqual(roof3["item_path_score最大值"], 0.9)
         self.assertEqual(roof3["representative_project_description"], "3.0mm SBS 沥青防水卷材")
         self.assertEqual(roof4["历史综合单价最低值"], 120.0)
+
+    def test_select_families_for_llm_uses_final_and_item_score_channels(self):
+        families = pd.DataFrame(
+            [
+                {"family_id": f"F{index:03d}", "final_score": 1.0 - index / 100.0, "item_score最大值": index / 100.0, "历史样本数": 1}
+                for index in range(1, 61)
+            ]
+        )
+
+        selected = query_estimate_llm.select_families_for_llm(
+            families,
+            family_selection_limit=50,
+            family_final_score_limit=30,
+            family_item_score_limit=30,
+        )
+
+        selected_ids = selected["family_id"].tolist()
+        self.assertEqual(len(selected_ids), 50)
+        self.assertEqual(len(selected_ids), len(set(selected_ids)))
+        self.assertIn("F001", selected_ids)
+        self.assertIn("F060", selected_ids)
+        self.assertNotIn("F031", selected_ids)
 
     def test_source_ref_recovers_from_batch_source_row_and_seq(self):
         rows = self.prepared_samples().head(1).copy()
@@ -607,7 +645,11 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         self.assertEqual(records[0]["family_id"], "F001")
         self.assertEqual(records[0]["historical_sample_count"], 2)
+        self.assertNotIn("final_score", records[0])
         self.assertNotIn("source_refs", prompt)
+        self.assertNotIn("final_score", prompt)
+        self.assertNotIn("package_path_score", prompt)
+        self.assertNotIn("item_path_score", prompt)
         self.assertNotIn("历史综合单价", prompt)
         self.assertIn("selected_families", prompt)
 
@@ -629,6 +671,81 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(meta["duplicate_family_ids"], ["F001"])
         self.assertEqual(meta["invalid_item_types"], ["补充候选项"])
         self.assertIn("invalid_family_ids", warnings)
+
+    def test_dedup_selection_suppresses_display_duplicates_without_merging_prices(self):
+        families = pd.DataFrame(
+            [
+                {
+                    "family_id": "F001",
+                    "fine_signature": "sig-1",
+                    "representative_cost_item_name": "屋面卷材防水",
+                    "representative_project_description": "3.0mm SBS",
+                    "unit": "m²",
+                    "unit_normalized": "m²",
+                    "历史样本数": 1,
+                    "来源工程包数": 1,
+                    "历史综合单价最低值": 80,
+                    "历史综合单价中位数": 80,
+                    "历史综合单价最高值": 80,
+                    "final_score": 0.95,
+                    "source_refs": "batch-a::1::1-1",
+                },
+                {
+                    "family_id": "F002",
+                    "fine_signature": "sig-2",
+                    "representative_cost_item_name": "屋面卷材防水",
+                    "representative_project_description": "3.0mm SBS",
+                    "unit": "m²",
+                    "unit_normalized": "m²",
+                    "历史样本数": 3,
+                    "来源工程包数": 2,
+                    "历史综合单价最低值": 120,
+                    "历史综合单价中位数": 120,
+                    "历史综合单价最高值": 120,
+                    "final_score": 0.9,
+                    "source_refs": "batch-a::2::2-1",
+                },
+            ],
+            columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
+        )
+        selected = pd.DataFrame(
+            [
+                {"family_id": "F001", "item_type": "核心施工项", "selection_reason": "重复项"},
+                {"family_id": "F002", "item_type": "核心施工项", "selection_reason": "代表项"},
+            ]
+        )
+
+        deduped, suppressed_by = query_estimate_llm.deterministic_dedup_selection(selected, families)
+        decisions = pd.DataFrame(
+            [
+                {
+                    "family_id": "F002",
+                    "quantity_source": "用户明确给定",
+                    "suggested_quantity_low": 1,
+                    "suggested_quantity_mid": 1,
+                    "suggested_quantity_high": 1,
+                    "include_in_amount": True,
+                    "quantity_reason": "用户给定",
+                    "confirmation_note": "",
+                }
+            ]
+        )
+        bill = query_estimate_llm.build_final_suggested_bill(deduped, decisions, families)
+
+        self.assertEqual(suppressed_by, {"F001": "F002"})
+        self.assertEqual(deduped["family_id"].tolist(), ["F002"])
+        self.assertEqual(bill["family_id"].tolist(), ["F002"])
+        self.assertEqual(bill.loc[0, "综合单价中位数"], 120)
+        self.assertEqual(bill.loc[0, "来源样本"], "batch-a::2::2-1")
+
+    def test_dedup_selection_validation_rejects_cycles_and_invalid_ids(self):
+        with self.assertRaisesRegex(ValueError, "形成环"):
+            query_estimate_llm.parse_dedup_selection_result(
+                {"keep": [], "suppress": [["F001", "F002"], ["F002", "F001"]]},
+                {"F001", "F002"},
+            )
+        with self.assertRaisesRegex(ValueError, "非法 family_id"):
+            query_estimate_llm.parse_dedup_selection_result({"keep": ["BAD"], "suppress": []}, {"F001"})
 
     def test_quantity_decision_validation_and_missing_defaults(self):
         selected = pd.DataFrame(
@@ -803,7 +920,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertNotIn("1,100.00", values["参考金额区间"])
         self.assertIn("可选/替代工艺", values["需现场确认"])
 
-    def test_build_parse_info_includes_two_llm_metrics(self):
+    def test_build_parse_info_includes_llm_metrics(self):
         rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], [], "", [], [], True)
         catalog = query_estimate_llm.QueryCatalog("CP-002-03", "屋面", "防水层", "维修", "共用部位", None, {}, True, [])
 
@@ -824,6 +941,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             family_selection_fallback=False,
             family_selection_error="",
             family_selection_meta={"invalid_family_ids": ["BAD"], "duplicate_family_ids": [], "invalid_item_types": []},
+            dedup_selection_input_count=2,
+            dedup_selection_output_count=1,
+            dedup_selection_trace={"prompt_chars": 50, "estimated_tokens": 20, "completion_tokens": 4},
+            dedup_selection_fallback=False,
+            dedup_selection_error="",
+            dedup_selection_meta={"auto_suppressed": ["F001->F002"], "llm_suppressed": []},
             quantity_decision_input_count=2,
             quantity_relation_count=3,
             quantity_decision_trace={"prompt_chars": 200, "estimated_tokens": 100, "completion_tokens": ""},
@@ -835,6 +958,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             index_dir=Path("query_index"),
             include_debug_text=False,
             family_selection_prompt="family prompt",
+            dedup_selection_prompt="dedup prompt",
             quantity_decision_prompt="quantity prompt",
             warnings=[],
         )
@@ -843,6 +967,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(values["candidate_pool_row_count"], 50)
         self.assertEqual(values["candidate_family_count"], 12)
         self.assertEqual(values["family_selection_prompt_tokens"], 40)
+        self.assertEqual(values["dedup_selection_prompt_tokens"], 20)
+        self.assertEqual(values["dedup_auto_suppressed"], "F001->F002")
         self.assertEqual(values["quantity_decision_prompt_tokens"], 100)
         self.assertEqual(values["invalid_family_ids"], "BAD")
         self.assertEqual(values["invalid_quantity_sources"], "bad")
@@ -881,6 +1007,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     {"step": "query_rewrite_for_embedding"},
                     {"step": "query_catalog_classification"},
                     {"step": "family_selection"},
+                    {"step": "dedup_selection"},
                     {"step": "quantity_decision"},
                 ],
                 columns=query_estimate_llm.LLM_TRACE_COLUMNS,
@@ -917,7 +1044,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertNotIn("分类摘要", matched_headers)
         self.assertEqual(
             trace_steps,
-            ["query_rewrite_for_embedding", "query_catalog_classification", "family_selection", "quantity_decision"],
+            ["query_rewrite_for_embedding", "query_catalog_classification", "family_selection", "dedup_selection", "quantity_decision"],
         )
 
     def test_query_validate_output_path_requires_overwrite_for_existing_output(self):

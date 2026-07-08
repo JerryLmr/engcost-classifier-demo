@@ -9,14 +9,14 @@
 - 支持按批次导入 OCR Excel，独立生成 cleaned、removed、classified 和单批次 cost item samples。
 - 支持自动合并 `samples/*/cost_item_samples.xlsx` 为总样本，并使用不含 `project_code` / `batch_id` 的 `stable_sample_id` 去重。
 - 支持从总样本 `samples/cost_item_samples_all.xlsx` 构建 project package / item embedding 索引，保留样本明细、工程包明细、工程包向量、清单行向量和索引元数据。
-- 支持自然语言造价查询：召回相似历史工程包和清单行，展开 `candidate_pool` 后按规范化 `fine_signature` 聚合施工做法 family，两次 LLM 分别选择 family/角色和判断工程量口径，程序回填历史单价、来源并计算金额摘要。
+- 支持自然语言造价查询：召回相似历史工程包和清单行，按 package/item 双路径评分并聚合 `fine_signature` family，经 family 选择、重复展示抑制和工程量判断后，由程序回填历史单价、来源并计算金额摘要。
 
 ## Recent Changes
 - 新增批次入口 `scripts/run_ingest_batch.py`，统一执行 OCR 必填字段过滤、项目级分类和单批次样本生成。
 - 新增 `scripts/merge_cost_item_sample_batches.py`，自动合并历史批次样本、追加 `batch_id` / `stable_sample_id`，并输出去重报告。
 - `build_cost_item_embedding_index.py` 默认读取 `samples/cost_item_samples_all.xlsx`，输出 project package / item embedding 索引。
-- 自然语言造价查询已删除旧粗聚合和单次 suggested_bill LLM 路径，改为 `fine_signature` 精确聚合和两次 LLM 决策。
-- README 已更新增量批次导入、样本合并、索引重建和 fine_signature 造价查询流程。
+- 自然语言造价查询改为 `package_path_score` / `item_path_score` 双路径评分，family_selection 使用 final/item 双通道并集输入。
+- 查询链路在 family_selection 后增加重复展示抑制，候选 family 和历史价格样本仍按原 `fine_signature` 边界保留。
 
 ## Decisions
 - 当前阶段不引入数据库、Milvus 或 LangChain；样本合并后重建本地 parquet + npy 索引。
@@ -25,6 +25,7 @@
 - `batch_id` 只负责来源追踪；`stable_sample_id` 负责样本去重，且不包含 `project_code` 或 `batch_id`。
 - 索引构建阶段不再调用 LLM 清洗工程名称，只读取 batch 分类产出的 `project_name_text`；为空时 warning 并回退原始工程名称。
 - 查询阶段 LLM 不生成清单名称、项目特征、单位、单价、来源或金额；价格和金额由程序按同一 `fine_signature` 历史样本确定性回填和计算。
+- dedup_selection 只抑制最终展示项，不创建新 family，不合并 source_refs、历史样本、工程量或价格区间。
 
 ## Known Limitations
 - 当前分类体系仍是项目内自行定义，个别样本是否属于“体系外”依赖业务口径。

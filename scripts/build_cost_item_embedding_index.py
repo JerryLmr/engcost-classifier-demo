@@ -143,8 +143,15 @@ def normalize_source_row_id(value: Any) -> str:
 MATERIAL_ALIASES = [
     (r"sbs\s*弹性体改性沥青防水卷材", "弹性体改性沥青防水卷材"),
     (r"sbs\s*改性沥青防水卷材", "弹性体改性沥青防水卷材"),
+    (r"sbs\s*沥青防水卷材", "弹性体改性沥青防水卷材"),
     (r"sbs\s*防水卷材", "弹性体改性沥青防水卷材"),
     (r"弹性改性沥青防水卷材", "弹性体改性沥青防水卷材"),
+]
+
+CONFIRMED_TEXT_ALIASES = [
+    (r"原有", "原"),
+    (r"铲除", "拆除"),
+    (r"垃圾外运", "垃圾清运"),
 ]
 
 TEMPLATE_PREFIX_PATTERNS = [
@@ -159,7 +166,7 @@ def normalize_fine_signature_line_prefixes(text: str) -> str:
     lines: list[str] = []
     for line in text.split("\n"):
         line = re.sub(r"^\s*(?:(?:\d+、|\d+\.(?!\d)|\(\d+\)|（\d+）)\s*)", "", line)
-        line = re.sub(r"^\s*\d+\.(?=\d+\.\d+\s*(?:mm|毫米))", "", line)
+        line = re.sub(r"^\s*\d+\.(?=\d+\.\d+\s*(?:mm|毫米|厚))", "", line)
         lines.append(line)
     return "\n".join(lines)
 
@@ -186,6 +193,7 @@ def normalize_fine_signature_text(value: Any) -> str:
     text = normalize_fine_signature_line_prefixes(text)
 
     text = text.replace("㎡", "m²")
+    text = re.sub(r"(?<![a-z0-9])m\^\{2\}(?![a-z0-9])", "m²", text)
     text = re.sub(r"(?<![a-z0-9])m\s*2(?![a-z0-9])", "m²", text)
     text = re.sub(r"(?<![a-z0-9])m\^2(?![a-z0-9])", "m²", text)
     text = text.replace("平方米", "m²")
@@ -194,6 +202,8 @@ def normalize_fine_signature_text(value: Any) -> str:
 
     text = re.sub(r"厚\s*(\d+(?:\.\d+)?)\s*\(?\s*mm\s*\)?", r"\1mm", text)
     text = re.sub(r"(\d+(?:\.\d+)?)\s*mm\s*厚", r"\1mm", text)
+    text = re.sub(r"厚\s*(\d+(?:\.\d+)?)(?![a-z0-9])", r"\1mm", text)
+    text = re.sub(r"(\d+(?:\.\d+)?)\s*厚(?!度)", r"\1mm", text)
 
     text = text.replace("（", "(").replace("）", ")")
     text = text.replace("，", ",").replace("。", ".")
@@ -205,6 +215,8 @@ def normalize_fine_signature_text(value: Any) -> str:
     text = strip_fine_signature_template_prefixes(text)
     text = normalize_fine_signature_line_prefixes(text)
     for source, target in MATERIAL_ALIASES:
+        text = re.sub(source, target, text)
+    for source, target in CONFIRMED_TEXT_ALIASES:
         text = re.sub(source, target, text)
 
     text = re.sub(r"\s+", " ", text).strip()
