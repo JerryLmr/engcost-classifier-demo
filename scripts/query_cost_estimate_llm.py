@@ -73,6 +73,8 @@ CANDIDATE_FAMILY_COLUMNS = [
 
 EVIDENCE_ITEM_COLUMNS = [
     "source_ref",
+    "family_id",
+    "fine_signature",
     "project_key",
     "item_row_id",
     "stable_sample_id",
@@ -143,6 +145,25 @@ SUGGESTED_BILL_COLUMNS = [
     "来源样本",
 ]
 
+FAMILY_SELECTION_TRACE_COLUMNS = [
+    "selection_rank",
+    "family_id",
+    "fine_signature",
+    "representative_cost_item_name",
+    "representative_project_description",
+    "unit",
+    "历史样本数",
+    "来源工程包数",
+    "final_score",
+    "item_score最大值",
+    "cooccur_score",
+    "candidate_source",
+    "selected_by_llm",
+    "item_type",
+    "selection_reason",
+    "selection_source",
+]
+
 ESTIMATE_SUMMARY_COLUMNS = [
     "字段",
     "值",
@@ -166,7 +187,7 @@ ALLOWED_ITEM_TYPES = {
     "核心施工项",
     "常见前置项",
     "恢复/收尾项",
-    "措施/条件项",
+    "施工措施/现场条件项",
     "可选/替代工艺",
 }
 
@@ -211,6 +232,7 @@ class QueryResult:
     suggested_bill: pd.DataFrame
     matched_project_packages: pd.DataFrame
     candidate_families: pd.DataFrame
+    family_selection_trace: pd.DataFrame
     evidence_items: pd.DataFrame
     parse_info: pd.DataFrame
     llm_trace: pd.DataFrame
@@ -239,8 +261,7 @@ def parse_args() -> argparse.Namespace:
         help="同一 cache_subject 最多保留的相似历史工程包数量，默认 1；设为 0 表示不限制",
     )
     parser.add_argument("--family-selection-limit", type=int, default=50, help="发送给 family_selection LLM 的 family 上限，默认 50")
-    parser.add_argument("--family-final-score-limit", type=int, default=30, help="按 final_score 入选 family 数量，默认 30")
-    parser.add_argument("--family-item-score-limit", type=int, default=30, help="按 item_score 最大值入选 family 数量，默认 30")
+    parser.add_argument("--family-exploration-limit", type=int, default=5, help="family_selection 等距探索候选上限，默认 5")
     return parser.parse_args()
 
 
@@ -923,12 +944,20 @@ def build_candidate_families(candidates: pd.DataFrame) -> pd.DataFrame:
     return output[CANDIDATE_FAMILY_COLUMNS].reset_index(drop=True)
 
 
-def build_evidence_items(candidates: pd.DataFrame) -> pd.DataFrame:
+def build_evidence_items(candidates: pd.DataFrame, candidate_families: pd.DataFrame) -> pd.DataFrame:
     if candidates.empty:
         return pd.DataFrame(columns=EVIDENCE_ITEM_COLUMNS)
+    signature_to_family_id = {
+        cell_text(row.get("fine_signature")): cell_text(row.get("family_id"))
+        for _index, row in candidate_families.iterrows()
+        if cell_text(row.get("fine_signature"))
+    }
+    fine_signatures = candidates.get("fine_signature", pd.Series([""] * len(candidates), index=candidates.index))
     output = pd.DataFrame(
         {
             "source_ref": candidates.get("source_ref", ""),
+            "family_id": fine_signatures.map(lambda value: signature_to_family_id.get(cell_text(value), "")),
+            "fine_signature": fine_signatures,
             "project_key": candidates.get("project_key", ""),
             "item_row_id": candidates.get("item_row_id", ""),
             "stable_sample_id": candidates.get("stable_sample_id", ""),
@@ -965,7 +994,13 @@ def build_evidence_items(candidates: pd.DataFrame) -> pd.DataFrame:
     for column in EVIDENCE_ITEM_COLUMNS:
         if column not in output.columns:
             output[column] = ""
-    return output[EVIDENCE_ITEM_COLUMNS].fillna("")
+    output = output[EVIDENCE_ITEM_COLUMNS].where(pd.notna(output), "")
+    if len(candidates) != len(output):
+        raise ValueError("evidence_items 行数与 candidate pool 不一致")
+    missing_family_ids = output["family_id"].map(cell_text).eq("")
+    if missing_family_ids.any():
+        raise ValueError(f"存在 {int(missing_family_ids.sum())} 条 evidence item 未映射到 family_id")
+    return output
 
 
 def replace_nan_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
@@ -985,40 +1020,95 @@ def split_refs(value: Any, limit: int | None = None) -> list[str]:
 def select_families_for_llm(
     candidate_families: pd.DataFrame,
     family_selection_limit: int = 50,
-    family_final_score_limit: int = 30,
-    family_item_score_limit: int = 30,
+    exploration_limit: int = 5,
 ) -> pd.DataFrame:
     if candidate_families.empty or family_selection_limit <= 0:
         return candidate_families.head(0).copy()
 
+    family_selection_limit = max(int(family_selection_limit), 0)
+    exploration_limit = max(int(exploration_limit), 0)
+    ranking_limit = max(family_selection_limit - min(exploration_limit, family_selection_limit), 0)
+
     final_ranked = candidate_families.sort_values(
         ["final_score", "item_score最大值", "历史样本数"],
         ascending=[False, False, False],
-    ).head(max(family_final_score_limit, 0))
+    )
     item_ranked = candidate_families.sort_values(
         ["item_score最大值", "final_score", "历史样本数"],
         ascending=[False, False, False],
-    ).head(max(family_item_score_limit, 0))
-
-    final_ranks = {cell_text(row.get("family_id")): rank for rank, (_index, row) in enumerate(final_ranked.iterrows(), start=1)}
-    item_ranks = {cell_text(row.get("family_id")): rank for rank, (_index, row) in enumerate(item_ranked.iterrows(), start=1)}
+    )
+    cooccur_ranked = candidate_families.sort_values(
+        ["cooccur_score", "final_score", "历史样本数"],
+        ascending=[False, False, False],
+    )
+    source_ranked = candidate_families.sort_values(
+        ["来源工程包数", "历史样本数", "final_score"],
+        ascending=[False, False, False],
+    )
+    rankings = [
+        ("final_score", final_ranked),
+        ("item_score", item_ranked),
+        ("cooccur_score", cooccur_ranked),
+        ("source_package_count", source_ranked),
+    ]
     family_rows = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
-    selected_ids = [family_id for family_id in family_rows if family_id in final_ranks or family_id in item_ranks]
-    large_rank = len(candidate_families) + 1000
 
-    def sort_key(family_id: str) -> tuple[float, float, float, str]:
-        row = family_rows[family_id]
-        final_rank = final_ranks.get(family_id, large_rank)
-        item_rank = item_ranks.get(family_id, large_rank)
-        return (
-            min(final_rank, item_rank),
-            final_rank + item_rank,
-            -max(float(row.get("final_score") or 0.0), float(row.get("item_score最大值") or 0.0)),
-            family_id,
-        )
+    selected_ids: list[str] = []
+    selected_set: set[str] = set()
+    selected_sources: dict[str, list[str]] = {}
+    positions = {name: 0 for name, _frame in rankings}
 
-    ordered_ids = sorted(selected_ids, key=sort_key)[:family_selection_limit]
-    return pd.DataFrame([family_rows[family_id] for family_id in ordered_ids], columns=candidate_families.columns).reset_index(drop=True)
+    while len(selected_ids) < ranking_limit:
+        advanced = False
+        for source_name, ranked in rankings:
+            if len(selected_ids) >= ranking_limit:
+                break
+            while positions[source_name] < len(ranked):
+                advanced = True
+                row = ranked.iloc[positions[source_name]]
+                positions[source_name] += 1
+                family_id = cell_text(row.get("family_id"))
+                if not family_id:
+                    continue
+                if family_id in selected_set:
+                    sources = selected_sources.setdefault(family_id, [])
+                    if source_name not in sources:
+                        sources.append(source_name)
+                    continue
+                selected_set.add(family_id)
+                selected_ids.append(family_id)
+                selected_sources[family_id] = [source_name]
+                break
+        if not advanced:
+            break
+
+    remaining = candidate_families[~candidate_families["family_id"].map(cell_text).isin(selected_set)].reset_index(drop=True)
+    exploration_count = min(exploration_limit, family_selection_limit - len(selected_ids), len(remaining))
+    if exploration_count > 0:
+        indices = np.linspace(0, len(remaining) - 1, num=exploration_count, dtype=int).tolist()
+        indices = list(dict.fromkeys(indices))
+        used_indices = set(indices)
+        for index in range(len(remaining)):
+            if len(indices) >= exploration_count:
+                break
+            if index not in used_indices:
+                indices.append(index)
+                used_indices.add(index)
+        for index in indices[:exploration_count]:
+            family_id = cell_text(remaining.iloc[index].get("family_id"))
+            if not family_id or family_id in selected_set:
+                continue
+            selected_set.add(family_id)
+            selected_ids.append(family_id)
+            selected_sources[family_id] = ["exploration"]
+
+    output = pd.DataFrame([family_rows[family_id] for family_id in selected_ids], columns=candidate_families.columns).reset_index(drop=True)
+    output.insert(0, "selection_rank", range(1, len(output) + 1))
+    output["candidate_source"] = [
+        ",".join(selected_sources.get(cell_text(row.get("family_id")), []))
+        for _index, row in output.iterrows()
+    ]
+    return output
 
 
 def family_selection_records(candidate_families: pd.DataFrame, limit: int | None = None) -> list[dict[str, Any]]:
@@ -1027,12 +1117,14 @@ def family_selection_records(candidate_families: pd.DataFrame, limit: int | None
     for _index, row in frame.iterrows():
         rows.append(
             {
-                "family_id": cell_text(row.get("family_id")),
-                "cost_item_name": truncate_text(row.get("representative_cost_item_name"), 80),
-                "project_description": truncate_text(row.get("representative_project_description"), 200),
+                "id": cell_text(row.get("family_id")),
+                "name": truncate_text(row.get("representative_cost_item_name"), 40),
+                "spec": truncate_text(row.get("representative_project_description"), 80),
                 "unit": cell_text(row.get("unit_normalized")) or cell_text(row.get("unit")),
-                "historical_sample_count": int(row.get("历史样本数") or 0),
-                "source_package_count": int(row.get("来源工程包数") or 0),
+                "samples": int(row.get("历史样本数") or 0),
+                "packages": int(row.get("来源工程包数") or 0),
+                "item_score": round(float(row.get("item_score最大值") or 0.0), 4),
+                "cooccur_score": round(float(row.get("cooccur_score") or 0.0), 4),
             }
         )
     return rows
@@ -1053,37 +1145,52 @@ def build_family_selection_prompt(
     prompt = f"""
 你是物业维修工程建议清单选择器。
 
-你的任务是：
-根据用户需求，从输入的 candidate_families 中选择真正相关的施工做法，
-并判断每个施工做法在本次维修方案中的角色。
+【任务】
 
-你只能选择输入中存在的 family_id。
-不得自行创造 family_id，不得自行新增候选中不存在的施工项目。
+根据用户需求，从 candidate_families 中选择一个有历史证据支持、
+不过度扩张且避免重复的最小完整施工链。
+
+最小完整施工链不是只选择与用户原文最相似的核心项：
+在选定核心施工项后，还应检查候选中是否存在与其具有明确实施关系的
+常见前置项、恢复/收尾项或施工措施/现场条件项。
+
+不要求每种类型都必须出现；证据不足时可以不选。
+不得为了补全类型选择无关项，也不得创造候选中不存在的项目。
 
 【item_type】
 
-- 核心施工项：直接解决用户主要维修需求的施工内容。
-- 常见前置项：实施核心施工前通常需要进行，且与核心施工存在明确前后关系的内容。
-- 恢复/收尾项：核心施工完成后的恢复、修补、调试或收尾内容。
-- 措施/条件项：是否实施取决于现场施工条件的辅助措施。
-- 可选/替代工艺：与核心施工目标相同，但材料、规格或工艺不同的替代方案。
+- 核心施工项：
+  直接解决用户主要维修需求的施工、维修、更换、更新或改造内容。
+
+- 常见前置项：
+  为实施核心施工通常需要先完成，且与核心施工存在明确实施顺序或必要准备关系的内容。
+
+- 恢复/收尾项：
+  核心施工完成后，为恢复原有功能、外观或环境，
+  或者完成调试、试运行、验收和清理的内容。
+
+- 施工措施/现场条件项：
+  是否实施取决于现场条件、施工组织、安全、运输、检测或临时保障要求，
+  且不直接构成最终维修成果的辅助内容。
+
+- 可选/替代工艺：
+  与核心施工目标相同，但采用不同材料、设备、规格、工艺或实施方案的替代内容。
 
 【选择规则】
 
-1. 每一行 family_id 必须来自 candidate_families。
-2. 同一个 family_id 最多输出一次。
-3. 不得输出候选中不存在的施工项目。
-4. 不得根据常识自行补充施工项。
-5. 与用户需求直接对应的施工做法标为“核心施工项”。
-6. 只有与核心施工存在明确前后关系时，才标为“常见前置项”或“恢复/收尾项”。
-7. 只有候选本身确实属于现场辅助措施时，才标为“措施/条件项”。
-8. 只有与核心施工目标相同、但材料或工艺不同的候选，才标为“可选/替代工艺”。
-9. 没有足够相关候选时可以少选，不得为了凑数量选择无关项。
-10. 不得输出清单名称、项目特征、单位、价格、工程量、金额或来源。
-11. 不要同时选择多个仅措辞不同，但材料、厚度、工艺、部位和用途相同的 family。
-12. 多个候选实质等价时，优先样本和来源更充分的 family。
-13. 不同材料、厚度、工艺、层数、部位或施工边界不得当作重复项删除。
-14. 只能输出一个 JSON object，不得输出解释、Markdown 或思考过程。
+1. 只能选择 candidate_families 中存在的 family_id，同一 family_id 最多选择一次。
+2. 先确定核心施工项，再检查相关前置、恢复/收尾和施工措施/现场条件项。
+3. 用户原文未逐项描述，不代表相关前置或恢复/收尾项一定不能选择；
+   但必须有候选内容和历史证据支持。
+4. 不要求覆盖所有 item_type；证据不足时宁可不选，
+   不得为了凑数量选择无关项。
+5. 可选/替代工艺必须与核心项目标相同，
+   仅材料、设备、规格、工艺或方案不同。
+6. 用户已明确材料、设备或工艺时，可选/替代工艺最多选择一个。
+7. 实质相同、仅措辞不同的 family 不要重复选择；
+   存在明确施工边界差异的项目可以分别选择。
+8. 不输出价格、工程量或自行改写清单内容。
+9. 只能输出一个 JSON object，不得输出解释、Markdown 或思考过程。
 
 【输出 JSON】
 
@@ -1102,6 +1209,86 @@ def build_family_selection_prompt(
 {json_text(payload)}
 """.strip()
     return prompt, records
+
+
+def build_family_selection_trace_frame(families_for_llm: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for fallback_rank, (_index, row) in enumerate(families_for_llm.iterrows(), start=1):
+        rows.append(
+            {
+                "selection_rank": int(row.get("selection_rank") or fallback_rank),
+                "family_id": cell_text(row.get("family_id")),
+                "fine_signature": cell_text(row.get("fine_signature")),
+                "representative_cost_item_name": cell_text(row.get("representative_cost_item_name")),
+                "representative_project_description": cell_text(row.get("representative_project_description")),
+                "unit": cell_text(row.get("unit_normalized")) or cell_text(row.get("unit")),
+                "历史样本数": row.get("历史样本数", ""),
+                "来源工程包数": row.get("来源工程包数", ""),
+                "final_score": row.get("final_score", ""),
+                "item_score最大值": row.get("item_score最大值", ""),
+                "cooccur_score": row.get("cooccur_score", ""),
+                "candidate_source": cell_text(row.get("candidate_source")),
+                "selected_by_llm": "否",
+                "item_type": "",
+                "selection_reason": "",
+                "selection_source": "not_selected",
+            }
+        )
+    return pd.DataFrame(rows, columns=FAMILY_SELECTION_TRACE_COLUMNS)
+
+
+def apply_family_selection_trace_result(
+    trace_frame: pd.DataFrame,
+    selected: pd.DataFrame,
+    selection_source: str,
+) -> pd.DataFrame:
+    output = trace_frame.copy()
+    if output.empty or selected.empty:
+        return output
+    selected_map = {cell_text(row.get("family_id")): row for _index, row in selected.iterrows()}
+    for index, row in output.iterrows():
+        family_id = cell_text(row.get("family_id"))
+        selected_row = selected_map.get(family_id)
+        if selected_row is None:
+            continue
+        output.at[index, "selected_by_llm"] = "是" if selection_source == "llm" else "否"
+        output.at[index, "item_type"] = cell_text(selected_row.get("item_type"))
+        output.at[index, "selection_reason"] = cell_text(selected_row.get("selection_reason"))
+        output.at[index, "selection_source"] = selection_source
+    return output
+
+
+def family_selection_candidate_source_counts(trace_frame: pd.DataFrame) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    if trace_frame.empty or "candidate_source" not in trace_frame.columns:
+        return counts
+    for value in trace_frame["candidate_source"].tolist():
+        for source in split_refs(value):
+            counts[source] = counts.get(source, 0) + 1
+    return counts
+
+
+def trace_id_summary(ids: list[str], limit: int = 20) -> dict[str, Any]:
+    if len(ids) <= limit:
+        return {"ids": ids}
+    return {"ids": ids[:limit], "total": len(ids)}
+
+
+def append_trace_warnings(trace: dict[str, Any], warnings: list[str]) -> None:
+    summary = cell_text(trace.get("input_summary"))
+    if not summary:
+        trace["input_summary"] = json_text({"warnings": warnings})
+        return
+    try:
+        payload = json.loads(summary)
+    except (TypeError, ValueError):
+        trace["input_summary"] = f"{summary}; warnings={';'.join(warnings)}"
+        return
+    if isinstance(payload, dict):
+        payload["warnings"] = warnings
+        trace["input_summary"] = json_text(payload)
+    else:
+        trace["input_summary"] = f"{summary}; warnings={';'.join(warnings)}"
 
 
 def parse_family_selection_result(
@@ -1150,18 +1337,20 @@ def generate_family_selection(
     query_catalog: QueryCatalog,
     candidate_families: pd.DataFrame,
     family_selection_limit: int = 50,
-    family_final_score_limit: int = 30,
-    family_item_score_limit: int = 30,
+    exploration_limit: int = 5,
     warnings: list[str] | None = None,
-) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any], dict[str, Any]]:
+) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any], dict[str, Any], pd.DataFrame]:
     families_for_llm = select_families_for_llm(
         candidate_families,
         family_selection_limit=family_selection_limit,
-        family_final_score_limit=family_final_score_limit,
-        family_item_score_limit=family_item_score_limit,
+        exploration_limit=exploration_limit,
     )
+    trace_frame = build_family_selection_trace_frame(families_for_llm)
     prompt, records = build_family_selection_prompt(rewrite, query_catalog, families_for_llm)
-    allowed_family_ids = {cell_text(row.get("family_id")) for row in records}
+    allowed_family_ids = {cell_text(row.get("id")) for row in records}
+    candidate_ids = [cell_text(row.get("id")) for row in records if cell_text(row.get("id"))]
+    source_counts = family_selection_candidate_source_counts(trace_frame)
+    exploration_count = source_counts.get("exploration", 0)
     max_tokens = 2048
     try:
         response = request_llm_json_with_usage(
@@ -1170,18 +1359,51 @@ def generate_family_selection(
             system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
         )
         selected, meta = parse_family_selection_result(response.content, allowed_family_ids, warnings)
+        selected_ids = selected["family_id"].map(cell_text).tolist() if "family_id" in selected.columns else []
+        selected_detail = replace_nan_records(selected)
+        meta.update(
+            {
+                "candidate_ids": candidate_ids,
+                "selected_ids": selected_ids,
+                "selected_detail": selected_detail,
+                "candidate_source_counts": source_counts,
+                "exploration_count": exploration_count,
+            }
+        )
+        trace_frame = apply_family_selection_trace_result(trace_frame, selected, "llm")
         trace = trace_row(
             "family_selection",
             "选择相关 fine_signature family 并判断项目角色",
             True,
             prompt=prompt,
             max_tokens=max_tokens,
-            input_summary=f"families_sent={len(records)}, selected={len(selected)}",
+            input_summary=json_text(
+                {
+                    "families_sent": len(records),
+                    "selected": len(selected),
+                    "candidate_ids": trace_id_summary(candidate_ids),
+                    "selected_ids": trace_id_summary(selected_ids),
+                    "exploration_count": exploration_count,
+                }
+            ),
             usage=response.usage,
         )
-        return selected, True, False, "", prompt, trace, meta
+        return selected, True, False, "", prompt, trace, meta, trace_frame
     except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
         append_warning(warnings, "family_selection_failed")
+        if not trace_frame.empty:
+            trace_frame = trace_frame.copy()
+            trace_frame["selection_source"] = "fallback"
+        meta = {
+            "invalid_family_ids": [],
+            "duplicate_family_ids": [],
+            "invalid_item_types": [],
+            "candidate_ids": candidate_ids,
+            "selected_ids": [],
+            "selected_detail": [],
+            "candidate_source_counts": source_counts,
+            "exploration_count": exploration_count,
+        }
         trace = trace_row(
             "family_selection",
             "选择相关 fine_signature family 并判断项目角色",
@@ -1189,10 +1411,17 @@ def generate_family_selection(
             error=str(exc),
             prompt=prompt,
             max_tokens=max_tokens,
-            input_summary=f"families_sent={len(records)}, selected=0",
+            input_summary=json_text(
+                {
+                    "families_sent": len(records),
+                    "selected": 0,
+                    "candidate_ids": trace_id_summary(candidate_ids),
+                    "selected_ids": [],
+                    "exploration_count": exploration_count,
+                }
+            ),
         )
-        meta = {"invalid_family_ids": [], "duplicate_family_ids": [], "invalid_item_types": []}
-        return pd.DataFrame(columns=["family_id", "item_type", "selection_reason"]), False, True, str(exc), prompt, trace, meta
+        return pd.DataFrame(columns=["family_id", "item_type", "selection_reason"]), False, True, str(exc), prompt, trace, meta, trace_frame
 
 
 def normalize_dedup_text(value: Any) -> str:
@@ -1345,7 +1574,19 @@ def build_dedup_selection_prompt(raw_query: str, selected_records: list[dict[str
 【输出 JSON】
 {{
   "keep": ["F065", "F013"],
-  "suppress": [["F001", "F065"]]
+  "suppress": [
+    {{
+      "family_id": "F001",
+      "representative_id": "F065",
+      "reason": "F065已覆盖同一施工边界，保留样本更充分的项目"
+    }}
+  ],
+  "keep_reasons": [
+    {{
+      "family_id": "F065",
+      "reason": "核心防水施工项，与前置或收尾项不是重复施工"
+    }}
+  ]
 }}
 
 【输入数据】
@@ -1365,36 +1606,62 @@ def has_suppression_cycle(suppress_map: dict[str, str]) -> bool:
     return False
 
 
-def parse_dedup_selection_result(result: dict[str, Any], allowed_family_ids: set[str]) -> tuple[set[str], dict[str, str]]:
+def parse_dedup_selection_result(
+    result: dict[str, Any],
+    allowed_family_ids: set[str],
+) -> tuple[set[str], dict[str, str], list[dict[str, str]], list[dict[str, str]]]:
     keep_raw = result.get("keep")
     suppress_raw = result.get("suppress")
+    keep_reasons_raw = result.get("keep_reasons", [])
     if not isinstance(keep_raw, list) or not isinstance(suppress_raw, list):
         raise ValueError("dedup_selection 输出缺少 keep/suppress list")
+    if not isinstance(keep_reasons_raw, list):
+        raise ValueError("dedup_selection keep_reasons 必须为 list")
 
     keep_ids = {cell_text(item) for item in keep_raw if cell_text(item)}
     if not keep_ids.issubset(allowed_family_ids):
         raise ValueError("dedup_selection keep 包含非法 family_id")
 
     suppress_map: dict[str, str] = {}
+    suppress_detail: list[dict[str, str]] = []
     for item in suppress_raw:
-        if not isinstance(item, list | tuple) or len(item) != 2:
-            raise ValueError("dedup_selection suppress 项必须为二元数组")
-        suppressed_id = cell_text(item[0])
-        representative_id = cell_text(item[1])
+        if not isinstance(item, dict):
+            raise ValueError("dedup_selection suppress 项必须为 object")
+        suppressed_id = cell_text(item.get("family_id"))
+        representative_id = cell_text(item.get("representative_id"))
+        reason = cell_text(item.get("reason"))
         if suppressed_id not in allowed_family_ids or representative_id not in allowed_family_ids:
             raise ValueError("dedup_selection suppress 包含非法 family_id")
+        if not reason:
+            raise ValueError("dedup_selection suppress 缺少 reason")
         if suppressed_id == representative_id:
             raise ValueError("dedup_selection suppress 不能自引用")
         if suppressed_id in suppress_map and suppress_map[suppressed_id] != representative_id:
             raise ValueError("dedup_selection suppress 存在冲突")
         suppress_map[suppressed_id] = representative_id
+        suppress_detail.append(
+            {
+                "family_id": suppressed_id,
+                "representative_id": representative_id,
+                "reason": reason,
+            }
+        )
+
+    keep_reasons: list[dict[str, str]] = []
+    for item in keep_reasons_raw:
+        if not isinstance(item, dict):
+            raise ValueError("dedup_selection keep_reasons 项必须为 object")
+        family_id = cell_text(item.get("family_id"))
+        if family_id not in allowed_family_ids:
+            raise ValueError("dedup_selection keep_reasons 包含非法 family_id")
+        keep_reasons.append({"family_id": family_id, "reason": cell_text(item.get("reason"))})
 
     if keep_ids & set(suppress_map):
         raise ValueError("dedup_selection family 不能同时 keep 和 suppress")
     if has_suppression_cycle(suppress_map):
         raise ValueError("dedup_selection suppress 形成环")
 
-    return keep_ids, suppress_map
+    return keep_ids, suppress_map, suppress_detail, keep_reasons
 
 
 def generate_dedup_selection(
@@ -1406,9 +1673,16 @@ def generate_dedup_selection(
     auto_selected, auto_suppressed = deterministic_dedup_selection(selected_families, candidate_families)
     family_ids = suspicious_dedup_family_ids(auto_selected, candidate_families)
     records = selected_family_payload(auto_selected, candidate_families, family_ids)
+    selected_before_ids = [cell_text(row.get("family_id")) for _index, row in selected_families.iterrows() if cell_text(row.get("family_id"))]
+    input_ids = [record["id"] for record in records]
+    auto_keep_ids = [cell_text(row.get("family_id")) for _index, row in auto_selected.iterrows() if cell_text(row.get("family_id"))]
     meta: dict[str, Any] = {
         "auto_suppressed": [f"{left}->{right}" for left, right in auto_suppressed.items()],
         "llm_suppressed": [],
+        "input_ids": input_ids,
+        "keep_ids": auto_keep_ids,
+        "suppress_detail": [],
+        "keep_reasons": [],
         "invalid": [],
     }
 
@@ -1419,7 +1693,14 @@ def generate_dedup_selection(
             True,
             prompt="",
             max_tokens=0,
-            input_summary=f"selected={len(selected_families)}, sent={len(records)}, kept={len(auto_selected)}",
+            input_summary=json_text(
+                {
+                    "selected_before_dedup": len(selected_families),
+                    "input_ids": trace_id_summary(input_ids),
+                    "kept_ids": trace_id_summary(auto_keep_ids),
+                    "suppressed_ids": trace_id_summary(list(auto_suppressed)),
+                }
+            ),
         )
         return auto_selected, True, False, "", "", trace, meta
 
@@ -1432,16 +1713,28 @@ def generate_dedup_selection(
             max_tokens=max_tokens,
             system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
         )
-        _keep_ids, llm_suppressed = parse_dedup_selection_result(response.content, allowed_family_ids)
+        keep_ids, llm_suppressed, suppress_detail, keep_reasons = parse_dedup_selection_result(response.content, allowed_family_ids)
         deduped = apply_dedup_suppression(auto_selected, llm_suppressed)
+        kept_ids = [cell_text(row.get("family_id")) for _index, row in deduped.iterrows() if cell_text(row.get("family_id"))]
         meta["llm_suppressed"] = [f"{left}->{right}" for left, right in llm_suppressed.items()]
+        meta["keep_ids"] = kept_ids
+        meta["suppress_detail"] = suppress_detail
+        meta["keep_reasons"] = keep_reasons
+        meta["llm_keep_ids"] = sorted(keep_ids)
         trace = trace_row(
             "dedup_selection",
             "抑制已选 family 中的重复展示项",
             True,
             prompt=prompt,
             max_tokens=max_tokens,
-            input_summary=f"selected={len(selected_families)}, sent={len(records)}, kept={len(deduped)}",
+            input_summary=json_text(
+                {
+                    "selected_before_dedup": len(selected_families),
+                    "input_ids": trace_id_summary(input_ids),
+                    "kept_ids": trace_id_summary(kept_ids),
+                    "suppressed_ids": trace_id_summary(list(llm_suppressed)),
+                }
+            ),
             usage=response.usage,
         )
         return deduped, True, False, "", prompt, trace, meta
@@ -1455,7 +1748,14 @@ def generate_dedup_selection(
             error=str(exc),
             prompt=prompt,
             max_tokens=max_tokens,
-            input_summary=f"selected={len(selected_families)}, sent={len(records)}, kept={len(auto_selected)}",
+            input_summary=json_text(
+                {
+                    "selected_before_dedup": len(selected_families),
+                    "input_ids": trace_id_summary(input_ids),
+                    "kept_ids": trace_id_summary(auto_keep_ids),
+                    "suppressed_ids": trace_id_summary(list(auto_suppressed)),
+                }
+            ),
         )
         return auto_selected, False, True, str(exc), prompt, trace, meta
 
@@ -1992,7 +2292,7 @@ def build_estimate_summary(
     catalog_summary = "；".join(catalog_parts) + "。"
 
     overview_parts: list[str] = []
-    for item_type in ["核心施工项", "常见前置项", "恢复/收尾项", "措施/条件项", "可选/替代工艺"]:
+    for item_type in ["核心施工项", "常见前置项", "恢复/收尾项", "施工措施/现场条件项", "可选/替代工艺"]:
         if "建议项类型" not in suggested_bill.columns or "清单项名称" not in suggested_bill.columns:
             continue
         rows = suggested_bill[suggested_bill["建议项类型"].map(cell_text).eq(item_type)]
@@ -2129,12 +2429,22 @@ def build_parse_info(
         ("candidate_pool_row_count", candidate_pool_row_count),
         ("candidate_family_count", candidate_family_count),
         ("family_selection_input_count", family_selection_input_count),
+        ("family_selection_candidate_count", len(family_selection_meta.get("candidate_ids") or [])),
+        ("family_selection_candidate_ids", json_text(family_selection_meta.get("candidate_ids") or [])),
         ("family_selection_selected_count", family_selection_selected_count),
+        ("family_selection_selected_ids", json_text(family_selection_meta.get("selected_ids") or [])),
+        ("family_selection_selected_detail", json_text(family_selection_meta.get("selected_detail") or [])),
+        ("family_selection_candidate_source_counts", json_text(family_selection_meta.get("candidate_source_counts") or {})),
+        ("family_selection_exploration_count", family_selection_meta.get("exploration_count", "")),
         ("family_selection_prompt_chars", family_selection_trace.get("prompt_chars", "")),
         ("family_selection_prompt_tokens", family_selection_trace.get("prompt_tokens") or family_selection_trace.get("estimated_tokens", "")),
         ("family_selection_completion_tokens", family_selection_trace.get("completion_tokens", "")),
         ("dedup_selection_input_count", dedup_selection_input_count),
         ("dedup_selection_output_count", dedup_selection_output_count),
+        ("dedup_input_ids", json_text(dedup_selection_meta.get("input_ids") or [])),
+        ("dedup_keep_ids", json_text(dedup_selection_meta.get("keep_ids") or [])),
+        ("dedup_suppress_detail", json_text(dedup_selection_meta.get("suppress_detail") or [])),
+        ("dedup_keep_reasons", json_text(dedup_selection_meta.get("keep_reasons") or [])),
         ("dedup_selection_prompt_chars", dedup_selection_trace.get("prompt_chars", "")),
         ("dedup_selection_prompt_tokens", dedup_selection_trace.get("prompt_tokens") or dedup_selection_trace.get("estimated_tokens", "")),
         ("dedup_selection_completion_tokens", dedup_selection_trace.get("completion_tokens", "")),
@@ -2186,6 +2496,11 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
             sheet_name="candidate_families",
             index=False,
         )
+        display_frame(result.family_selection_trace, display).to_excel(
+            writer,
+            sheet_name="family_selection_trace",
+            index=False,
+        )
         display_frame(result.evidence_items, display).to_excel(writer, sheet_name="evidence_items", index=False)
         result.parse_info.to_excel(writer, sheet_name="parse_info", index=False)
         result.llm_trace.to_excel(writer, sheet_name="llm_trace", index=False)
@@ -2220,8 +2535,7 @@ def run_query(
     output: Path | None,
     max_packages_per_cache_subject: int = 1,
     family_selection_limit: int = 50,
-    family_final_score_limit: int = 30,
-    family_item_score_limit: int = 30,
+    family_exploration_limit: int = 5,
     include_debug_text: bool = False,
     display: bool = False,
 ) -> QueryResult:
@@ -2259,7 +2573,7 @@ def run_query(
     direct_item_hits = score_direct_items(samples, item_scores, top_items)
     candidates = candidate_pool(samples, matched_raw, direct_item_hits, item_scores, query_catalog, warnings=warnings)
     candidate_families = build_candidate_families(candidates)
-    evidence_items = build_evidence_items(candidates)
+    evidence_items = build_evidence_items(candidates, candidate_families)
     matched_project_packages = matched_project_packages_for_output(matched_raw)
 
     (
@@ -2270,13 +2584,13 @@ def run_query(
         family_selection_prompt,
         family_selection_trace,
         family_selection_meta,
+        family_selection_trace_frame,
     ) = generate_family_selection(
         rewrite,
         query_catalog,
         candidate_families,
         family_selection_limit=family_selection_limit,
-        family_final_score_limit=family_final_score_limit,
-        family_item_score_limit=family_item_score_limit,
+        exploration_limit=family_exploration_limit,
         warnings=warnings,
     )
     (
@@ -2312,17 +2626,10 @@ def run_query(
     suggested_bill = build_final_suggested_bill(deduped_families, quantity_decisions, candidate_families)
     estimate_summary = build_estimate_summary(rewrite, query_catalog, suggested_bill)
     if warnings:
-        family_selection_trace["input_summary"] = f"{family_selection_trace.get('input_summary', '')}; warnings={';'.join(warnings)}"
-        dedup_selection_trace["input_summary"] = f"{dedup_selection_trace.get('input_summary', '')}; warnings={';'.join(warnings)}"
-        quantity_decision_trace["input_summary"] = f"{quantity_decision_trace.get('input_summary', '')}; warnings={';'.join(warnings)}"
-    families_for_llm_count = len(
-        select_families_for_llm(
-            candidate_families,
-            family_selection_limit=family_selection_limit,
-            family_final_score_limit=family_final_score_limit,
-            family_item_score_limit=family_item_score_limit,
-        )
-    )
+        append_trace_warnings(family_selection_trace, warnings)
+        append_trace_warnings(dedup_selection_trace, warnings)
+        append_trace_warnings(quantity_decision_trace, warnings)
+    families_for_llm_count = len(family_selection_meta.get("candidate_ids") or [])
     parse_info = build_parse_info(
         rewrite=rewrite,
         query_catalog=query_catalog,
@@ -2373,6 +2680,7 @@ def run_query(
         suggested_bill=suggested_bill,
         matched_project_packages=matched_project_packages,
         candidate_families=candidate_families,
+        family_selection_trace=family_selection_trace_frame,
         evidence_items=evidence_items,
         parse_info=parse_info,
         llm_trace=llm_trace,
@@ -2435,8 +2743,7 @@ def main() -> int:
             output=output_path,
             max_packages_per_cache_subject=args.max_packages_per_cache_subject,
             family_selection_limit=args.family_selection_limit,
-            family_final_score_limit=args.family_final_score_limit,
-            family_item_score_limit=args.family_item_score_limit,
+            family_exploration_limit=args.family_exploration_limit,
             include_debug_text=args.include_debug_text,
             display=args.display,
         )

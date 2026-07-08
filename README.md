@@ -236,33 +236,27 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 
 如果输出文件已存在，需要显式传 `--overwrite`。
 
-family_selection 默认按 `final_score` 前 30 与 `item_score最大值` 前 30 取并集，去重后最多发送 50 个 family。可通过以下参数调整：
+family_selection 默认最多发送 50 个 family，其中主排序候选由 `final_score`、`item_score最大值`、`cooccur_score`、`来源工程包数` 四个完整排行榜交替补足，重复 family 不占配额；末尾最多保留 5 个确定性等距探索候选。可通过以下参数调整：
 
 ```text
 --family-selection-limit
---family-final-score-limit
---family-item-score-limit
+--family-exploration-limit
 ```
 
 新查询流程：
 
 ```text
-用户自然语言需求
-→ LLM 生成 ParsedQuery、project_package_query_text 和 item_query_text
-→ 标准目录分类器选择一个主目录
-→ package query 检索 project_package_embeddings
-→ item query 检索 item_embeddings
-→ candidate_pool 展开历史清单行
-→ 程序计算 package_path_score / item_path_score，final_score 取两者较高值
-→ 按规范化 fine_signature 精确聚合 candidate_families
-→ 按 final_score top-k 与 item_score top-k 双通道并集选择最多 50 个 family
-→ 第一次 LLM 只选择 family_id 和建议项类型
+用户查询
+→ LLM query rewrite
+→ 工程包与清单行 embedding 召回
+→ candidate pool
+→ fine_signature family 聚合
+→ 多排行榜交替补足 family_selection 候选
+→ 剩余 family 等距探索
+→ LLM 选择最小完整施工链
 → dedup_selection 抑制已选 family 中的重复展示项
-→ 程序构建已选 family 的历史数量关系
-→ 第二次 LLM 判断工程量低/中/高区间和是否计入金额
-→ 程序按 family_id 回填名称、项目特征、单位、历史单价和来源样本
-→ 程序计算金额并生成 estimate_summary
-→ 输出 estimate_summary、suggested_bill、matched_project_packages、candidate_families、evidence_items、parse_info、llm_trace
+→ 工程量与金额处理
+→ suggested_bill
 ```
 
 输出 xlsx 固定包含：
@@ -270,8 +264,9 @@ family_selection 默认按 `final_score` 前 30 与 `item_score最大值` 前 30
 - `estimate_summary`：面向用户/领导的估价摘要，展示原始需求、ParsedQuery、核心分类、估算金额区间、核心项目、共现措施项、未计入或需现场确认项目、主要不确定因素和来源说明。
 - `suggested_bill`：估价主表，展示最终采用的推荐清单项、项目角色、工程量来源、建议工程量低/中/高、历史综合单价最低值/中位数/最高值、人工费和机械费单价区间、估算金额区间、金额计算说明、采用理由、不确定性说明和来源样本。历史价格由程序从同一 `fine_signature` 的 `candidate_families` 回填。
 - `matched_project_packages`：相似历史工程包摘要，包括 `package_score`、`project_package_id`、工程名称、`project_name_text`、`cost_item_names_summary`、`consultation_time`、`location`、`cache_subject` 和 `item_count`。
-- `candidate_families`：按规范化 `fine_signature = cost_item_name + project_description + unit` 聚合的候选施工做法统计。每个 family 是唯一可报价边界，3mm/4mm、自粘/热熔、单层/双层等不同规格不会合并；表内保留 `package_path_score最大值`、`item_path_score最大值` 和 `final_score` 便于排查召回排序。
-- `evidence_items`：来源样本明细，保存本次查询进入候选池的历史清单行。`source_ref = project_key + "::" + item_row_id`，可用于回查 `samples/cost_item_samples_all.xlsx` / `samples.parquet`。
+- `candidate_families`：按规范化 `fine_signature = cost_item_name + project_description + unit` 聚合的候选施工做法统计。当前没有新增第二套 family 规范化规则；每个 family 是唯一可报价边界，3mm/4mm、自粘/热熔、单层/双层等不同规格不会合并；表内保留 `package_path_score最大值`、`item_path_score最大值` 和 `final_score` 便于排查召回排序。
+- `family_selection_trace`：记录实际发送给 family_selection LLM 的 family、`selection_rank`、`candidate_source`、是否被选中、`item_type` 和选择原因，用于排查候选补足和最小完整施工链选择。
+- `evidence_items`：来源样本明细，保存本次查询进入候选池的历史清单行。`source_ref = project_key + "::" + item_row_id`，`family_id` 和 `fine_signature` 可用于从历史样本回查所属 family。
 - `parse_info`：本次查询解析结果和检索参数，包括原始需求、ParsedQuery、分类结果、候选池行数、family 数、LLM 输入/输出规模、token、fallback、错误、dedup 抑制摘要和 warnings。
 - `llm_trace`：记录 query rewrite、目录分类、family selection、dedup selection、quantity decision 是否成功、prompt 长度、真实 token（服务返回时）或估算 token、输入摘要和错误。
 
@@ -286,7 +281,7 @@ family_selection 默认按 `final_score` 前 30 与 `item_score最大值` 前 30
 
 LLM 职责边界：
 
-- 第一次 LLM：只从输入的 `candidate_families` 中选择真实存在的 `family_id`，并判断 `核心施工项`、`常见前置项`、`恢复/收尾项`、`措施/条件项`、`可选/替代工艺`。
+- 第一次 LLM：只从输入的 `candidate_families` 中选择真实存在的 `family_id`，并判断 `核心施工项`、`常见前置项`、`恢复/收尾项`、`施工措施/现场条件项`、`可选/替代工艺`。
 - dedup_selection：只对第一次已选 family 做重复展示抑制，不创建新 family，不合并价格样本、来源、工程量或单价区间。
 - quantity_decision：只为 dedup 后保留的 family 判断工程量低/中/高区间、工程量来源和是否计入参考金额。
 - LLM 不生成单价、来源、清单名称、项目特征、单位或金额。综合单价必须来自同一 `fine_signature` 下的历史样本统计。

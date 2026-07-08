@@ -343,8 +343,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(args.top_packages, 20)
         self.assertEqual(args.top_items, 300)
         self.assertEqual(args.family_selection_limit, 50)
-        self.assertEqual(args.family_final_score_limit, 30)
-        self.assertEqual(args.family_item_score_limit, 30)
+        self.assertEqual(args.family_exploration_limit, 5)
+        self.assertFalse(hasattr(args, "family_final_score_limit"))
+        self.assertFalse(hasattr(args, "family_item_score_limit"))
         self.assertEqual(args.llm_check_timeout, 3.0)
         self.assertFalse(hasattr(args, "top_k"))
         self.assertFalse(hasattr(args, "project_name_weight"))
@@ -585,10 +586,26 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(roof3["representative_project_description"], "3.0mm SBS 沥青防水卷材")
         self.assertEqual(roof4["历史综合单价最低值"], 120.0)
 
-    def test_select_families_for_llm_uses_final_and_item_score_channels(self):
+        evidence = query_estimate_llm.build_evidence_items(candidates, families)
+        family_by_signature = dict(zip(families["fine_signature"], families["family_id"], strict=False))
+        self.assertEqual(len(evidence), len(candidates))
+        self.assertIn("family_id", evidence.columns)
+        self.assertIn("fine_signature", evidence.columns)
+        self.assertFalse(evidence["family_id"].map(query_estimate_llm.cell_text).eq("").any())
+        for _index, row in evidence.iterrows():
+            self.assertEqual(row["family_id"], family_by_signature[row["fine_signature"]])
+
+    def test_select_families_for_llm_refills_overlapping_rankings(self):
         families = pd.DataFrame(
             [
-                {"family_id": f"F{index:03d}", "final_score": 1.0 - index / 100.0, "item_score最大值": index / 100.0, "历史样本数": 1}
+                {
+                    "family_id": f"F{index:03d}",
+                    "final_score": 1.0 - index / 100.0,
+                    "item_score最大值": 1.0 - index / 100.0 if index <= 30 else 0.01,
+                    "cooccur_score": 1.0 - index / 200.0,
+                    "来源工程包数": 1,
+                    "历史样本数": 1,
+                }
                 for index in range(1, 61)
             ]
         )
@@ -596,8 +613,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         selected = query_estimate_llm.select_families_for_llm(
             families,
             family_selection_limit=50,
-            family_final_score_limit=30,
-            family_item_score_limit=30,
+            exploration_limit=5,
         )
 
         selected_ids = selected["family_id"].tolist()
@@ -605,7 +621,52 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(len(selected_ids), len(set(selected_ids)))
         self.assertIn("F001", selected_ids)
         self.assertIn("F060", selected_ids)
-        self.assertNotIn("F031", selected_ids)
+        self.assertEqual(selected["selection_rank"].tolist(), list(range(1, 51)))
+        self.assertTrue(selected["candidate_source"].map(bool).all())
+
+    def test_select_families_for_llm_returns_all_when_under_limit(self):
+        families = pd.DataFrame(
+            [
+                {
+                    "family_id": f"F{index:03d}",
+                    "final_score": 1.0 - index / 100.0,
+                    "item_score最大值": 0.5,
+                    "cooccur_score": 0.2,
+                    "来源工程包数": 1,
+                    "历史样本数": 1,
+                }
+                for index in range(1, 19)
+            ]
+        )
+
+        selected = query_estimate_llm.select_families_for_llm(families, family_selection_limit=50, exploration_limit=5)
+
+        self.assertEqual(len(selected), 18)
+        self.assertEqual(len(selected["family_id"].tolist()), len(set(selected["family_id"].tolist())))
+
+    def test_select_families_for_llm_adds_deterministic_exploration(self):
+        families = pd.DataFrame(
+            [
+                {
+                    "family_id": f"F{index:03d}",
+                    "final_score": 1.0 - index / 1000.0,
+                    "item_score最大值": 1.0 - index / 1000.0,
+                    "cooccur_score": 1.0 - index / 1000.0,
+                    "来源工程包数": 1,
+                    "历史样本数": 1,
+                }
+                for index in range(1, 66)
+            ]
+        )
+
+        first = query_estimate_llm.select_families_for_llm(families, family_selection_limit=50, exploration_limit=5)
+        second = query_estimate_llm.select_families_for_llm(families, family_selection_limit=50, exploration_limit=5)
+        exploration = first[first["candidate_source"].eq("exploration")]
+
+        self.assertEqual(first["family_id"].tolist(), second["family_id"].tolist())
+        self.assertEqual(len(exploration), 5)
+        self.assertEqual(len(exploration["family_id"].tolist()), len(set(exploration["family_id"].tolist())))
+        self.assertTrue(set(exploration["family_id"]).issubset({f"F{index:03d}" for index in range(46, 66)}))
 
     def test_source_ref_recovers_from_batch_source_row_and_seq(self):
         rows = self.prepared_samples().head(1).copy()
@@ -643,8 +704,11 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         prompt, records = query_estimate_llm.build_family_selection_prompt(rewrite, catalog, families)
 
-        self.assertEqual(records[0]["family_id"], "F001")
-        self.assertEqual(records[0]["historical_sample_count"], 2)
+        self.assertEqual(records[0]["id"], "F001")
+        self.assertEqual(records[0]["samples"], 2)
+        self.assertEqual(records[0]["packages"], 2)
+        self.assertIn("item_score", records[0])
+        self.assertIn("cooccur_score", records[0])
         self.assertNotIn("final_score", records[0])
         self.assertNotIn("source_refs", prompt)
         self.assertNotIn("final_score", prompt)
@@ -660,17 +724,67 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"family_id": "BAD", "item_type": "核心施工项", "selection_reason": "无效"},
                 {"family_id": "F001", "item_type": "核心施工项", "selection_reason": "重复"},
                 {"family_id": "F002", "item_type": "补充候选项", "selection_reason": "非法类型"},
+                {"family_id": "F003", "item_type": "施工措施/现场条件项", "selection_reason": "新类型"},
+                {"family_id": "F004", "item_type": "措施/条件项", "selection_reason": "旧类型非法"},
             ]
         }
         warnings: list[str] = []
 
-        selected, meta = query_estimate_llm.parse_family_selection_result(result, {"F001", "F002"}, warnings)
+        selected, meta = query_estimate_llm.parse_family_selection_result(result, {"F001", "F002", "F003", "F004"}, warnings)
 
-        self.assertEqual(selected["family_id"].tolist(), ["F001"])
+        self.assertEqual(selected["family_id"].tolist(), ["F001", "F003"])
         self.assertEqual(meta["invalid_family_ids"], ["BAD"])
         self.assertEqual(meta["duplicate_family_ids"], ["F001"])
-        self.assertEqual(meta["invalid_item_types"], ["补充候选项"])
+        self.assertEqual(meta["invalid_item_types"], ["补充候选项", "措施/条件项"])
         self.assertIn("invalid_family_ids", warnings)
+
+    def test_family_selection_trace_records_sent_and_selected_families(self):
+        families = pd.DataFrame(
+            [
+                {
+                    "selection_rank": 1,
+                    "candidate_source": "final_score,item_score",
+                    "family_id": "F001",
+                    "fine_signature": "sig-1",
+                    "representative_cost_item_name": "屋面卷材防水",
+                    "representative_project_description": "3mm SBS",
+                    "unit": "平方米",
+                    "unit_normalized": "m²",
+                    "历史样本数": 2,
+                    "来源工程包数": 2,
+                    "final_score": 0.9,
+                    "item_score最大值": 0.8,
+                    "cooccur_score": 0.7,
+                },
+                {
+                    "selection_rank": 2,
+                    "candidate_source": "exploration",
+                    "family_id": "F002",
+                    "fine_signature": "sig-2",
+                    "representative_cost_item_name": "脚手架",
+                    "representative_project_description": "现场措施",
+                    "unit": "项",
+                    "unit_normalized": "项",
+                    "历史样本数": 1,
+                    "来源工程包数": 1,
+                    "final_score": 0.2,
+                    "item_score最大值": 0.1,
+                    "cooccur_score": 0.3,
+                },
+            ]
+        )
+        selected = pd.DataFrame(
+            [{"family_id": "F001", "item_type": "核心施工项", "selection_reason": "直接对应"}]
+        )
+
+        trace = query_estimate_llm.build_family_selection_trace_frame(families)
+        trace = query_estimate_llm.apply_family_selection_trace_result(trace, selected, "llm")
+
+        self.assertEqual(trace["selection_rank"].tolist(), [1, 2])
+        self.assertEqual(trace["selected_by_llm"].tolist(), ["是", "否"])
+        self.assertEqual(trace.loc[0, "item_type"], "核心施工项")
+        self.assertEqual(trace.loc[0, "selection_reason"], "直接对应")
+        self.assertEqual(trace.loc[1, "selection_source"], "not_selected")
 
     def test_dedup_selection_suppresses_display_duplicates_without_merging_prices(self):
         families = pd.DataFrame(
@@ -741,18 +855,38 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
     def test_dedup_selection_validation_rejects_cycles_and_invalid_ids(self):
         with self.assertRaisesRegex(ValueError, "形成环"):
             query_estimate_llm.parse_dedup_selection_result(
-                {"keep": [], "suppress": [["F001", "F002"], ["F002", "F001"]]},
+                {
+                    "keep": [],
+                    "suppress": [
+                        {"family_id": "F001", "representative_id": "F002", "reason": "重复"},
+                        {"family_id": "F002", "representative_id": "F001", "reason": "重复"},
+                    ],
+                },
                 {"F001", "F002"},
             )
         with self.assertRaisesRegex(ValueError, "非法 family_id"):
             query_estimate_llm.parse_dedup_selection_result({"keep": ["BAD"], "suppress": []}, {"F001"})
+
+        keep_ids, suppress_map, suppress_detail, keep_reasons = query_estimate_llm.parse_dedup_selection_result(
+            {
+                "keep": ["F002"],
+                "suppress": [{"family_id": "F001", "representative_id": "F002", "reason": "F002覆盖范围更完整"}],
+                "keep_reasons": [{"family_id": "F002", "reason": "保留代表项"}],
+            },
+            {"F001", "F002"},
+        )
+
+        self.assertEqual(keep_ids, {"F002"})
+        self.assertEqual(suppress_map, {"F001": "F002"})
+        self.assertEqual(suppress_detail, [{"family_id": "F001", "representative_id": "F002", "reason": "F002覆盖范围更完整"}])
+        self.assertEqual(keep_reasons, [{"family_id": "F002", "reason": "保留代表项"}])
 
     def test_quantity_decision_validation_and_missing_defaults(self):
         selected = pd.DataFrame(
             [
                 {"family_id": "F001", "item_type": "核心施工项", "selection_reason": ""},
                 {"family_id": "F002", "item_type": "可选/替代工艺", "selection_reason": ""},
-                {"family_id": "F003", "item_type": "措施/条件项", "selection_reason": ""},
+                {"family_id": "F003", "item_type": "施工措施/现场条件项", "selection_reason": ""},
             ]
         )
         result = {
@@ -940,13 +1074,29 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             family_selection_trace={"prompt_chars": 100, "prompt_tokens": 40, "completion_tokens": 8},
             family_selection_fallback=False,
             family_selection_error="",
-            family_selection_meta={"invalid_family_ids": ["BAD"], "duplicate_family_ids": [], "invalid_item_types": []},
+            family_selection_meta={
+                "invalid_family_ids": ["BAD"],
+                "duplicate_family_ids": [],
+                "invalid_item_types": [],
+                "candidate_ids": ["F001", "F002"],
+                "selected_ids": ["F001"],
+                "selected_detail": [{"family_id": "F001", "item_type": "核心施工项", "selection_reason": "直接"}],
+                "candidate_source_counts": {"final_score": 1, "exploration": 1},
+                "exploration_count": 1,
+            },
             dedup_selection_input_count=2,
             dedup_selection_output_count=1,
             dedup_selection_trace={"prompt_chars": 50, "estimated_tokens": 20, "completion_tokens": 4},
             dedup_selection_fallback=False,
             dedup_selection_error="",
-            dedup_selection_meta={"auto_suppressed": ["F001->F002"], "llm_suppressed": []},
+            dedup_selection_meta={
+                "auto_suppressed": ["F001->F002"],
+                "llm_suppressed": [],
+                "input_ids": ["F001", "F002"],
+                "keep_ids": ["F002"],
+                "suppress_detail": [{"family_id": "F001", "representative_id": "F002", "reason": "重复"}],
+                "keep_reasons": [{"family_id": "F002", "reason": "代表项"}],
+            },
             quantity_decision_input_count=2,
             quantity_relation_count=3,
             quantity_decision_trace={"prompt_chars": 200, "estimated_tokens": 100, "completion_tokens": ""},
@@ -967,7 +1117,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(values["candidate_pool_row_count"], 50)
         self.assertEqual(values["candidate_family_count"], 12)
         self.assertEqual(values["family_selection_prompt_tokens"], 40)
+        self.assertEqual(values["family_selection_candidate_ids"], '["F001", "F002"]')
+        self.assertEqual(values["family_selection_selected_ids"], '["F001"]')
+        self.assertEqual(values["family_selection_exploration_count"], 1)
         self.assertEqual(values["dedup_selection_prompt_tokens"], 20)
+        self.assertEqual(values["dedup_input_ids"], '["F001", "F002"]')
+        self.assertEqual(values["dedup_keep_ids"], '["F002"]')
         self.assertEqual(values["dedup_auto_suppressed"], "F001->F002")
         self.assertEqual(values["quantity_decision_prompt_tokens"], 100)
         self.assertEqual(values["invalid_family_ids"], "BAD")
@@ -1000,6 +1155,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ),
             matched_project_packages=pd.DataFrame(columns=query_estimate_llm.MATCHED_PROJECT_PACKAGE_COLUMNS),
             candidate_families=pd.DataFrame(columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS),
+            family_selection_trace=pd.DataFrame(columns=query_estimate_llm.FAMILY_SELECTION_TRACE_COLUMNS),
             evidence_items=pd.DataFrame(columns=query_estimate_llm.EVIDENCE_ITEM_COLUMNS),
             parse_info=pd.DataFrame([{"字段": "project_package_query_text", "值": "屋面工程"}]),
             llm_trace=pd.DataFrame(
@@ -1025,6 +1181,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "suggested_bill",
                     "matched_project_packages",
                     "candidate_families",
+                    "family_selection_trace",
                     "evidence_items",
                     "parse_info",
                     "llm_trace",
