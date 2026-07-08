@@ -4279,6 +4279,7 @@ def run_query(
         display_selection_trace=display_selection_trace,
         display_selection_fallback=display_selection_fallback,
         display_selection_error=display_selection_error,
+        display_selection_meta=display_selection_meta,
         display_family_selection_display_count=len(selected_displays),
         display_family_selection_trace=display_family_selection_trace,
         display_family_selection_fallback=display_family_selection_fallback,
