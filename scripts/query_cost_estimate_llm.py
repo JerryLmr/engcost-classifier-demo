@@ -112,7 +112,6 @@ EVIDENCE_ITEM_COLUMNS = [
 SUGGESTED_BILL_COLUMNS = [
     "序号",
     "display_id",
-    "建议项类型",
     "清单名称",
     "单位",
     "默认参考做法",
@@ -199,7 +198,6 @@ DISPLAY_SELECTION_TRACE_COLUMNS = [
     "cooccur_score最大值",
     "candidate_source",
     "selected_by_llm",
-    "item_type",
     "selection_reason",
     "selection_source",
 ]
@@ -218,7 +216,6 @@ FAMILY_SELECTION_TRACE_COLUMNS = [
     "cooccur_score",
     "candidate_source",
     "selected_by_llm",
-    "item_type",
     "selection_reason",
     "selection_source",
 ]
@@ -226,7 +223,6 @@ FAMILY_SELECTION_TRACE_COLUMNS = [
 DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS = [
     "display_id",
     "display_name",
-    "item_type",
     "family_id",
     "fine_signature",
     "representative_cost_item_name",
@@ -263,14 +259,6 @@ LLM_TRACE_COLUMNS = [
     "completion_tokens",
     "total_tokens",
 ]
-
-ALLOWED_ITEM_TYPES = {
-    "核心施工项",
-    "常见前置项",
-    "恢复/收尾项",
-    "施工措施/现场条件项",
-    "可选/替代工艺",
-}
 
 ALLOWED_QUANTITY_SOURCES = {
     "用户明确给定",
@@ -1426,54 +1414,52 @@ def build_display_selection_prompt(
 
 【任务】
 
-根据用户需求，从 candidate_displays 中选择一个有历史证据支持、
-不过度扩张且避免重复的最小完整施工链。
+根据用户需求和历史候选证据，从 candidate_displays 中选择应进入本次建议清单的工作项。
 
 每个 display 代表一个清单工作项，内部可能包含多个不同历史做法。
-本阶段只判断哪些工作项需要进入建议方案，不选择具体历史做法。
+本阶段只判断哪些 display 应进入建议清单：
 
-最小完整施工链不是只选择与用户原文最相似的核心项：
-在选定核心施工项后，还应检查候选中是否存在与其具有明确实施关系的
-常见前置项、恢复/收尾项或施工措施/现场条件项。
+- 不选择具体 family；
+- 不判断价格和工程量；
+- 不撰写最终方案总结。
 
-不要求每种类型都必须出现；证据不足时可以不选。
-不得为了补全类型选择无关项，也不得创造候选中不存在的 display。
+请综合判断：
 
-【item_type】
+1. 用户明确描述的维修对象、问题、材料、规格和工程量；
+2. display 与用户维修目标的直接相关性；
+3. display 在相似历史工程中的出现情况；
+4. display 与其他拟选工作项之间是否存在合理的施工或配套关系；
+5. 该工作项是否可能因现场条件、原有构造、施工组织或实施方案而需要。
 
-- 核心施工项：
-  直接解决用户主要维修需求的施工、维修、更换、更新或改造内容。
+用户通常只描述维修目标，不会完整列出实际工程中的全部清单工作项。
+因此，不要只选择与用户原文措辞最相似的项目。
 
-- 常见前置项：
-  为实施核心施工通常需要先完成，且与核心施工存在明确实施顺序或必要准备关系的内容。
-
-- 恢复/收尾项：
-  核心施工完成后，为恢复原有功能、外观或环境，
-  或者完成调试、试运行、验收和清理的内容。
-
-- 施工措施/现场条件项：
-  是否实施取决于现场条件、施工组织、安全、运输、检测或临时保障要求，
-  且不直接构成最终维修成果的辅助内容。
-
-- 可选/替代工艺：
-  与已选核心施工目标相同，但属于不同清单工作项，
-  并采用不同材料、设备、工艺或实施方案的替代内容。
+但历史工程中出现过，也不代表当前工程一定需要。
+只有当候选与本次需求存在清楚、可解释的关系时，才应选择。
 
 【选择规则】
 
-1. 只能选择 candidate_displays 中存在的 display_id，同一 display_id 最多选择一次。
-2. 先确定核心施工项，再检查相关前置、恢复/收尾和施工措施/现场条件项。
-3. 用户原文未逐项描述，不代表相关前置或恢复/收尾项一定不能选择；
-   但必须有候选内容和历史证据支持。
-4. 不要求覆盖所有 item_type；证据不足时宁可不选，
-   不得为了凑数量选择无关项。
-5. 同一 display 内部的不同 family 不属于不同工作项，
-   不得在本阶段拆成多个建议项。
-6. 可选/替代工艺必须与核心施工目标相同，
-   但应属于不同 display。
-7. 用户已明确材料、设备或工艺时，可选/替代工艺最多选择一个。
-8. 不输出价格、工程量或自行改写清单内容。
-9. 只能输出一个 JSON object，不得输出解释、Markdown 或思考过程。
+1. 只能选择 candidate_displays 中存在的 display_id。
+2. 同一 display_id 最多选择一次。
+3. 不设置固定选择数量。
+4. 不得为了凑数量选择无关工作项。
+5. 不得创造候选中不存在的工作项。
+6. 不得仅凭一般施工常识补充缺乏候选证据的工作项。
+7. 不得仅因为现场条件尚未明确，就自动排除一个与当前工程有较强关系的候选。
+8. 如果某个工作项是否实施依赖现场条件，可以选择，但 selection_reason 必须说明需要确认的条件。
+9. 对实质重复、相互包含或通常互为替代的 display，不要同时选择，除非它们确实代表可以独立计价且同时实施的不同工作内容。
+10. 用户已明确材料、设备或工艺时，不应选择与其明显冲突的替代工作项。
+11. 不输出价格、工程量，也不自行改写清单名称。
+
+【selection_reason】
+
+每个已选 display 的 selection_reason 必须说明：
+
+1. 它为什么与用户需求相关；
+2. 它与用户明确需求或其他拟选工作项之间有什么关系；
+3. 如果是否实施依赖现场条件，需要确认什么条件。
+
+不要只写“历史中常见”“与需求相关”等空泛理由。
 
 【输出 JSON】
 
@@ -1481,11 +1467,12 @@ def build_display_selection_prompt(
   "selected_displays": [
     {{
       "display_id": "D001",
-      "item_type": "核心施工项",
-      "selection_reason": "该 display 对应用户的主要维修需求"
+      "selection_reason": "该工作项直接对应用户提出的维修对象和施工目标"
     }}
   ]
 }}
+
+只能输出一个 JSON object，不得输出解释、Markdown 或思考过程。
 
 【输入数据】
 
@@ -1513,7 +1500,6 @@ def build_display_selection_trace_frame(displays_for_llm: pd.DataFrame) -> pd.Da
                 "cooccur_score最大值": row.get("cooccur_score最大值", ""),
                 "candidate_source": cell_text(row.get("candidate_source")),
                 "selected_by_llm": "否",
-                "item_type": "",
                 "selection_reason": "",
                 "selection_source": "not_selected",
             }
@@ -1536,7 +1522,6 @@ def apply_display_selection_trace_result(
         if selected_row is None:
             continue
         output.at[index, "selected_by_llm"] = "是" if selection_source == "llm" else "否"
-        output.at[index, "item_type"] = cell_text(selected_row.get("item_type"))
         output.at[index, "selection_reason"] = cell_text(selected_row.get("selection_reason"))
         output.at[index, "selection_source"] = selection_source
     return output
@@ -1563,12 +1548,11 @@ def parse_display_selection_result(
 
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
-    meta = {"invalid_display_ids": [], "duplicate_display_ids": [], "invalid_item_types": []}
+    meta = {"invalid_display_ids": [], "duplicate_display_ids": []}
     for item in raw_rows:
         if not isinstance(item, dict):
             continue
         display_id = cell_text(item.get("display_id"))
-        item_type = cell_text(item.get("item_type"))
         if display_id not in allowed_display_ids:
             if display_id:
                 meta["invalid_display_ids"].append(display_id)
@@ -1578,19 +1562,14 @@ def parse_display_selection_result(
             meta["duplicate_display_ids"].append(display_id)
             append_warning(warnings, "duplicate_display_ids")
             continue
-        if item_type not in ALLOWED_ITEM_TYPES:
-            meta["invalid_item_types"].append(item_type or display_id)
-            append_warning(warnings, "invalid_item_types")
-            continue
         seen.add(display_id)
         rows.append(
             {
                 "display_id": display_id,
-                "item_type": item_type,
                 "selection_reason": cell_text(item.get("selection_reason")),
             }
         )
-    return pd.DataFrame(rows, columns=["display_id", "item_type", "selection_reason"]), meta
+    return pd.DataFrame(rows, columns=["display_id", "selection_reason"]), meta
 
 
 def generate_display_selection(
@@ -1634,7 +1613,7 @@ def generate_display_selection(
         trace_frame = apply_display_selection_trace_result(trace_frame, selected, "llm")
         trace = trace_row(
             "display_selection",
-            "选择相关 display_group 并判断项目角色",
+            "选择进入建议清单的 display_group",
             True,
             prompt=prompt,
             max_tokens=max_tokens,
@@ -1658,7 +1637,6 @@ def generate_display_selection(
         meta = {
             "invalid_display_ids": [],
             "duplicate_display_ids": [],
-            "invalid_item_types": [],
             "candidate_ids": candidate_ids,
             "selected_ids": [],
             "selected_detail": [],
@@ -1667,7 +1645,7 @@ def generate_display_selection(
         }
         trace = trace_row(
             "display_selection",
-            "选择相关 display_group 并判断项目角色",
+            "选择进入建议清单的 display_group",
             False,
             error=str(exc),
             prompt=prompt,
@@ -1682,7 +1660,7 @@ def generate_display_selection(
                 }
             ),
         )
-        return pd.DataFrame(columns=["display_id", "item_type", "selection_reason"]), False, True, str(exc), prompt, trace, meta, trace_frame
+        return pd.DataFrame(columns=["display_id", "selection_reason"]), False, True, str(exc), prompt, trace, meta, trace_frame
 
 
 def select_families_for_llm(
@@ -1815,50 +1793,20 @@ def build_family_selection_prompt(
 
 【任务】
 
-根据用户需求，从 candidate_families 中选择一个有历史证据支持、
-不过度扩张且避免重复的最小完整施工链。
+根据用户需求，从 candidate_families 中选择应进入建议清单的历史施工做法。
 
-最小完整施工链不是只选择与用户原文最相似的核心项：
-在选定核心施工项后，还应检查候选中是否存在与其具有明确实施关系的
-常见前置项、恢复/收尾项或施工措施/现场条件项。
-
-不要求每种类型都必须出现；证据不足时可以不选。
-不得为了补全类型选择无关项，也不得创造候选中不存在的项目。
-
-【item_type】
-
-- 核心施工项：
-  直接解决用户主要维修需求的施工、维修、更换、更新或改造内容。
-
-- 常见前置项：
-  为实施核心施工通常需要先完成，且与核心施工存在明确实施顺序或必要准备关系的内容。
-
-- 恢复/收尾项：
-  核心施工完成后，为恢复原有功能、外观或环境，
-  或者完成调试、试运行、验收和清理的内容。
-
-- 施工措施/现场条件项：
-  是否实施取决于现场条件、施工组织、安全、运输、检测或临时保障要求，
-  且不直接构成最终维修成果的辅助内容。
-
-- 可选/替代工艺：
-  与核心施工目标相同，但采用不同材料、设备、规格、工艺或实施方案的替代内容。
+每个 family 代表一种历史做法。本阶段只判断哪些 family 与本次需求存在清楚、可解释的关系。
 
 【选择规则】
 
 1. 只能选择 candidate_families 中存在的 family_id，同一 family_id 最多选择一次。
-2. 先确定核心施工项，再检查相关前置、恢复/收尾和施工措施/现场条件项。
-3. 用户原文未逐项描述，不代表相关前置或恢复/收尾项一定不能选择；
-   但必须有候选内容和历史证据支持。
-4. 不要求覆盖所有 item_type；证据不足时宁可不选，
-   不得为了凑数量选择无关项。
-5. 可选/替代工艺必须与核心项目标相同，
-   仅材料、设备、规格、工艺或方案不同。
-6. 用户已明确材料、设备或工艺时，可选/替代工艺最多选择一个。
-7. 实质相同、仅措辞不同的 family 不要重复选择；
+2. 不设置固定选择数量，不得为了凑数量选择无关项。
+3. 不得创造候选中不存在的项目。
+4. 用户已明确材料、设备或工艺时，不应选择与其明显冲突的替代做法。
+5. 实质相同、仅措辞不同的 family 不要重复选择；
    存在明确施工边界差异的项目可以分别选择。
-8. 不输出价格、工程量或自行改写清单内容。
-9. 只能输出一个 JSON object，不得输出解释、Markdown 或思考过程。
+6. 不输出价格、工程量或自行改写清单内容。
+7. 只能输出一个 JSON object，不得输出解释、Markdown 或思考过程。
 
 【输出 JSON】
 
@@ -1866,8 +1814,7 @@ def build_family_selection_prompt(
   "selected_families": [
     {{
       "family_id": "F001",
-      "item_type": "核心施工项",
-      "selection_reason": "该施工做法直接对应用户要求的3mm SBS屋面防水"
+      "selection_reason": "该施工做法与用户提出的维修对象和施工目标直接相关"
     }}
   ]
 }}
@@ -1897,7 +1844,6 @@ def build_family_selection_trace_frame(families_for_llm: pd.DataFrame) -> pd.Dat
                 "cooccur_score": row.get("cooccur_score", ""),
                 "candidate_source": cell_text(row.get("candidate_source")),
                 "selected_by_llm": "否",
-                "item_type": "",
                 "selection_reason": "",
                 "selection_source": "not_selected",
             }
@@ -1920,7 +1866,6 @@ def apply_family_selection_trace_result(
         if selected_row is None:
             continue
         output.at[index, "selected_by_llm"] = "是" if selection_source == "llm" else "否"
-        output.at[index, "item_type"] = cell_text(selected_row.get("item_type"))
         output.at[index, "selection_reason"] = cell_text(selected_row.get("selection_reason"))
         output.at[index, "selection_source"] = selection_source
     return output
@@ -1970,12 +1915,11 @@ def parse_family_selection_result(
 
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
-    meta = {"invalid_family_ids": [], "duplicate_family_ids": [], "invalid_item_types": []}
+    meta = {"invalid_family_ids": [], "duplicate_family_ids": []}
     for item in raw_rows:
         if not isinstance(item, dict):
             continue
         family_id = cell_text(item.get("family_id"))
-        item_type = cell_text(item.get("item_type"))
         if family_id not in allowed_family_ids:
             if family_id:
                 meta["invalid_family_ids"].append(family_id)
@@ -1985,19 +1929,14 @@ def parse_family_selection_result(
             meta["duplicate_family_ids"].append(family_id)
             append_warning(warnings, "duplicate_family_ids")
             continue
-        if item_type not in ALLOWED_ITEM_TYPES:
-            meta["invalid_item_types"].append(item_type or family_id)
-            append_warning(warnings, "invalid_item_types")
-            continue
         seen.add(family_id)
         rows.append(
             {
                 "family_id": family_id,
-                "item_type": item_type,
                 "selection_reason": cell_text(item.get("selection_reason")),
             }
         )
-    return pd.DataFrame(rows, columns=["family_id", "item_type", "selection_reason"]), meta
+    return pd.DataFrame(rows, columns=["family_id", "selection_reason"]), meta
 
 
 def generate_family_selection(
@@ -2065,7 +2004,6 @@ def generate_family_selection(
         meta = {
             "invalid_family_ids": [],
             "duplicate_family_ids": [],
-            "invalid_item_types": [],
             "candidate_ids": candidate_ids,
             "selected_ids": [],
             "selected_detail": [],
@@ -2089,7 +2027,7 @@ def generate_family_selection(
                 }
             ),
         )
-        return pd.DataFrame(columns=["family_id", "item_type", "selection_reason"]), False, True, str(exc), prompt, trace, meta, trace_frame
+        return pd.DataFrame(columns=["family_id", "selection_reason"]), False, True, str(exc), prompt, trace, meta, trace_frame
 
 
 def family_selection_payload_for_display(
@@ -2141,7 +2079,6 @@ def build_display_family_selection_prompt(
             {
                 "display_id": display_id,
                 "display_name": truncate_text(display.get("display_name"), 40),
-                "item_type": cell_text(selected.get("item_type")),
                 "selection_reason": cell_text(selected.get("selection_reason")),
                 "candidate_families": family_selection_payload_for_display(display_id, display_group_families, candidate_families),
             }
@@ -2191,12 +2128,12 @@ def build_display_family_selection_prompt(
     {{
       "display_id": "D001",
       "selected_family_id": "F004",
-      "default_practice": "3mm屋面SBS卷材防水",
+      "default_practice": "与用户需求匹配的默认历史做法",
       "selection_reason": "与用户明确要求一致，描述清晰，历史样本可追溯",
       "other_practices": [
         {{
           "family_id": "F007",
-          "difference": "包含屋面基层清理"
+          "difference": "施工边界与默认做法不同"
         }}
       ]
     }}
@@ -2290,7 +2227,6 @@ def parse_display_family_selection_result(
             "display_name": cell_text(display_row.get("display_name")),
             "unit": cell_text(display_row.get("unit")),
             "family_count": display_row.get("family_count", ""),
-            "item_type": cell_text(selected_row.get("item_type")),
             "selection_reason": cell_text(selected_row.get("selection_reason")),
             "selected_family_id": selected_family_id,
             "default_practice": truncate_text(normalize_display_description(item.get("default_practice")), 120),
@@ -2330,7 +2266,6 @@ def fallback_display_family_selection(
                 "display_name": cell_text(display.get("display_name")),
                 "unit": cell_text(display.get("unit")),
                 "family_count": display.get("family_count", ""),
-                "item_type": cell_text(selected.get("item_type")),
                 "selection_reason": cell_text(selected.get("selection_reason")),
                 "selected_family_id": selected_family_id,
                 "default_practice": truncate_text(normalize_display_description(family.get("representative_project_description")), 120),
@@ -2369,7 +2304,6 @@ def build_display_family_selection_trace_frame(
             {
                 "display_id": display_id,
                 "display_name": cell_text(row.get("display_name")),
-                "item_type": cell_text(selected.get("item_type")),
                 "family_id": family_id,
                 "fine_signature": cell_text(row.get("fine_signature")),
                 "representative_cost_item_name": cell_text(row.get("representative_cost_item_name")),
@@ -2540,7 +2474,6 @@ def selected_display_payload(selected_displays: pd.DataFrame, display_ids: list[
         records.append(
             {
                 "id": display_id,
-                "type": cell_text(row.get("item_type")),
                 "display_name": truncate_text(row.get("display_name"), 80),
                 "selected_family_id": cell_text(row.get("selected_family_id")),
                 "default_practice": truncate_text(row.get("default_practice"), 140),
@@ -2579,12 +2512,9 @@ def build_display_dedup_selection_prompt(raw_query: str, selected_records: list[
 判断时同时比较 display 工作内容和默认参考做法。
 如果一个 display 的 selected family 已包含另一个 display 的全部施工内容，可以抑制被包含项。
 
-【不得机械保留】
-- item_type 不同并不自动代表不重复。
-
 【不得抑制】
 - 不同施工目标。
-- 拆除与新做防水。
+- 拆除与新做工作内容。
 - 拆除与垃圾运输在独立计价时。
 - 一个 display 额外包含会显著影响价格或施工边界的内容。
 
@@ -2792,7 +2722,6 @@ def deterministic_dedup_selection(
             normalize_dedup_text(family.get("representative_cost_item_name")),
             normalize_dedup_text(family.get("representative_project_description")),
             normalize_dedup_text(family.get("unit_normalized")) or normalize_dedup_text(family.get("unit")),
-            normalize_dedup_text(selected.get("item_type")),
         )
         if signature_key[1]:
             groups.setdefault(signature_key, []).append(family_id)
@@ -2813,7 +2742,6 @@ def deterministic_dedup_selection(
 
 def selected_family_payload(selected_families: pd.DataFrame, candidate_families: pd.DataFrame, family_ids: list[str]) -> list[dict[str, str]]:
     family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
-    type_map = {cell_text(row.get("family_id")): cell_text(row.get("item_type")) for _index, row in selected_families.iterrows()}
     records: list[dict[str, str]] = []
     for family_id in family_ids:
         family = family_map.get(family_id)
@@ -2822,7 +2750,6 @@ def selected_family_payload(selected_families: pd.DataFrame, candidate_families:
         records.append(
             {
                 "id": family_id,
-                "type": type_map.get(family_id, ""),
                 "name": truncate_text(family.get("representative_cost_item_name"), 80),
                 "spec": truncate_text(family.get("representative_project_description"), 140),
                 "unit": cell_text(family.get("unit_normalized")) or cell_text(family.get("unit")),
@@ -2854,14 +2781,12 @@ def suspicious_dedup_family_ids(selected_families: pd.DataFrame, candidate_famil
         if left_family is None:
             continue
         left_unit = normalize_dedup_text(left_family.get("unit_normalized")) or normalize_dedup_text(left_family.get("unit"))
-        left_type = normalize_dedup_text(left_selected.get("item_type"))
         for right_id, right_selected in selected_rows[index + 1 :]:
             right_family = family_map.get(right_id)
             if right_family is None:
                 continue
             right_unit = normalize_dedup_text(right_family.get("unit_normalized")) or normalize_dedup_text(right_family.get("unit"))
-            right_type = normalize_dedup_text(right_selected.get("item_type"))
-            if left_unit != right_unit or left_type != right_type:
+            if left_unit != right_unit:
                 continue
             name_overlap = dedup_text_overlap(left_family.get("representative_cost_item_name"), right_family.get("representative_cost_item_name"))
             spec_overlap = dedup_text_overlap(left_family.get("representative_project_description"), right_family.get("representative_project_description"))
@@ -2880,14 +2805,12 @@ def build_dedup_selection_prompt(raw_query: str, selected_records: list[dict[str
 
 【只抑制】
 - 施工目标相同。
-- 在本次方案中角色相同。
 - 材料、厚度、工艺、部位和主要施工边界基本相同。
 - 一个 family 的内容已基本覆盖另一个。
 
 【不得抑制】
 - 不同材料、厚度、工艺、层数、部位或单位。
-- 核心项与前置项、核心项与替代工艺。
-- 拆除与基层处理。
+- 拆除与后续处理。
 - 拆除与垃圾运输在独立计价时。
 - 同一系统中不同功能部件。
 - 一个 family 额外包含会显著影响价格的施工内容。
@@ -2907,7 +2830,7 @@ def build_dedup_selection_prompt(raw_query: str, selected_records: list[dict[str
   "keep_reasons": [
     {{
       "family_id": "F065",
-      "reason": "核心防水施工项，与前置或收尾项不是重复施工"
+      "reason": "主要施工项，与其他独立工作内容不是重复施工"
     }}
   ]
 }}
@@ -3120,12 +3043,11 @@ def build_historical_quantity_context(
         family_id: cell_text(row.get("fine_signature"))
         for family_id, row in family_map.items()
     }
-    item_type_by_family = {
-        cell_text(row.get("family_id")): cell_text(row.get("item_type"))
+    selected_ids = {
+        cell_text(row.get("family_id"))
         for _index, row in selected_families.iterrows()
+        if cell_text(row.get("family_id"))
     }
-    core_family_ids = [family_id for family_id, item_type in item_type_by_family.items() if item_type == "核心施工项"]
-    selected_ids = set(item_type_by_family)
 
     contexts: list[dict[str, Any]] = []
     for _index, selected in selected_families.iterrows():
@@ -3143,7 +3065,7 @@ def build_historical_quantity_context(
                 project_key = cell_text(target_row.get("project_key")) or cell_text(target_row.get("project_package_id"))
                 if not project_key:
                     continue
-                related_ids = core_family_ids or [item for item in selected_ids if item != family_id]
+                related_ids = [item for item in selected_ids if item != family_id]
                 for related_family_id in related_ids:
                     if related_family_id == family_id:
                         continue
@@ -3190,7 +3112,6 @@ def build_historical_quantity_context(
         contexts.append(
             {
                 "family_id": family_id,
-                "item_type": cell_text(selected.get("item_type")),
                 "cost_item_name": cell_text(family.get("representative_cost_item_name")),
                 "project_description": cell_text(family.get("representative_project_description")),
                 "unit": unit,
@@ -3226,8 +3147,8 @@ quantity_source 只能取：
 3. 不得机械复制单条历史数量；历史关系不稳定或现场条件影响较大时，使用“需现场确认”，数量填 null。
 4. suggested_quantity_low、suggested_quantity_mid、suggested_quantity_high 分别表示最低、最可能、最高估计；用户明确数量时三者相同。
 5. include_in_amount=true 仅当该项属于实际建议方案、数量有合理依据且不会与替代方案重复计算。
-6. 可选/替代工艺默认不计入；数量全部为 null 时必须不计入。
-7. 不得新增 family，不得修改 item_type、名称、特征和单位。
+6. 数量全部为 null 时必须不计入。
+7. 不得新增 family，不得修改名称、特征和单位。
 8. confirmation_note 只写该项仍需确认的关键因素，没有则填空字符串。
 9. 只输出 JSON。
 
@@ -3265,10 +3186,6 @@ def parse_quantity_decision_result(
     warnings: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     allowed_ids = [cell_text(value) for value in selected_families.get("family_id", pd.Series(dtype=object)).tolist()]
-    item_type_by_id = {
-        cell_text(row.get("family_id")): cell_text(row.get("item_type"))
-        for _index, row in selected_families.iterrows()
-    }
     raw_rows = result.get("family_quantities")
     if not isinstance(raw_rows, list):
         raise ValueError("LLM 输出缺少 family_quantities list")
@@ -3302,8 +3219,6 @@ def parse_quantity_decision_result(
             append_warning(warnings, "invalid_quantity_ranges")
         include = parse_bool(item.get("include_in_amount"))
         if low is None and mid is None and high is None:
-            include = False
-        if item_type_by_id.get(family_id) == "可选/替代工艺":
             include = False
         rows_by_id[family_id] = {
             "family_id": family_id,
@@ -3409,16 +3324,11 @@ def build_display_historical_quantity_context(
         return []
     family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
     signature_by_family = {family_id: cell_text(row.get("fine_signature")) for family_id, row in family_map.items()}
-    item_type_by_display = {
-        cell_text(row.get("display_id")): cell_text(row.get("item_type"))
-        for _index, row in selected_displays.iterrows()
-    }
     family_by_display = {
         cell_text(row.get("display_id")): cell_text(row.get("selected_family_id"))
         for _index, row in selected_displays.iterrows()
     }
-    core_display_ids = [display_id for display_id, item_type in item_type_by_display.items() if item_type == "核心施工项"]
-    selected_display_ids = set(item_type_by_display)
+    selected_display_ids = set(family_by_display)
 
     contexts: list[dict[str, Any]] = []
     for _index, selected in selected_displays.iterrows():
@@ -3437,7 +3347,7 @@ def build_display_historical_quantity_context(
                 project_key = cell_text(target_row.get("project_key")) or cell_text(target_row.get("project_package_id"))
                 if not project_key:
                     continue
-                related_display_ids = core_display_ids or [item for item in selected_display_ids if item != display_id]
+                related_display_ids = [item for item in selected_display_ids if item != display_id]
                 for related_display_id in related_display_ids:
                     if related_display_id == display_id:
                         continue
@@ -3486,7 +3396,6 @@ def build_display_historical_quantity_context(
             {
                 "display_id": display_id,
                 "display_name": cell_text(selected.get("display_name")),
-                "item_type": cell_text(selected.get("item_type")),
                 "selected_family_id": family_id,
                 "default_practice": cell_text(selected.get("default_practice")),
                 "unit": unit,
@@ -3523,8 +3432,8 @@ quantity_source 只能取：
 3. 不得机械复制单条历史数量；历史关系不稳定或现场条件影响较大时，使用“需现场确认”，数量填 null。
 4. suggested_quantity_low、suggested_quantity_mid、suggested_quantity_high 分别表示最低、最可能、最高估计；用户明确数量时三者相同。
 5. include_in_amount=true 仅当该项属于实际建议方案、数量有合理依据且不会与替代方案重复计算。
-6. 可选/替代工艺默认不计入；数量全部为 null 时必须不计入。
-7. 不得新增 display，不得修改 item_type、名称、默认做法和单位。
+6. 数量全部为 null 时必须不计入。
+7. 不得新增 display，不得修改名称、默认做法和单位。
 8. confirmation_note 只写该项仍需确认的关键因素，没有则填空字符串。
 9. 只输出 JSON。
 
@@ -3555,10 +3464,6 @@ def parse_display_quantity_decision_result(
     warnings: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     allowed_ids = [cell_text(value) for value in selected_displays.get("display_id", pd.Series(dtype=object)).tolist()]
-    item_type_by_id = {
-        cell_text(row.get("display_id")): cell_text(row.get("item_type"))
-        for _index, row in selected_displays.iterrows()
-    }
     raw_rows = result.get("display_quantities")
     if not isinstance(raw_rows, list):
         raise ValueError("LLM 输出缺少 display_quantities list")
@@ -3592,8 +3497,6 @@ def parse_display_quantity_decision_result(
             append_warning(warnings, "invalid_quantity_ranges")
         include = parse_bool(item.get("include_in_amount"))
         if low is None and mid is None and high is None:
-            include = False
-        if item_type_by_id.get(display_id) == "可选/替代工艺":
             include = False
         rows_by_id[display_id] = {
             "display_id": display_id,
@@ -3739,7 +3642,6 @@ def build_final_suggested_bill(
         row = {
             "序号": len(rows) + 1,
             "display_id": display_id,
-            "建议项类型": cell_text(selected.get("item_type")),
             "清单名称": cell_text(selected.get("display_name")),
             "单位": cell_text(family.get("unit_normalized")) or cell_text(family.get("unit")),
             "默认参考做法": cell_text(selected.get("default_practice")) or normalize_display_description(family.get("representative_project_description")),
@@ -3916,16 +3818,9 @@ def build_estimate_summary(
     ]
     catalog_summary = "；".join(catalog_parts) + "。"
 
-    overview_parts: list[str] = []
-    for item_type in ["核心施工项", "常见前置项", "恢复/收尾项", "施工措施/现场条件项", "可选/替代工艺"]:
-        if "建议项类型" not in suggested_bill.columns or ("清单名称" not in suggested_bill.columns and "清单项名称" not in suggested_bill.columns):
-            continue
-        rows = suggested_bill[suggested_bill["建议项类型"].map(cell_text).eq(item_type)]
-        text = join_non_empty([display_item_label(row) for _index, row in rows.iterrows()], limit=6)
-        if text:
-            overview_parts.append(f"{item_type}：{text}")
-    if overview_parts:
-        suggested_overview = "；".join(overview_parts) + "。"
+    if "清单名称" in suggested_bill.columns or "清单项名称" in suggested_bill.columns:
+        overview = join_non_empty([display_item_label(row) for _index, row in suggested_bill.iterrows()], limit=10)
+        suggested_overview = f"建议清单包括：{overview}。" if overview else "当前未形成可展示的建议方案概览。"
     else:
         suggested_overview = "当前未形成可展示的建议方案概览。"
 
@@ -4098,7 +3993,6 @@ def build_parse_info(
         ("invalid_display_ids", join_non_empty([*(display_selection_meta.get("invalid_display_ids") or []), *(display_family_selection_meta.get("invalid_display_ids") or []), *(quantity_decision_meta.get("invalid_display_ids") or [])])),
         ("duplicate_display_ids", join_non_empty([*(display_selection_meta.get("duplicate_display_ids") or []), *(quantity_decision_meta.get("duplicate_display_ids") or [])])),
         ("invalid_family_ids", join_non_empty(display_family_selection_meta.get("invalid_family_ids") or [])),
-        ("invalid_item_types", join_non_empty(display_selection_meta.get("invalid_item_types") or [])),
         ("invalid_quantity_sources", join_non_empty(quantity_decision_meta.get("invalid_quantity_sources") or [])),
         ("invalid_quantity_ranges", join_non_empty(quantity_decision_meta.get("invalid_quantity_ranges") or [])),
         ("dedup_auto_suppressed", join_non_empty(dedup_selection_meta.get("auto_suppressed") or [])),
@@ -4132,24 +4026,14 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         display_frame(result.estimate_summary, display).to_excel(writer, sheet_name="estimate_summary", index=False)
         display_frame(result.suggested_bill, display).to_excel(writer, sheet_name="suggested_bill", index=False)
-        display_frame(result.matched_project_packages, display).to_excel(
-            writer,
-            sheet_name="matched_project_packages",
-            index=False,
-        )
-        display_frame(result.candidate_families, display).to_excel(
-            writer,
-            sheet_name="candidate_families",
-            index=False,
-        )
         display_frame(result.candidate_display_groups, display).to_excel(
             writer,
             sheet_name="candidate_display_groups",
             index=False,
         )
-        display_frame(result.display_group_families, display).to_excel(
+        display_frame(result.candidate_families, display).to_excel(
             writer,
-            sheet_name="display_group_families",
+            sheet_name="candidate_families",
             index=False,
         )
         display_frame(result.display_selection_trace, display).to_excel(
@@ -4160,6 +4044,11 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
         display_frame(result.display_family_selection_trace, display).to_excel(
             writer,
             sheet_name="display_family_selection_trace",
+            index=False,
+        )
+        display_frame(result.matched_project_packages, display).to_excel(
+            writer,
+            sheet_name="matched_project_packages",
             index=False,
         )
         display_frame(result.evidence_items, display).to_excel(writer, sheet_name="evidence_items", index=False)
