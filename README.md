@@ -236,7 +236,7 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 
 如果输出文件已存在，需要显式传 `--overwrite`。
 
-family_selection 默认最多发送 50 个 family，其中主排序候选由 `final_score`、`item_score最大值`、`cooccur_score`、`来源工程包数` 四个完整排行榜交替补足，重复 family 不占配额；末尾最多保留 5 个确定性等距探索候选。可通过以下参数调整：
+display_selection 默认最多发送 50 个 display，其中主排序候选由 `final_score最大值`、`item_score最大值`、`cooccur_score最大值`、`来源工程包数去重` 四个完整排行榜交替补足，重复 display 不占配额；候选超过 50 时末尾保留 5 个确定性等距探索候选。当前 CLI 参数名沿用：
 
 ```text
 --family-selection-limit
@@ -251,10 +251,10 @@ family_selection 默认最多发送 50 个 family，其中主排序候选由 `fi
 → 工程包与清单行 embedding 召回
 → candidate pool
 → fine_signature family 聚合
-→ 多排行榜交替补足 family_selection 候选
-→ 剩余 family 等距探索
-→ LLM 选择最小完整施工链
-→ dedup_selection 抑制已选 family 中的重复展示项
+→ 按 cost_item_name + unit 形成 display groups
+→ LLM 选择最小完整施工链中的 display
+→ 对已选 display 选择默认 family 和其他历史做法
+→ display 级重复/包含关系处理
 → 工程量与金额处理
 → suggested_bill
 ```
@@ -262,13 +262,16 @@ family_selection 默认最多发送 50 个 family，其中主排序候选由 `fi
 输出 xlsx 固定包含：
 
 - `estimate_summary`：面向用户/领导的估价摘要，展示原始需求、ParsedQuery、核心分类、估算金额区间、核心项目、共现措施项、未计入或需现场确认项目、主要不确定因素和来源说明。
-- `suggested_bill`：估价主表，展示最终采用的推荐清单项、项目角色、工程量来源、建议工程量低/中/高、历史综合单价最低值/中位数/最高值、人工费和机械费单价区间、估算金额区间、金额计算说明、采用理由、不确定性说明和来源样本。历史价格由程序从同一 `fine_signature` 的 `candidate_families` 回填。
+- `suggested_bill`：估价主表，一行一个最终保留的 display。清单名称来自 display，默认参考做法和价格来源来自 `selected_family_id`；同组其他 family 只作为“其他历史做法”展示，不单独生成金额行。
 - `matched_project_packages`：相似历史工程包摘要，包括 `package_score`、`project_package_id`、工程名称、`project_name_text`、`cost_item_names_summary`、`consultation_time`、`location`、`cache_subject` 和 `item_count`。
 - `candidate_families`：按规范化 `fine_signature = cost_item_name + project_description + unit` 聚合的候选施工做法统计。当前没有新增第二套 family 规范化规则；每个 family 是唯一可报价边界，3mm/4mm、自粘/热熔、单层/双层等不同规格不会合并；表内保留 `package_path_score最大值`、`item_path_score最大值` 和 `final_score` 便于排查召回排序。
-- `family_selection_trace`：记录实际发送给 family_selection LLM 的 family、`selection_rank`、`candidate_source`、是否被选中、`item_type` 和选择原因，用于排查候选补足和最小完整施工链选择。
+- `candidate_display_groups`：按 normalized `cost_item_name + unit` 组织出来的客户展示候选。display 只用于减少同名清单项重复展示，不合并同组 family 的价格样本。
+- `display_group_families`：display 到内部 family 的映射表，用于从 display 回查 `fine_signature`、默认 family 和 evidence。
+- `display_selection_trace`：记录实际发送给 display_selection LLM 的 display、`selection_rank`、`candidate_source`、是否被选中、display 层 `item_type` 和选择原因。
+- `display_family_selection_trace`：记录每个已选 display 内部的 family、默认 family、其他历史做法及差异说明。
 - `evidence_items`：来源样本明细，保存本次查询进入候选池的历史清单行。`source_ref = project_key + "::" + item_row_id`，`family_id` 和 `fine_signature` 可用于从历史样本回查所属 family。
-- `parse_info`：本次查询解析结果和检索参数，包括原始需求、ParsedQuery、分类结果、候选池行数、family 数、LLM 输入/输出规模、token、fallback、错误、dedup 抑制摘要和 warnings。
-- `llm_trace`：记录 query rewrite、目录分类、family selection、dedup selection、quantity decision 是否成功、prompt 长度、真实 token（服务返回时）或估算 token、输入摘要和错误。
+- `parse_info`：本次查询解析结果和检索参数，包括原始需求、ParsedQuery、分类结果、候选池行数、family 数、display 数、LLM 输入/输出规模、token、fallback、错误、dedup 抑制摘要和 warnings。
+- `llm_trace`：记录 query rewrite、目录分类、display selection、display family selection、dedup selection、quantity decision 是否成功、prompt 长度、真实 token（服务返回时）或估算 token、输入摘要和错误。
 
 `fine_signature` 会对已确认的等价表达做受控归一化，例如：
 
@@ -281,10 +284,11 @@ family_selection 默认最多发送 50 个 family，其中主排序候选由 `fi
 
 LLM 职责边界：
 
-- 第一次 LLM：只从输入的 `candidate_families` 中选择真实存在的 `family_id`，并判断 `核心施工项`、`常见前置项`、`恢复/收尾项`、`施工措施/现场条件项`、`可选/替代工艺`。
-- dedup_selection：只对第一次已选 family 做重复展示抑制，不创建新 family，不合并价格样本、来源、工程量或单价区间。
-- quantity_decision：只为 dedup 后保留的 family 判断工程量低/中/高区间、工程量来源和是否计入参考金额。
-- LLM 不生成单价、来源、清单名称、项目特征、单位或金额。综合单价必须来自同一 `fine_signature` 下的历史样本统计。
+- display_selection：只从输入的 `candidate_displays` 中选择真实存在的 `display_id`，并在 display 层判断 `核心施工项`、`常见前置项`、`恢复/收尾项`、`施工措施/现场条件项`、`可选/替代工艺`。
+- display_family_selection：只在已选 display 内选择一个 `selected_family_id` 作为默认做法和价格来源，并选择 0～3 个同组其他历史做法。
+- dedup_selection：只对已选 display 做重复或包含关系抑制，不创建新 display，不合并价格样本、来源、工程量或单价区间。
+- quantity_decision：只为 dedup 后保留的 display 判断工程量低/中/高区间、工程量来源和是否计入参考金额。
+- LLM 不生成单价、来源、清单名称、单位或金额。综合单价必须来自 `selected_family_id` 对应的同一 `fine_signature` 历史样本统计。
 
 来源样本统一使用：
 
