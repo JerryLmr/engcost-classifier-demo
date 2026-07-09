@@ -114,6 +114,8 @@ SUGGESTED_BILL_COLUMNS = [
     "单位",
     "默认参考做法",
     "selected_family_id",
+    "价格证据family",
+    "价格证据说明",
     "其他历史做法",
     "历史family数量",
     "默认family历史样本数",
@@ -229,7 +231,47 @@ DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS = [
     "is_selected_family",
     "is_other_practice",
     "other_practice_difference",
+    "relation_to_selected",
+    "included_in_price_scope",
     "selection_reason",
+]
+
+ESTIMATE_SCENARIO_COLUMNS = [
+    "scenario_id",
+    "方案名称",
+    "包含清单",
+    "计价清单",
+    "方案说明",
+    "需确认事项",
+    "估算金额最低值",
+    "估算金额中位数",
+    "估算金额最高值",
+]
+
+SCENARIO_BILL_COLUMNS = [
+    "scenario_id",
+    "方案名称",
+    "序号",
+    "display_id",
+    "清单名称",
+    "单位",
+    "selected_family_id",
+    "价格证据family",
+    "默认参考做法",
+    "其他历史做法",
+    "是否计入本方案金额",
+    "建议工程量最低值",
+    "建议工程量中位数",
+    "建议工程量最高值",
+    "综合单价最低值",
+    "综合单价中位数",
+    "综合单价最高值",
+    "估算金额最低值",
+    "估算金额中位数",
+    "估算金额最高值",
+    "推荐依据",
+    "需确认事项",
+    "来源样本",
 ]
 
 ESTIMATE_SUMMARY_COLUMNS = [
@@ -255,6 +297,12 @@ ALLOWED_QUANTITY_SOURCES = {
     "用户明确给定",
     "历史样本估算",
     "需现场确认",
+}
+
+ALLOWED_FAMILY_RELATIONS = {
+    "same_scope_variant",
+    "different_method",
+    "exclude",
 }
 
 
@@ -285,11 +333,23 @@ class QueryCatalog:
 
 
 @dataclass(frozen=True)
+class EstimateScenario:
+    scenario_id: str
+    scenario_name: str
+    included_display_ids: list[str]
+    amount_included_display_ids: list[str]
+    reason: str
+    confirmation_items: list[str]
+
+
+@dataclass(frozen=True)
 class QueryResult:
     rewrite: QueryRewrite
     query_catalog: QueryCatalog
     estimate_summary: pd.DataFrame
     suggested_bill: pd.DataFrame
+    estimate_scenarios: pd.DataFrame
+    scenario_bill: pd.DataFrame
     matched_project_packages: pd.DataFrame
     candidate_families: pd.DataFrame
     candidate_display_groups: pd.DataFrame
@@ -2135,10 +2195,10 @@ def build_display_family_selection_prompt(
 
 对于每个 selected display，从其内部 candidate_families 中：
 
-1. 选择一个 selected_family_id，作为默认参考做法和价格来源；
-2. 选择 0～3 个 other_family_ids，作为其他历史做法；
+1. 选择一个 selected_family_id，作为默认参考做法；
+2. 对该 display 内其余每个 family 给出 relation；
 3. 概括默认做法；
-4. 说明其他历史做法与默认做法的主要差异。
+4. 说明其他 family 与默认做法的主要差异。
 
 【默认参考 family 选择原则】
 
@@ -2148,18 +2208,18 @@ def build_display_family_selection_prompt(
 4. 历史样本数和来源工程包数越充分越优先。
 5. 样本数最多是重要依据，但不能覆盖材料、规格或施工边界不匹配。
 
-【其他历史做法】
+【family relation】
 
-1. 每个 display 最多选择 3 个。
-2. 必须与默认 family 存在有意义的项目特征差异。
-3. 仅空格、标点、3mm/3.0mm、序号或措辞差异，不属于其他历史做法。
-4. 优先展示：
-   - 施工边界差异；
-   - 材料或工艺差异；
-   - 厚度或规格差异；
-   - 特殊性能差异。
-5. difference 只概括主要差异，不复制整段项目特征。
-6. 只能选择该 display 内存在的 family_id。
+relation 只能取：
+- same_scope_variant：主体工作、主要材料和主要施工方法基本相同，仅在是否包含基层清理、垃圾清运、现场保洁、运距、结算口径等方面有差异，可共同作为同一清单项的价格证据。
+- different_method：虽然清单名称相同，但材料种类、厚度、层数或主要施工工艺明显不同，应作为替代做法，不应混入默认价格范围。
+- exclude：描述与当前 display 明显不匹配，单位异常，数据字段异常，或不适合作为当前清单项证据。
+
+要求：
+1. 对 selected_family_id 之外的每个 candidate family 都输出一次 relation。
+2. difference 只概括主要差异，不复制整段项目特征。
+3. 只能引用该 display 内存在的 family_id，同一 family_id 只能出现一次。
+4. 不要因为来源工程主目录与查询目录不一致就直接 exclude，主要依据具体清单名称、项目特征和施工内容判断。
 
 【输出 JSON】
 
@@ -2170,10 +2230,11 @@ def build_display_family_selection_prompt(
       "selected_family_id": "F004",
       "default_practice": "与用户需求匹配的默认历史做法",
       "selection_reason": "与用户明确要求一致，描述清晰，历史样本可追溯",
-      "other_practices": [
+      "family_relations": [
         {{
           "family_id": "F007",
-          "difference": "施工边界与默认做法不同"
+          "relation": "same_scope_variant",
+          "difference": "仅施工边界与默认做法不同"
         }}
       ]
     }}
@@ -2207,11 +2268,19 @@ def parse_display_family_selection_result(
         raise ValueError("display_family_selection 输出缺少 display_results list")
 
     display_ids = [cell_text(value) for value in selected_displays.get("display_id", pd.Series(dtype=object)).tolist()]
-    allowed_by_display = {
-        display_id: set(
-            display_group_families[display_group_families["display_id"].map(cell_text).eq(display_id)]["family_id"].map(cell_text)
-        )
+    allowed_order_by_display = {
+        display_id: [
+            family_id
+            for family_id in display_group_families[
+                display_group_families["display_id"].map(cell_text).eq(display_id)
+            ]["family_id"].map(cell_text).tolist()
+            if family_id
+        ]
         for display_id in display_ids
+    }
+    allowed_by_display = {
+        display_id: set(family_ids)
+        for display_id, family_ids in allowed_order_by_display.items()
     }
     selected_by_display = {cell_text(row.get("display_id")): row for _index, row in selected_displays.iterrows()}
     display_map = {cell_text(row.get("display_id")): row for _index, row in candidate_display_groups.iterrows()}
@@ -2241,25 +2310,41 @@ def parse_display_family_selection_result(
         selected_family_id = cell_text(item.get("selected_family_id"))
         if selected_family_id not in allowed_family_ids:
             raise ValueError(f"selected_family_id 不属于 display: {display_id}/{selected_family_id}")
-        raw_other = item.get("other_practices", [])
-        if not isinstance(raw_other, list):
-            raise ValueError(f"other_practices 必须为 list: {display_id}")
-        other_practices: list[dict[str, str]] = []
-        seen_other: set[str] = set()
-        for other in raw_other:
-            if not isinstance(other, dict):
+        raw_relations = item.get("family_relations", [])
+        if not isinstance(raw_relations, list):
+            raise ValueError(f"family_relations 必须为 list: {display_id}")
+        relation_by_family: dict[str, dict[str, str]] = {}
+        for relation_item in raw_relations:
+            if not isinstance(relation_item, dict):
                 continue
-            family_id = cell_text(other.get("family_id"))
+            family_id = cell_text(relation_item.get("family_id"))
             if family_id not in allowed_family_ids:
-                raise ValueError(f"other_family_id 不属于 display: {display_id}/{family_id}")
-            if family_id == selected_family_id:
-                raise ValueError(f"selected_family_id 不能同时出现在 other_family_ids: {display_id}/{family_id}")
-            if family_id in seen_other:
+                meta["invalid_family_ids"].append(family_id)
+                append_warning(warnings, "invalid_display_family_relation_ids")
                 continue
-            seen_other.add(family_id)
-            other_practices.append({"family_id": family_id, "difference": cell_text(other.get("difference"))})
-        if len(other_practices) > 3:
-            raise ValueError(f"other_family_ids 最多 3 个: {display_id}")
+            if family_id == selected_family_id:
+                append_warning(warnings, "selected_family_in_family_relations")
+                continue
+            if family_id in relation_by_family:
+                append_warning(warnings, "duplicate_display_family_relation_ids")
+                continue
+            relation = cell_text(relation_item.get("relation"))
+            if relation not in ALLOWED_FAMILY_RELATIONS:
+                relation = "exclude"
+                append_warning(warnings, "unknown_family_relations")
+            relation_by_family[family_id] = {
+                "family_id": family_id,
+                "relation": relation,
+                "difference": cell_text(relation_item.get("difference")),
+            }
+        family_relations = [
+            relation_by_family.get(
+                family_id,
+                {"family_id": family_id, "relation": "exclude", "difference": ""},
+            )
+            for family_id in allowed_order_by_display[display_id]
+            if family_id != selected_family_id
+        ]
         selected_row = selected_by_display[display_id]
         display_row = display_map.get(display_id, pd.Series(dtype=object))
         result_by_display[display_id] = {
@@ -2271,10 +2356,14 @@ def parse_display_family_selection_result(
             "selected_family_id": selected_family_id,
             "default_practice": truncate_text(normalize_display_description(item.get("default_practice")), 120),
             "family_selection_reason": cell_text(item.get("selection_reason")),
-            "other_practices": other_practices,
+            "family_relations": family_relations,
         }
         meta["selected_family_ids"].append(selected_family_id)
-        meta["other_family_ids"].extend([other["family_id"] for other in other_practices])
+        meta["other_family_ids"].extend(
+            relation["family_id"]
+            for relation in family_relations
+            if relation["relation"] == "different_method"
+        )
 
     missing = [display_id for display_id in display_ids if display_id not in result_by_display]
     if missing:
@@ -2310,7 +2399,17 @@ def fallback_display_family_selection(
                 "selected_family_id": selected_family_id,
                 "default_practice": truncate_text(normalize_display_description(family.get("representative_project_description")), 120),
                 "family_selection_reason": "按组内 item_query_similarity、样本数和来源工程包数确定默认参考做法",
-                "other_practices": [],
+                "family_relations": [
+                    {
+                        "family_id": cell_text(candidate.get("family_id")),
+                        "relation": "exclude",
+                        "difference": "",
+                    }
+                    for _candidate_index, candidate in display_group_families[
+                        display_group_families["display_id"].map(cell_text).eq(display_id)
+                    ].iterrows()
+                    if cell_text(candidate.get("family_id")) != selected_family_id
+                ],
             }
         )
     meta = {
@@ -2338,8 +2437,23 @@ def build_display_family_selection_trace_frame(
         family_id = cell_text(row.get("family_id"))
         selected = selected_map.get(display_id, pd.Series(dtype=object))
         candidate = family_map.get(family_id, pd.Series(dtype=object))
-        other_practices = selected.get("other_practices") if isinstance(selected.get("other_practices"), list) else []
-        other_map = {cell_text(item.get("family_id")): cell_text(item.get("difference")) for item in other_practices if isinstance(item, dict)}
+        family_relations = selected.get("family_relations") if isinstance(selected.get("family_relations"), list) else []
+        relation_map = {
+            cell_text(item.get("family_id")): item
+            for item in family_relations
+            if isinstance(item, dict)
+        }
+        selected_family_id = cell_text(selected.get("selected_family_id"))
+        relation_item = relation_map.get(family_id, {})
+        relation = "selected" if family_id == selected_family_id else cell_text(relation_item.get("relation")) or "exclude"
+        selected_candidate = family_map.get(selected_family_id, pd.Series(dtype=object))
+        selected_unit = cell_text(selected_candidate.get("unit_normalized")) or normalized_unit(selected_candidate.get("unit"))
+        candidate_unit = cell_text(candidate.get("unit_normalized")) or normalized_unit(candidate.get("unit"))
+        included_in_price = relation == "selected" or (
+            relation == "same_scope_variant"
+            and bool(selected_unit)
+            and candidate_unit == selected_unit
+        )
         rows.append(
             {
                 "display_id": display_id,
@@ -2355,10 +2469,12 @@ def build_display_family_selection_trace_frame(
                 "unit_price_min": candidate.get("历史综合单价最低值", ""),
                 "unit_price_median": candidate.get("历史综合单价中位数", ""),
                 "unit_price_max": candidate.get("历史综合单价最高值", ""),
-                "is_selected_family": "是" if family_id == cell_text(selected.get("selected_family_id")) else "否",
-                "is_other_practice": "是" if family_id in other_map else "否",
-                "other_practice_difference": other_map.get(family_id, ""),
-                "selection_reason": cell_text(selected.get("family_selection_reason")) if family_id == cell_text(selected.get("selected_family_id")) else "",
+                "is_selected_family": "是" if family_id == selected_family_id else "否",
+                "is_other_practice": "是" if relation == "different_method" else "否",
+                "other_practice_difference": cell_text(relation_item.get("difference")),
+                "relation_to_selected": relation,
+                "included_in_price_scope": "是" if included_in_price else "否",
+                "selection_reason": cell_text(selected.get("family_selection_reason")) if family_id == selected_family_id else "",
             }
         )
     return pd.DataFrame(rows, columns=DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS)
@@ -3470,11 +3586,12 @@ quantity_source 只能取：
 2. 历史相似工程存在稳定、可解释的规模关系时，可使用“历史样本估算”。
 3. 不得机械复制单条历史数量；历史关系不稳定或现场条件影响较大时，使用“需现场确认”，数量填 null。
 4. suggested_quantity_low、suggested_quantity_mid、suggested_quantity_high 分别表示最低、最可能、最高估计；用户明确数量时三者相同。
-5. include_in_amount=true 仅当该项属于实际建议方案、数量有合理依据且不会与替代方案重复计算。
-6. 数量全部为 null 时必须不计入。
-7. 不得新增 display，不得修改名称、默认做法和单位。
-8. confirmation_note 只写该项仍需确认的关键因素，没有则填空字符串。
-9. 只输出 JSON。
+5. include_in_amount=true 仅要求该项数量有合理依据；互斥主体工艺会在后续拆成独立方案，不要因为存在替代工艺而设为 false。
+6. 用户给出的施工面积可分别用于涂膜、卷材等互斥方案的主体工艺估价，各方案会独立汇总。
+7. 数量全部为 null 时必须不计入。
+8. 不得新增 display，不得修改名称、默认做法和单位。
+9. confirmation_note 只写该项仍需确认的关键因素，没有则填空字符串。
+10. 只输出 JSON。
 
 输出：
 {{
@@ -3630,7 +3747,88 @@ def generate_display_quantity_decisions(
         return pd.DataFrame(fallback), False, True, str(exc), prompt, trace, meta, relation_count
 
 
-def amount_calc_note(row: pd.Series, family_id: str) -> str:
+def apply_explicit_quantity_to_mutually_exclusive_methods(
+    rewrite: QueryRewrite,
+    selected_displays: pd.DataFrame,
+    quantity_decisions: pd.DataFrame,
+    candidate_families: pd.DataFrame,
+) -> pd.DataFrame:
+    if selected_displays.empty or quantity_decisions.empty:
+        return quantity_decisions
+    method_kinds = {
+        display_method_kind(row)
+        for _index, row in selected_displays.iterrows()
+    }
+    if not {"coating", "membrane"}.issubset(method_kinds):
+        return quantity_decisions
+    family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
+    output = quantity_decisions.copy()
+    decision_index = {
+        cell_text(row.get("display_id")): index
+        for index, row in output.iterrows()
+    }
+    for _index, selected in selected_displays.iterrows():
+        if display_method_kind(selected) not in {"coating", "membrane"}:
+            continue
+        display_id = cell_text(selected.get("display_id"))
+        index = decision_index.get(display_id)
+        family = family_map.get(cell_text(selected.get("selected_family_id")))
+        if index is None or family is None:
+            continue
+        unit = cell_text(family.get("unit_normalized")) or cell_text(family.get("unit"))
+        quantity = matched_user_quantity(rewrite.parsed_quantities, unit)
+        if quantity is None:
+            continue
+        output.loc[index, "quantity_source"] = "用户明确给定"
+        output.loc[index, "suggested_quantity_low"] = quantity
+        output.loc[index, "suggested_quantity_mid"] = quantity
+        output.loc[index, "suggested_quantity_high"] = quantity
+        output.loc[index, "include_in_amount"] = True
+        output.loc[index, "quantity_reason"] = "用户明确面积用于互斥主体工艺的独立方案估价"
+        if "confirmation_note" not in output.columns or not cell_text(output.loc[index, "confirmation_note"]):
+            output.loc[index, "confirmation_note"] = "需确认实际施工边界"
+    return output
+
+
+def build_price_evidence_scope(
+    selected_family_id: str,
+    family_relations: list[dict[str, Any]],
+) -> list[str]:
+    family_ids = [selected_family_id] if selected_family_id else []
+    for item in family_relations:
+        if not isinstance(item, dict) or cell_text(item.get("relation")) != "same_scope_variant":
+            continue
+        family_id = cell_text(item.get("family_id"))
+        if family_id and family_id not in family_ids:
+            family_ids.append(family_id)
+    return family_ids
+
+
+def aggregate_price_from_evidence_items(
+    evidence_items: pd.DataFrame,
+    family_ids: list[str],
+) -> dict[str, Any]:
+    evidence_family_ids = evidence_items.get("family_id", pd.Series(dtype=object)).map(cell_text)
+    evidence = evidence_items[evidence_family_ids.isin(family_ids)].copy()
+    unit_price = min_median_max(evidence, "unit_price")
+    labor_price = min_median_max(evidence, "labor_unit_price")
+    machinery_price = min_median_max(evidence, "machinery_unit_price")
+    return {
+        "unit_price_min": unit_price[0],
+        "unit_price_median": unit_price[1],
+        "unit_price_max": unit_price[2],
+        "labor_unit_price_min": labor_price[0],
+        "labor_unit_price_median": labor_price[1],
+        "labor_unit_price_max": labor_price[2],
+        "machinery_unit_price_min": machinery_price[0],
+        "machinery_unit_price_median": machinery_price[1],
+        "machinery_unit_price_max": machinery_price[2],
+        "source_refs": ordered_refs(evidence.get("source_ref", pd.Series(dtype=object)), limit=50),
+        "evidence_count": int(len(evidence)),
+    }
+
+
+def amount_calc_note(row: pd.Series, price_family_ids: list[str]) -> str:
     quantities = [
         numeric_or_none(row.get("建议工程量最低值")),
         numeric_or_none(row.get("建议工程量中位数")),
@@ -3646,7 +3844,10 @@ def amount_calc_note(row: pd.Series, family_id: str) -> str:
     elif not any(value is not None for value in prices):
         note = "缺少历史单价，暂不计算金额"
     else:
-        note = f"按建议工程量低/中/高 × 历史综合单价低/中/高计算；单价来自 {family_id} 的 fine_signature 历史样本统计"
+        note = (
+            "按建议工程量低/中/高 × 历史综合单价低/中/高计算；"
+            f"单价来自 {','.join(price_family_ids)} 的原始历史样本统计"
+        )
     if cell_text(row.get("是否计入参考金额区间")) == "否":
         note = f"{note}；本行不参与参考金额区间汇总"
     return note
@@ -3656,6 +3857,7 @@ def build_final_suggested_bill(
     selected_displays: pd.DataFrame,
     quantity_decisions: pd.DataFrame,
     candidate_families: pd.DataFrame,
+    evidence_items: pd.DataFrame,
 ) -> pd.DataFrame:
     if selected_displays.empty:
         return pd.DataFrame(columns=SUGGESTED_BILL_COLUMNS)
@@ -3672,12 +3874,54 @@ def build_final_suggested_bill(
         low_quantity = numeric_or_none(decision.get("suggested_quantity_low"))
         mid_quantity = numeric_or_none(decision.get("suggested_quantity_mid"))
         high_quantity = numeric_or_none(decision.get("suggested_quantity_high"))
-        other_practices = selected.get("other_practices") if isinstance(selected.get("other_practices"), list) else []
+        family_relations = selected.get("family_relations") if isinstance(selected.get("family_relations"), list) else []
+        candidate_price_family_ids = build_price_evidence_scope(family_id, family_relations)
+        selected_unit = cell_text(family.get("unit_normalized")) or normalized_unit(family.get("unit"))
+        price_family_ids = []
+        for price_family_id in candidate_price_family_ids:
+            price_family = family_map.get(price_family_id)
+            if price_family is None:
+                continue
+            price_unit = cell_text(price_family.get("unit_normalized")) or normalized_unit(price_family.get("unit"))
+            if price_family_id == family_id or (selected_unit and price_unit == selected_unit):
+                price_family_ids.append(price_family_id)
+        price_stats = aggregate_price_from_evidence_items(evidence_items, price_family_ids)
+        if price_stats["unit_price_min"] is None:
+            price_stats.update(
+                {
+                    "unit_price_min": family.get("历史综合单价最低值"),
+                    "unit_price_median": family.get("历史综合单价中位数"),
+                    "unit_price_max": family.get("历史综合单价最高值"),
+                }
+            )
+        fallback_price_columns = {
+            "labor_unit_price_min": "历史人工单价最低值",
+            "labor_unit_price_median": "历史人工单价中位数",
+            "labor_unit_price_max": "历史人工单价最高值",
+            "machinery_unit_price_min": "历史机械单价最低值",
+            "machinery_unit_price_median": "历史机械单价中位数",
+            "machinery_unit_price_max": "历史机械单价最高值",
+        }
+        for stat_column, family_column in fallback_price_columns.items():
+            if price_stats[stat_column] is None:
+                price_stats[stat_column] = family.get(family_column)
+        different_methods = [
+            item
+            for item in family_relations
+            if isinstance(item, dict) and cell_text(item.get("relation")) == "different_method"
+        ]
         other_text = "\n".join(
             f"{cell_text(item.get('family_id'))}：{cell_text(item.get('difference'))}"
-            for item in other_practices
+            for item in different_methods
             if isinstance(item, dict) and cell_text(item.get("family_id"))
         )
+        variant_family_ids = [price_family_id for price_family_id in price_family_ids if price_family_id != family_id]
+        if variant_family_ids:
+            price_evidence_note = (
+                f"默认做法 {family_id}，并合并 {'、'.join(variant_family_ids)} 的同范围历史样本"
+            )
+        else:
+            price_evidence_note = f"默认做法 {family_id} 的历史样本"
         row = {
             "序号": len(rows) + 1,
             "display_id": display_id,
@@ -3685,6 +3929,8 @@ def build_final_suggested_bill(
             "单位": cell_text(family.get("unit_normalized")) or cell_text(family.get("unit")),
             "默认参考做法": cell_text(selected.get("default_practice")) or normalize_display_description(family.get("representative_project_description")),
             "selected_family_id": family_id,
+            "价格证据family": ",".join(price_family_ids),
+            "价格证据说明": price_evidence_note,
             "其他历史做法": other_text,
             "历史family数量": selected.get("family_count", ""),
             "默认family历史样本数": family.get("历史样本数"),
@@ -3695,18 +3941,18 @@ def build_final_suggested_bill(
             "建议工程量最高值": high_quantity,
             "工程量依据": cell_text(decision.get("quantity_reason")),
             "是否计入参考金额区间": "是" if bool(decision.get("include_in_amount")) else "否",
-            "综合单价最低值": family.get("历史综合单价最低值"),
-            "综合单价中位数": family.get("历史综合单价中位数"),
-            "综合单价最高值": family.get("历史综合单价最高值"),
-            "其中包含人工费单价最低值": family.get("历史人工单价最低值"),
-            "其中包含人工费单价中位数": family.get("历史人工单价中位数"),
-            "其中包含人工费单价最高值": family.get("历史人工单价最高值"),
-            "其中包含机械费单价最低值": family.get("历史机械单价最低值"),
-            "其中包含机械费单价中位数": family.get("历史机械单价中位数"),
-            "其中包含机械费单价最高值": family.get("历史机械单价最高值"),
+            "综合单价最低值": price_stats["unit_price_min"],
+            "综合单价中位数": price_stats["unit_price_median"],
+            "综合单价最高值": price_stats["unit_price_max"],
+            "其中包含人工费单价最低值": price_stats["labor_unit_price_min"],
+            "其中包含人工费单价中位数": price_stats["labor_unit_price_median"],
+            "其中包含人工费单价最高值": price_stats["labor_unit_price_max"],
+            "其中包含机械费单价最低值": price_stats["machinery_unit_price_min"],
+            "其中包含机械费单价中位数": price_stats["machinery_unit_price_median"],
+            "其中包含机械费单价最高值": price_stats["machinery_unit_price_max"],
             "推荐依据": join_non_empty([selected.get("selection_reason"), selected.get("family_selection_reason")]),
             "需确认事项": cell_text(decision.get("confirmation_note")),
-            "来源样本": ", ".join(split_refs(family.get("source_refs"), 10)),
+            "来源样本": price_stats["source_refs"] or ", ".join(split_refs(family.get("source_refs"), 10)),
         }
         amount_pairs = [
             ("估算金额最低值", low_quantity, row["综合单价最低值"]),
@@ -3721,7 +3967,7 @@ def build_final_suggested_bill(
         ]
         for column, quantity, price in amount_pairs:
             row[column] = calc_amount(quantity, price)
-        row["金额计算口径"] = amount_calc_note(pd.Series(row), family_id)
+        row["金额计算口径"] = amount_calc_note(pd.Series(row), price_family_ids)
         rows.append(row)
     output = pd.DataFrame(rows, columns=SUGGESTED_BILL_COLUMNS)
     return output.fillna("")
@@ -3745,6 +3991,337 @@ def calc_amount(quantity: Any, unit_price: Any) -> float | None:
     if quantity_number is None or price_number is None:
         return None
     return round(quantity_number * price_number, 2)
+
+
+def display_method_kind(row: pd.Series) -> str:
+    text = f"{cell_text(row.get('display_name') or row.get('清单名称'))} {cell_text(row.get('default_practice') or row.get('默认参考做法'))}"
+    if "涂膜防水" in text:
+        return "coating"
+    if "卷材防水" in text:
+        return "membrane"
+    if any(keyword in text for keyword in ["垂直运输", "脚手架", "措施项目"]):
+        return "measure"
+    if any(keyword in text for keyword in ["拆除", "铲除"]):
+        return "prerequisite"
+    return "neutral"
+
+
+def build_estimate_scenario_prompt(
+    raw_text: str,
+    selected_displays: pd.DataFrame,
+    suggested_bill: pd.DataFrame,
+) -> tuple[str, list[dict[str, Any]]]:
+    bill_map = {cell_text(row.get("display_id")): row for _index, row in suggested_bill.iterrows()}
+    records: list[dict[str, Any]] = []
+    for _index, selected in selected_displays.iterrows():
+        display_id = cell_text(selected.get("display_id"))
+        bill = bill_map.get(display_id, pd.Series(dtype=object))
+        records.append(
+            {
+                "display_id": display_id,
+                "display_name": cell_text(selected.get("display_name")),
+                "default_practice": cell_text(selected.get("default_practice")),
+                "unit": cell_text(selected.get("unit")),
+                "has_amount_basis": cell_text(bill.get("是否计入参考金额区间")) == "是",
+                "confirmation": cell_text(bill.get("需确认事项")),
+            }
+        )
+    prompt = f"""
+你是物业维修工程估价方案组织器。
+
+只使用输入中已经选中的 display_id，将清单组织为互斥估价方案，不得新增清单项。
+
+规则：
+1. 将互斥的主体工艺拆成不同方案。
+2. 共用前置工序可以出现在多个方案中。
+3. 同一方案中不能同时包含或计入互斥的主体工艺。
+4. 措施项目缺乏可靠计价依据时可保留在 included_display_ids，但不要放入 amount_included_display_ids。
+5. 最多输出 3 个方案。
+6. 不要把是否含垃圾清运、运距等小口径差异拆成独立方案。
+7. 如果当前只有一种主体工艺，则只生成一个方案。
+8. amount_included_display_ids 必须是 included_display_ids 的子集；优先只计入 has_amount_basis=true 的清单。
+9. 所有输入 display 至少出现在一个方案中。
+
+只输出一个 JSON object：
+{{
+  "scenarios": [
+    {{
+      "scenario_name": "涂膜防水方案",
+      "included_display_ids": ["D001", "D002", "D004"],
+      "amount_included_display_ids": ["D001", "D002"],
+      "reason": "采用涂膜防水主体工艺，共用拆除前置项",
+      "confirmation_items": ["确认实际施工面积"]
+    }}
+  ]
+}}
+
+输入：
+{json_text({"raw_query": raw_text, "selected_displays": records})}
+""".strip()
+    return prompt, records
+
+
+def parse_estimate_scenario_result(
+    result: dict[str, Any],
+    selected_displays: pd.DataFrame,
+    suggested_bill: pd.DataFrame,
+    warnings: list[str] | None = None,
+) -> list[EstimateScenario]:
+    raw_scenarios = result.get("scenarios")
+    if not isinstance(raw_scenarios, list) or not raw_scenarios:
+        raise ValueError("scenario_selection 输出缺少非空 scenarios list")
+    if len(raw_scenarios) > 3:
+        raise ValueError("scenario_selection 最多输出 3 个方案")
+    selected_ids = [
+        display_id
+        for display_id in selected_displays.get("display_id", pd.Series(dtype=object)).map(cell_text).tolist()
+        if display_id
+    ]
+    selected_id_set = set(selected_ids)
+    row_map = {cell_text(row.get("display_id")): row for _index, row in selected_displays.iterrows()}
+    bill_map = {cell_text(row.get("display_id")): row for _index, row in suggested_bill.iterrows()}
+    scenarios: list[EstimateScenario] = []
+    covered_ids: set[str] = set()
+    seen_compositions: set[tuple[str, ...]] = set()
+    for raw_scenario in raw_scenarios:
+        if not isinstance(raw_scenario, dict):
+            continue
+        raw_included = raw_scenario.get("included_display_ids")
+        raw_amount = raw_scenario.get("amount_included_display_ids")
+        if not isinstance(raw_included, list) or not isinstance(raw_amount, list):
+            raise ValueError("scenario display ids 必须为 list")
+        included_ids = list(dict.fromkeys(cell_text(value) for value in raw_included if cell_text(value)))
+        amount_ids = list(dict.fromkeys(cell_text(value) for value in raw_amount if cell_text(value)))
+        invalid_ids = (set(included_ids) | set(amount_ids)) - selected_id_set
+        if invalid_ids:
+            raise ValueError(f"scenario 引用了未选 display_id: {join_non_empty(sorted(invalid_ids))}")
+        if not included_ids:
+            raise ValueError("scenario included_display_ids 不能为空")
+        if not set(amount_ids).issubset(included_ids):
+            raise ValueError("amount_included_display_ids 必须是 included_display_ids 子集")
+        method_kinds = {display_method_kind(row_map[display_id]) for display_id in included_ids}
+        if {"coating", "membrane"}.issubset(method_kinds):
+            raise ValueError("同一方案不能同时包含涂膜防水和卷材防水")
+        amount_ids = [
+            display_id
+            for display_id in amount_ids
+            if cell_text(bill_map.get(display_id, pd.Series(dtype=object)).get("是否计入参考金额区间")) == "是"
+        ]
+        composition = tuple(included_ids)
+        if composition in seen_compositions:
+            append_warning(warnings, "duplicate_estimate_scenarios")
+            continue
+        seen_compositions.add(composition)
+        confirmations = raw_scenario.get("confirmation_items", [])
+        if not isinstance(confirmations, list):
+            confirmations = []
+        covered_ids.update(included_ids)
+        scenarios.append(
+            EstimateScenario(
+                scenario_id=f"S{len(scenarios) + 1:03d}",
+                scenario_name=cell_text(raw_scenario.get("scenario_name")) or f"估价方案{len(scenarios) + 1}",
+                included_display_ids=included_ids,
+                amount_included_display_ids=amount_ids,
+                reason=cell_text(raw_scenario.get("reason")),
+                confirmation_items=[cell_text(value) for value in confirmations if cell_text(value)],
+            )
+        )
+    if not scenarios:
+        raise ValueError("scenario_selection 未形成有效方案")
+    missing_ids = selected_id_set - covered_ids
+    if missing_ids:
+        raise ValueError(f"scenario_selection 未覆盖已选 display: {join_non_empty(sorted(missing_ids))}")
+    return scenarios
+
+
+def fallback_estimate_scenarios(
+    selected_displays: pd.DataFrame,
+    suggested_bill: pd.DataFrame,
+) -> list[EstimateScenario]:
+    selected_ids = [
+        display_id
+        for display_id in selected_displays.get("display_id", pd.Series(dtype=object)).map(cell_text).tolist()
+        if display_id
+    ]
+    row_map = {cell_text(row.get("display_id")): row for _index, row in selected_displays.iterrows()}
+    bill_map = {cell_text(row.get("display_id")): row for _index, row in suggested_bill.iterrows()}
+    kinds = {display_id: display_method_kind(row_map[display_id]) for display_id in selected_ids}
+    coating_ids = [display_id for display_id in selected_ids if kinds[display_id] == "coating"]
+    membrane_ids = [display_id for display_id in selected_ids if kinds[display_id] == "membrane"]
+    neutral_ids = [
+        display_id
+        for display_id in selected_ids
+        if kinds[display_id] not in {"coating", "membrane"}
+    ]
+
+    def amount_ids_for(included_ids: list[str]) -> list[str]:
+        return [
+            display_id
+            for display_id in included_ids
+            if kinds[display_id] != "measure"
+            and cell_text(bill_map.get(display_id, pd.Series(dtype=object)).get("是否计入参考金额区间")) == "是"
+        ]
+
+    def confirmations_for(included_ids: list[str]) -> list[str]:
+        return [
+            text
+            for text in (
+                cell_text(bill_map.get(display_id, pd.Series(dtype=object)).get("需确认事项"))
+                for display_id in included_ids
+            )
+            if text
+        ]
+
+    if coating_ids and membrane_ids:
+        compositions = [
+            ("涂膜防水方案", [*neutral_ids, *coating_ids], "采用涂膜防水主体工艺，共用前置及措施项目"),
+            ("卷材防水方案", [*neutral_ids, *membrane_ids], "采用卷材防水主体工艺，共用前置及措施项目"),
+        ]
+    else:
+        compositions = [("默认估价方案", selected_ids, "当前没有需要拆分的互斥主体工艺")]
+    return [
+        EstimateScenario(
+            scenario_id=f"S{index:03d}",
+            scenario_name=name,
+            included_display_ids=included_ids,
+            amount_included_display_ids=amount_ids_for(included_ids),
+            reason=reason,
+            confirmation_items=confirmations_for(included_ids),
+        )
+        for index, (name, included_ids, reason) in enumerate(compositions, start=1)
+    ]
+
+
+def select_estimate_scenarios(
+    raw_text: str,
+    selected_displays: pd.DataFrame,
+    suggested_bill: pd.DataFrame,
+    warnings: list[str] | None = None,
+) -> tuple[list[EstimateScenario], bool, bool, str, str, dict[str, Any]]:
+    prompt, records = build_estimate_scenario_prompt(raw_text, selected_displays, suggested_bill)
+    max_tokens = 2048
+    if selected_displays.empty:
+        trace = trace_row(
+            "scenario_selection",
+            "将已选清单组织为互斥估价方案",
+            True,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            input_summary=json_text({"selected_display_ids": [], "scenario_count": 0}),
+        )
+        return [], True, False, "", prompt, trace
+    try:
+        response = request_llm_json_with_usage(
+            prompt,
+            max_tokens=max_tokens,
+            system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
+        )
+        scenarios = parse_estimate_scenario_result(response.content, selected_displays, suggested_bill, warnings)
+        trace = trace_row(
+            "scenario_selection",
+            "将已选清单组织为互斥估价方案",
+            True,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            input_summary=json_text(
+                {
+                    "selected_display_ids": [record["display_id"] for record in records],
+                    "scenario_count": len(scenarios),
+                }
+            ),
+            usage=response.usage,
+        )
+        return scenarios, True, False, "", prompt, trace
+    except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+        append_warning(warnings, "scenario_selection_failed")
+        append_warning(warnings, "scenario_selection_fallback")
+        scenarios = fallback_estimate_scenarios(selected_displays, suggested_bill)
+        trace = trace_row(
+            "scenario_selection",
+            "将已选清单组织为互斥估价方案",
+            False,
+            error=str(exc),
+            prompt=prompt,
+            max_tokens=max_tokens,
+            input_summary=json_text(
+                {
+                    "selected_display_ids": [record["display_id"] for record in records],
+                    "scenario_count": len(scenarios),
+                    "fallback": True,
+                }
+            ),
+        )
+        return scenarios, False, True, str(exc), prompt, trace
+
+
+def build_scenario_outputs(
+    scenarios: list[EstimateScenario],
+    suggested_bill: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    bill_map = {cell_text(row.get("display_id")): row for _index, row in suggested_bill.iterrows()}
+    scenario_rows: list[dict[str, Any]] = []
+    bill_rows: list[dict[str, Any]] = []
+    for scenario in scenarios:
+        scenario_bill_rows: list[dict[str, Any]] = []
+        amount_id_set = set(scenario.amount_included_display_ids)
+        included_names: list[str] = []
+        amount_names: list[str] = []
+        for display_id in scenario.included_display_ids:
+            source = bill_map.get(display_id)
+            if source is None:
+                continue
+            included_names.append(cell_text(source.get("清单名称")) or display_id)
+            include_amount = (
+                display_id in amount_id_set
+                and cell_text(source.get("是否计入参考金额区间")) == "是"
+            )
+            if include_amount:
+                amount_names.append(cell_text(source.get("清单名称")) or display_id)
+            row = {
+                "scenario_id": scenario.scenario_id,
+                "方案名称": scenario.scenario_name,
+                "序号": len(scenario_bill_rows) + 1,
+                "display_id": display_id,
+                "清单名称": source.get("清单名称", ""),
+                "单位": source.get("单位", ""),
+                "selected_family_id": source.get("selected_family_id", ""),
+                "价格证据family": source.get("价格证据family", ""),
+                "默认参考做法": source.get("默认参考做法", ""),
+                "其他历史做法": source.get("其他历史做法", ""),
+                "是否计入本方案金额": "是" if include_amount else "否",
+                "建议工程量最低值": source.get("建议工程量最低值", ""),
+                "建议工程量中位数": source.get("建议工程量中位数", ""),
+                "建议工程量最高值": source.get("建议工程量最高值", ""),
+                "综合单价最低值": source.get("综合单价最低值", ""),
+                "综合单价中位数": source.get("综合单价中位数", ""),
+                "综合单价最高值": source.get("综合单价最高值", ""),
+                "估算金额最低值": source.get("估算金额最低值", "") if include_amount else "",
+                "估算金额中位数": source.get("估算金额中位数", "") if include_amount else "",
+                "估算金额最高值": source.get("估算金额最高值", "") if include_amount else "",
+                "推荐依据": source.get("推荐依据", ""),
+                "需确认事项": source.get("需确认事项", ""),
+                "来源样本": source.get("来源样本", ""),
+            }
+            scenario_bill_rows.append(row)
+            bill_rows.append(row)
+        scenario_frame = pd.DataFrame(scenario_bill_rows, columns=SCENARIO_BILL_COLUMNS)
+        scenario_rows.append(
+            {
+                "scenario_id": scenario.scenario_id,
+                "方案名称": scenario.scenario_name,
+                "包含清单": "；".join(included_names),
+                "计价清单": "；".join(amount_names),
+                "方案说明": scenario.reason,
+                "需确认事项": join_non_empty(scenario.confirmation_items),
+                "估算金额最低值": amount_sum(scenario_frame, "估算金额最低值"),
+                "估算金额中位数": amount_sum(scenario_frame, "估算金额中位数"),
+                "估算金额最高值": amount_sum(scenario_frame, "估算金额最高值"),
+            }
+        )
+    return (
+        pd.DataFrame(scenario_rows, columns=ESTIMATE_SCENARIO_COLUMNS).fillna(""),
+        pd.DataFrame(bill_rows, columns=SCENARIO_BILL_COLUMNS).fillna(""),
+    )
 
 
 def display_frame(frame: pd.DataFrame, display: bool) -> pd.DataFrame:
@@ -3819,6 +4396,7 @@ def build_estimate_summary(
     rewrite: QueryRewrite,
     query_catalog: QueryCatalog,
     suggested_bill: pd.DataFrame,
+    estimate_scenarios: pd.DataFrame,
 ) -> pd.DataFrame:
     quantity_texts: list[str] = []
     for item in rewrite.parsed_quantities:
@@ -3877,7 +4455,25 @@ def build_estimate_summary(
     low_amount = amount_sum(amount_bill, "估算金额最低值")
     mid_amount = amount_sum(amount_bill, "估算金额中位数")
     high_amount = amount_sum(amount_bill, "估算金额最高值")
-    if low_amount is not None and mid_amount is not None and high_amount is not None:
+    scenario_count = len(estimate_scenarios)
+    scenario_overviews: list[str] = []
+    for _index, scenario in estimate_scenarios.iterrows():
+        name = cell_text(scenario.get("方案名称"))
+        scenario_low = numeric_or_none(scenario.get("估算金额最低值"))
+        scenario_mid = numeric_or_none(scenario.get("估算金额中位数"))
+        scenario_high = numeric_or_none(scenario.get("估算金额最高值"))
+        if scenario_low is not None and scenario_high is not None:
+            text = f"{name}：{scenario_low:,.2f}～{scenario_high:,.2f}元"
+            if scenario_mid is not None:
+                text += f"（中位 {scenario_mid:,.2f}元）"
+        else:
+            text = f"{name}：暂缺可汇总金额"
+        scenario_overviews.append(text)
+    scenario_overview = "；".join(scenario_overviews) if scenario_overviews else "当前未形成估价方案。"
+
+    if scenario_count > 1:
+        amount_range = "存在多个互斥估价方案，统一参考金额不适用；详见 estimate_scenarios。"
+    elif low_amount is not None and mid_amount is not None and high_amount is not None:
         amount_range = (
             f"当前计入参考金额区间项目的参考金额约为 {low_amount:,.2f} - {high_amount:,.2f} 元，"
             f"中位参考值约 {mid_amount:,.2f} 元。"
@@ -3924,6 +4520,8 @@ def build_estimate_summary(
         ("需求理解", demand_understanding),
         ("匹配分类", catalog_summary),
         ("建议方案概览", suggested_overview),
+        ("方案数量", scenario_count),
+        ("推荐方案概览", scenario_overview),
         ("计入金额项目", included_items_text),
         ("参考金额区间", amount_range),
         ("需现场确认", site_confirmation),
@@ -3971,6 +4569,10 @@ def build_parse_info(
     quantity_decision_fallback: bool,
     quantity_decision_error: str,
     quantity_decision_meta: dict[str, Any],
+    scenario_count: int,
+    scenario_selection_trace: dict[str, Any],
+    scenario_selection_fallback: bool,
+    scenario_selection_error: str,
     output_path: Path | None,
     started_at: datetime,
     index_dir: Path,
@@ -3979,6 +4581,7 @@ def build_parse_info(
     display_family_selection_prompt: str,
     dedup_selection_prompt: str,
     quantity_decision_prompt: str,
+    scenario_selection_prompt: str,
     warnings: list[str] | None = None,
 ) -> pd.DataFrame:
     rows = [
@@ -4037,6 +4640,10 @@ def build_parse_info(
         ("quantity_decision_prompt_chars", quantity_decision_trace.get("prompt_chars", "")),
         ("quantity_decision_prompt_tokens", quantity_decision_trace.get("prompt_tokens") or quantity_decision_trace.get("estimated_tokens", "")),
         ("quantity_decision_completion_tokens", quantity_decision_trace.get("completion_tokens", "")),
+        ("scenario_count", scenario_count),
+        ("scenario_selection_prompt_chars", scenario_selection_trace.get("prompt_chars", "")),
+        ("scenario_selection_prompt_tokens", scenario_selection_trace.get("prompt_tokens") or scenario_selection_trace.get("estimated_tokens", "")),
+        ("scenario_selection_completion_tokens", scenario_selection_trace.get("completion_tokens", "")),
         ("invalid_display_ids", join_non_empty([*(display_selection_meta.get("invalid_display_ids") or []), *(display_family_selection_meta.get("invalid_display_ids") or []), *(quantity_decision_meta.get("invalid_display_ids") or [])])),
         ("duplicate_display_ids", join_non_empty([*(display_selection_meta.get("duplicate_display_ids") or []), *(quantity_decision_meta.get("duplicate_display_ids") or [])])),
         ("invalid_family_ids", join_non_empty(display_family_selection_meta.get("invalid_family_ids") or [])),
@@ -4048,10 +4655,12 @@ def build_parse_info(
         ("是否 display_family_selection fallback", "是" if display_family_selection_fallback else "否"),
         ("是否 dedup_selection fallback", "是" if dedup_selection_fallback else "否"),
         ("是否 quantity_decision fallback", "是" if quantity_decision_fallback else "否"),
+        ("是否 scenario_selection fallback", "是" if scenario_selection_fallback else "否"),
         ("display_selection LLM error", display_selection_error),
         ("display_family_selection LLM error", display_family_selection_error),
         ("dedup_selection LLM error", dedup_selection_error),
         ("quantity_decision LLM error", quantity_decision_error),
+        ("scenario_selection LLM error", scenario_selection_error),
         ("output_path", str(output_path or "")),
         ("运行时间", f"{(datetime.now() - started_at).total_seconds():.2f}s"),
         ("index_dir", str(index_dir)),
@@ -4065,6 +4674,7 @@ def build_parse_info(
         rows.append(("display_family_selection_prompt_preview", display_family_selection_prompt[:3000]))
         rows.append(("dedup_selection_prompt_preview", dedup_selection_prompt[:3000]))
         rows.append(("quantity_decision_prompt_preview", quantity_decision_prompt[:3000]))
+        rows.append(("scenario_selection_prompt_preview", scenario_selection_prompt[:3000]))
     return pd.DataFrame(rows, columns=["字段", "值"])
 
 
@@ -4073,6 +4683,8 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         display_frame(result.estimate_summary, display).to_excel(writer, sheet_name="estimate_summary", index=False)
         display_frame(result.suggested_bill, display).to_excel(writer, sheet_name="suggested_bill", index=False)
+        display_frame(result.estimate_scenarios, display).to_excel(writer, sheet_name="estimate_scenarios", index=False)
+        display_frame(result.scenario_bill, display).to_excel(writer, sheet_name="scenario_bill", index=False)
         display_frame(result.candidate_display_groups, display).to_excel(
             writer,
             sheet_name="candidate_display_groups",
@@ -4267,13 +4879,39 @@ def run_query(
         candidates,
         warnings=warnings,
     )
-    suggested_bill = build_final_suggested_bill(deduped_displays, quantity_decisions, candidate_families)
-    estimate_summary = build_estimate_summary(rewrite, query_catalog, suggested_bill)
+    quantity_decisions = apply_explicit_quantity_to_mutually_exclusive_methods(
+        rewrite,
+        deduped_displays,
+        quantity_decisions,
+        candidate_families,
+    )
+    suggested_bill = build_final_suggested_bill(
+        deduped_displays,
+        quantity_decisions,
+        candidate_families,
+        evidence_items,
+    )
+    (
+        scenarios,
+        scenario_selection_success,
+        scenario_selection_fallback,
+        scenario_selection_error,
+        scenario_selection_prompt,
+        scenario_selection_trace,
+    ) = select_estimate_scenarios(
+        raw_text,
+        deduped_displays,
+        suggested_bill,
+        warnings=warnings,
+    )
+    estimate_scenarios, scenario_bill = build_scenario_outputs(scenarios, suggested_bill)
+    estimate_summary = build_estimate_summary(rewrite, query_catalog, suggested_bill, estimate_scenarios)
     if warnings:
         append_trace_warnings(display_selection_trace, warnings)
         append_trace_warnings(display_family_selection_trace, warnings)
         append_trace_warnings(dedup_selection_trace, warnings)
         append_trace_warnings(quantity_decision_trace, warnings)
+        append_trace_warnings(scenario_selection_trace, warnings)
     displays_for_llm_count = len(display_selection_meta.get("candidate_ids") or [])
     parse_info = build_parse_info(
         rewrite=rewrite,
@@ -4315,6 +4953,10 @@ def run_query(
         quantity_decision_fallback=quantity_decision_fallback,
         quantity_decision_error=quantity_decision_error,
         quantity_decision_meta=quantity_decision_meta,
+        scenario_count=len(scenarios),
+        scenario_selection_trace=scenario_selection_trace,
+        scenario_selection_fallback=scenario_selection_fallback,
+        scenario_selection_error=scenario_selection_error,
         output_path=output,
         started_at=started_at,
         index_dir=index_dir,
@@ -4323,10 +4965,19 @@ def run_query(
         display_family_selection_prompt=display_family_selection_prompt,
         dedup_selection_prompt=dedup_selection_prompt,
         quantity_decision_prompt=quantity_decision_prompt,
+        scenario_selection_prompt=scenario_selection_prompt,
         warnings=warnings,
     )
     llm_trace = pd.DataFrame(
-        [rewrite_trace, catalog_trace, display_selection_trace, display_family_selection_trace, dedup_selection_trace, quantity_decision_trace],
+        [
+            rewrite_trace,
+            catalog_trace,
+            display_selection_trace,
+            display_family_selection_trace,
+            dedup_selection_trace,
+            quantity_decision_trace,
+            scenario_selection_trace,
+        ],
         columns=LLM_TRACE_COLUMNS,
     )
 
@@ -4335,6 +4986,8 @@ def run_query(
         query_catalog=query_catalog,
         estimate_summary=estimate_summary,
         suggested_bill=suggested_bill,
+        estimate_scenarios=estimate_scenarios,
+        scenario_bill=scenario_bill,
         matched_project_packages=matched_project_packages,
         candidate_families=candidate_families,
         candidate_display_groups=candidate_display_groups,
@@ -4367,6 +5020,7 @@ def print_terminal_summary(result: QueryResult, output_path: Path | None) -> Non
     print(f"[DONE] candidate display groups: {len(result.candidate_display_groups)}")
     print(f"[DONE] evidence items: {len(result.evidence_items)}")
     print(f"[DONE] suggested bill rows: {len(result.suggested_bill)}")
+    print(f"[DONE] estimate scenarios: {len(result.estimate_scenarios)}")
     if result.rewrite.notes:
         print(f"rewrite notes: {'；'.join(result.rewrite.notes)}")
     if result.query_catalog.notes:
