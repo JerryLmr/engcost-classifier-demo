@@ -115,6 +115,7 @@ SUGGESTED_BILL_COLUMNS = [
     "默认参考做法",
     "selected_family_id",
     "价格证据family",
+    "价格证据样本数",
     "价格证据说明",
     "其他历史做法",
     "历史family数量",
@@ -146,7 +147,6 @@ SUGGESTED_BILL_COLUMNS = [
     "估算金额中包含机械费最高值",
     "金额计算口径",
     "推荐依据",
-    "需确认事项",
     "来源样本",
 ]
 
@@ -245,6 +245,7 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "单位",
     "selected_family_id",
     "价格证据family",
+    "价格证据样本数",
     "价格证据说明",
     "默认参考做法",
     "其他历史做法",
@@ -274,10 +275,8 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "估算金额中包含机械费最高值",
     "金额计算口径",
     "推荐依据",
-    "清单需确认事项",
     "来源样本",
     "方案说明",
-    "方案需确认事项",
     "方案总金额最低值",
     "方案总金额中位数",
     "方案总金额最高值",
@@ -348,7 +347,6 @@ class EstimateScenario:
     included_display_ids: list[str]
     amount_included_display_ids: list[str]
     reason: str
-    confirmation_items: list[str]
 
 
 @dataclass(frozen=True)
@@ -3338,8 +3336,7 @@ quantity_source 只能取：
 5. include_in_amount=true 仅当该项属于实际建议方案、数量有合理依据且不会与替代方案重复计算。
 6. 数量全部为 null 时必须不计入。
 7. 不得新增 family，不得修改名称、特征和单位。
-8. confirmation_note 只写该项仍需确认的关键因素，没有则填空字符串。
-9. 只输出 JSON。
+8. 只输出 JSON。
 
 输出：
 {{
@@ -3351,8 +3348,7 @@ quantity_source 只能取：
       "suggested_quantity_mid": 500,
       "suggested_quantity_high": 500,
       "include_in_amount": true,
-      "quantity_reason": "用户明确给出约500m²",
-      "confirmation_note": "需确认实际施工边界"
+      "quantity_reason": "用户明确给出约500m²"
     }}
   ]
 }}
@@ -3417,7 +3413,6 @@ def parse_quantity_decision_result(
             "suggested_quantity_high": high,
             "include_in_amount": include,
             "quantity_reason": cell_text(item.get("quantity_reason")),
-            "confirmation_note": cell_text(item.get("confirmation_note")),
         }
     for family_id in allowed_ids:
         if family_id not in rows_by_id:
@@ -3429,7 +3424,6 @@ def parse_quantity_decision_result(
                 "suggested_quantity_high": None,
                 "include_in_amount": False,
                 "quantity_reason": "",
-                "confirmation_note": "工程量及计价范围需确认",
             }
     rows = [rows_by_id[family_id] for family_id in allowed_ids]
     return pd.DataFrame(rows), meta
@@ -3486,7 +3480,6 @@ def generate_quantity_decisions(
                     "suggested_quantity_high": None,
                     "include_in_amount": False,
                     "quantity_reason": "",
-                    "confirmation_note": "工程量及计价范围需确认",
                 }
             )
         trace = trace_row(
@@ -3624,8 +3617,7 @@ quantity_source 只能取：
 6. 用户给出的施工面积可分别用于涂膜、卷材等互斥方案的主体工艺估价，各方案会独立汇总。
 7. 数量全部为 null 时必须不计入。
 8. 不得新增 display，不得修改名称、默认做法和单位。
-9. confirmation_note 只写该项仍需确认的关键因素，没有则填空字符串。
-10. 只输出 JSON。
+9. 只输出 JSON。
 
 输出：
 {{
@@ -3637,8 +3629,7 @@ quantity_source 只能取：
       "suggested_quantity_mid": 500,
       "suggested_quantity_high": 500,
       "include_in_amount": true,
-      "quantity_reason": "用户明确给出约500m²",
-      "confirmation_note": "需确认实际施工边界"
+      "quantity_reason": "用户明确给出约500m²"
     }}
   ]
 }}
@@ -3696,7 +3687,6 @@ def parse_display_quantity_decision_result(
             "suggested_quantity_high": high,
             "include_in_amount": include,
             "quantity_reason": cell_text(item.get("quantity_reason")),
-            "confirmation_note": cell_text(item.get("confirmation_note")),
         }
     for display_id in allowed_ids:
         if display_id not in rows_by_id:
@@ -3708,7 +3698,6 @@ def parse_display_quantity_decision_result(
                 "suggested_quantity_high": None,
                 "include_in_amount": False,
                 "quantity_reason": "",
-                "confirmation_note": "工程量及计价范围需确认",
             }
     rows = [rows_by_id[display_id] for display_id in allowed_ids]
     return pd.DataFrame(rows), meta
@@ -3765,7 +3754,6 @@ def generate_display_quantity_decisions(
                     "suggested_quantity_high": None,
                     "include_in_amount": False,
                     "quantity_reason": "",
-                    "confirmation_note": "工程量及计价范围需确认",
                 }
             )
         trace = trace_row(
@@ -3921,6 +3909,7 @@ def build_final_suggested_bill(
             "默认参考做法": cell_text(selected.get("default_practice")) or normalize_display_description(family.get("representative_project_description")),
             "selected_family_id": family_id,
             "价格证据family": ",".join(price_family_ids),
+            "价格证据样本数": price_stats["evidence_count"],
             "价格证据说明": price_evidence_note,
             "其他历史做法": other_text,
             "历史family数量": selected.get("family_count", ""),
@@ -3942,7 +3931,6 @@ def build_final_suggested_bill(
             "其中包含机械费单价中位数": price_stats["machinery_unit_price_median"],
             "其中包含机械费单价最高值": price_stats["machinery_unit_price_max"],
             "推荐依据": join_non_empty([selected.get("selection_reason"), selected.get("family_selection_reason")]),
-            "需确认事项": cell_text(decision.get("confirmation_note")),
             "来源样本": price_stats["source_refs"] or ", ".join(split_refs(family.get("source_refs"), 10)),
         }
         amount_pairs = [
@@ -4001,7 +3989,6 @@ def build_estimate_scenario_prompt(
                 "default_practice": cell_text(selected.get("default_practice")),
                 "unit": cell_text(selected.get("unit")),
                 "has_amount_basis": cell_text(bill.get("是否计入参考金额区间")) == "是",
-                "confirmation": cell_text(bill.get("需确认事项")),
             }
         )
     prompt = f"""
@@ -4031,8 +4018,7 @@ def build_estimate_scenario_prompt(
       "scenario_name": "方案A",
       "included_display_ids": ["D001", "D002", "D004"],
       "amount_included_display_ids": ["D001", "D002"],
-      "reason": "采用一种主体工艺并保留必要前置项，重叠范围不重复计价",
-      "confirmation_items": ["确认实际施工面积"]
+      "reason": "采用一种主体工艺并保留必要前置项，重叠范围不重复计价"
     }}
   ]
 }}
@@ -4090,9 +4076,6 @@ def parse_estimate_scenario_result(
             append_warning(warnings, "duplicate_estimate_scenarios")
             continue
         seen_compositions.add(composition)
-        confirmations = raw_scenario.get("confirmation_items", [])
-        if not isinstance(confirmations, list):
-            confirmations = []
         covered_ids.update(included_ids)
         scenarios.append(
             EstimateScenario(
@@ -4101,7 +4084,6 @@ def parse_estimate_scenario_result(
                 included_display_ids=included_ids,
                 amount_included_display_ids=amount_ids,
                 reason=cell_text(raw_scenario.get("reason")),
-                confirmation_items=[cell_text(value) for value in confirmations if cell_text(value)],
             )
         )
     if not scenarios:
@@ -4127,16 +4109,6 @@ def fallback_estimate_scenarios(
         for display_id in selected_ids
         if cell_text(bill_map.get(display_id, pd.Series(dtype=object)).get("是否计入参考金额区间")) == "是"
     ]
-    confirmations = list(
-        dict.fromkeys(
-            text
-            for text in (
-                cell_text(bill_map.get(display_id, pd.Series(dtype=object)).get("需确认事项"))
-                for display_id in selected_ids
-            )
-            if text
-        )
-    )
     return [
         EstimateScenario(
             scenario_id="S001",
@@ -4144,7 +4116,6 @@ def fallback_estimate_scenarios(
             included_display_ids=selected_ids,
             amount_included_display_ids=amount_ids,
             reason="方案生成失败，按已选清单形成单一默认估价方案",
-            confirmation_items=confirmations,
         )
     ]
 
@@ -4237,6 +4208,7 @@ def build_scenario_outputs(
                 "单位": source.get("单位", ""),
                 "selected_family_id": source.get("selected_family_id", ""),
                 "价格证据family": source.get("价格证据family", ""),
+                "价格证据样本数": source.get("价格证据样本数", ""),
                 "价格证据说明": source.get("价格证据说明", ""),
                 "默认参考做法": source.get("默认参考做法", ""),
                 "其他历史做法": source.get("其他历史做法", ""),
@@ -4266,10 +4238,8 @@ def build_scenario_outputs(
                 "估算金额中包含机械费最高值": source.get("估算金额中包含机械费最高值", "") if include_amount else "",
                 "金额计算口径": source.get("金额计算口径", ""),
                 "推荐依据": source.get("推荐依据", ""),
-                "清单需确认事项": source.get("需确认事项", ""),
                 "来源样本": source.get("来源样本", ""),
                 "方案说明": scenario.reason,
-                "方案需确认事项": join_non_empty(scenario.confirmation_items),
             }
             scenario_detail_rows.append(row)
         scenario_frame = pd.DataFrame(scenario_detail_rows)
@@ -4522,9 +4492,6 @@ def build_estimate_summary(
     else:
         included_items_text = "当前没有清单项计入参考金额区间。"
 
-    low_amount = amount_sum(amount_bill, "估算金额最低值")
-    mid_amount = amount_sum(amount_bill, "估算金额中位数")
-    high_amount = amount_sum(amount_bill, "估算金额最高值")
     scenario_summaries = estimate_scenarios.drop_duplicates(subset=["scenario_id"], keep="first")
     scenario_count = len(scenario_summaries)
     scenario_overviews: list[str] = []
@@ -4542,51 +4509,6 @@ def build_estimate_summary(
         scenario_overviews.append(text)
     scenario_overview = "；".join(scenario_overviews) if scenario_overviews else "当前未形成估价方案。"
 
-    if scenario_count > 1:
-        amount_range = "存在多个互斥估价方案，统一参考金额不适用；详见 estimate_scenarios。"
-    elif low_amount is not None and mid_amount is not None and high_amount is not None:
-        amount_range = (
-            f"当前计入参考金额区间项目的参考金额约为 {low_amount:,.2f} - {high_amount:,.2f} 元，"
-            f"中位参考值约 {mid_amount:,.2f} 元。"
-        )
-    elif low_amount is not None or mid_amount is not None or high_amount is not None:
-        amount_parts = []
-        if low_amount is not None:
-            amount_parts.append(f"最低参考值约 {low_amount:,.2f} 元")
-        if mid_amount is not None:
-            amount_parts.append(f"中位参考值约 {mid_amount:,.2f} 元")
-        if high_amount is not None:
-            amount_parts.append(f"最高参考值约 {high_amount:,.2f} 元")
-        amount_range = (
-            f"当前计入参考金额区间项目已有部分金额参考：{join_non_empty(amount_parts)}；"
-            "因部分项目缺少可计算工程量，区间可能不完整。"
-        )
-    else:
-        amount_range = "当前没有可计入参考金额区间的可计算项目，暂不汇总总价，仅提供历史单价参考。"
-
-    confirmation_values = []
-    confirmation_column = "需确认事项" if "需确认事项" in suggested_bill.columns else "不确定性说明"
-    suggested_confirmations = suggested_bill[confirmation_column].tolist() if confirmation_column in suggested_bill.columns else []
-    for value in [*rewrite.uncertainties, *suggested_confirmations]:
-        text = cell_text(value).strip("。；; ")
-        if text.endswith("未知"):
-            text = text[:-2]
-        if text.endswith("不确定"):
-            text = text[:-3]
-        if text.endswith("需要确认"):
-            text = text[:-4]
-        if text.endswith("需确认"):
-            text = text[:-3]
-        if text.endswith("待确认"):
-            text = text[:-3]
-        if text:
-            confirmation_values.append(text)
-    confirmation_text = join_non_empty(confirmation_values, limit=6)
-    if confirmation_text:
-        site_confirmation = f"需确认{confirmation_text}。"
-    else:
-        site_confirmation = "需结合现场踏勘确认实际工程量、施工条件和细部做法。"
-
     rows = [
         ("需求理解", demand_understanding),
         ("匹配分类", catalog_summary),
@@ -4594,8 +4516,6 @@ def build_estimate_summary(
         ("方案数量", scenario_count),
         ("推荐方案概览", scenario_overview),
         ("计入金额项目", included_items_text),
-        ("参考金额区间", amount_range),
-        ("需现场确认", site_confirmation),
     ]
     return pd.DataFrame(rows, columns=ESTIMATE_SUMMARY_COLUMNS)
 
