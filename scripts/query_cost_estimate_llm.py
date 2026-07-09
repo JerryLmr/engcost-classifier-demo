@@ -239,41 +239,48 @@ DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS = [
 ESTIMATE_SCENARIO_COLUMNS = [
     "scenario_id",
     "方案名称",
-    "包含display",
-    "包含清单",
-    "计价display",
-    "计价清单",
-    "方案说明",
-    "需确认事项",
-    "估算金额最低值",
-    "估算金额中位数",
-    "估算金额最高值",
-]
-
-SCENARIO_BILL_COLUMNS = [
-    "scenario_id",
-    "方案名称",
     "序号",
     "display_id",
     "清单名称",
     "单位",
     "selected_family_id",
     "价格证据family",
+    "价格证据说明",
     "默认参考做法",
     "其他历史做法",
-    "是否计入本方案金额",
+    "工程量来源",
     "建议工程量最低值",
     "建议工程量中位数",
     "建议工程量最高值",
+    "工程量依据",
+    "是否计入本方案金额",
     "综合单价最低值",
     "综合单价中位数",
     "综合单价最高值",
+    "其中包含人工费单价最低值",
+    "其中包含人工费单价中位数",
+    "其中包含人工费单价最高值",
+    "其中包含机械费单价最低值",
+    "其中包含机械费单价中位数",
+    "其中包含机械费单价最高值",
     "估算金额最低值",
     "估算金额中位数",
     "估算金额最高值",
+    "估算金额中包含人工费最低值",
+    "估算金额中包含人工费中位数",
+    "估算金额中包含人工费最高值",
+    "估算金额中包含机械费最低值",
+    "估算金额中包含机械费中位数",
+    "估算金额中包含机械费最高值",
+    "金额计算口径",
     "推荐依据",
-    "需确认事项",
+    "清单需确认事项",
     "来源样本",
+    "方案说明",
+    "方案需确认事项",
+    "方案总金额最低值",
+    "方案总金额中位数",
+    "方案总金额最高值",
 ]
 
 ESTIMATE_SUMMARY_COLUMNS = [
@@ -351,7 +358,6 @@ class QueryResult:
     estimate_summary: pd.DataFrame
     suggested_bill: pd.DataFrame
     estimate_scenarios: pd.DataFrame
-    scenario_bill: pd.DataFrame
     matched_project_packages: pd.DataFrame
     candidate_families: pd.DataFrame
     candidate_display_groups: pd.DataFrame
@@ -4198,87 +4204,169 @@ def select_estimate_scenarios(
 def build_scenario_outputs(
     scenarios: list[EstimateScenario],
     suggested_bill: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> pd.DataFrame:
     bill_map = {cell_text(row.get("display_id")): row for _index, row in suggested_bill.iterrows()}
     scenario_rows: list[dict[str, Any]] = []
-    bill_rows: list[dict[str, Any]] = []
     for scenario in scenarios:
-        scenario_bill_rows: list[dict[str, Any]] = []
+        scenario_detail_rows: list[dict[str, Any]] = []
         amount_id_set = set(scenario.amount_included_display_ids)
-        included_display_ids: list[str] = []
-        included_names: list[str] = []
-        amount_display_ids: list[str] = []
-        amount_names: list[str] = []
-        for display_id in scenario.included_display_ids:
+        for index, display_id in enumerate(scenario.included_display_ids, start=1):
             source = bill_map.get(display_id)
             if source is None:
                 continue
-            included_display_ids.append(display_id)
-            included_names.append(cell_text(source.get("清单名称")) or display_id)
             include_amount = (
                 display_id in amount_id_set
                 and cell_text(source.get("是否计入参考金额区间")) == "是"
             )
-            if include_amount:
-                amount_display_ids.append(display_id)
-                amount_names.append(cell_text(source.get("清单名称")) or display_id)
             row = {
                 "scenario_id": scenario.scenario_id,
                 "方案名称": scenario.scenario_name,
-                "序号": len(scenario_bill_rows) + 1,
+                "序号": index,
                 "display_id": display_id,
                 "清单名称": source.get("清单名称", ""),
                 "单位": source.get("单位", ""),
                 "selected_family_id": source.get("selected_family_id", ""),
                 "价格证据family": source.get("价格证据family", ""),
+                "价格证据说明": source.get("价格证据说明", ""),
                 "默认参考做法": source.get("默认参考做法", ""),
                 "其他历史做法": source.get("其他历史做法", ""),
-                "是否计入本方案金额": "是" if include_amount else "否",
+                "工程量来源": source.get("工程量来源", ""),
                 "建议工程量最低值": source.get("建议工程量最低值", ""),
                 "建议工程量中位数": source.get("建议工程量中位数", ""),
                 "建议工程量最高值": source.get("建议工程量最高值", ""),
+                "工程量依据": source.get("工程量依据", ""),
+                "是否计入本方案金额": "是" if include_amount else "否",
                 "综合单价最低值": source.get("综合单价最低值", ""),
                 "综合单价中位数": source.get("综合单价中位数", ""),
                 "综合单价最高值": source.get("综合单价最高值", ""),
+                "其中包含人工费单价最低值": source.get("其中包含人工费单价最低值", ""),
+                "其中包含人工费单价中位数": source.get("其中包含人工费单价中位数", ""),
+                "其中包含人工费单价最高值": source.get("其中包含人工费单价最高值", ""),
+                "其中包含机械费单价最低值": source.get("其中包含机械费单价最低值", ""),
+                "其中包含机械费单价中位数": source.get("其中包含机械费单价中位数", ""),
+                "其中包含机械费单价最高值": source.get("其中包含机械费单价最高值", ""),
                 "估算金额最低值": source.get("估算金额最低值", "") if include_amount else "",
                 "估算金额中位数": source.get("估算金额中位数", "") if include_amount else "",
                 "估算金额最高值": source.get("估算金额最高值", "") if include_amount else "",
+                "估算金额中包含人工费最低值": source.get("估算金额中包含人工费最低值", "") if include_amount else "",
+                "估算金额中包含人工费中位数": source.get("估算金额中包含人工费中位数", "") if include_amount else "",
+                "估算金额中包含人工费最高值": source.get("估算金额中包含人工费最高值", "") if include_amount else "",
+                "估算金额中包含机械费最低值": source.get("估算金额中包含机械费最低值", "") if include_amount else "",
+                "估算金额中包含机械费中位数": source.get("估算金额中包含机械费中位数", "") if include_amount else "",
+                "估算金额中包含机械费最高值": source.get("估算金额中包含机械费最高值", "") if include_amount else "",
+                "金额计算口径": source.get("金额计算口径", ""),
                 "推荐依据": source.get("推荐依据", ""),
-                "需确认事项": source.get("需确认事项", ""),
+                "清单需确认事项": source.get("需确认事项", ""),
                 "来源样本": source.get("来源样本", ""),
-            }
-            scenario_bill_rows.append(row)
-            bill_rows.append(row)
-        scenario_frame = pd.DataFrame(scenario_bill_rows, columns=SCENARIO_BILL_COLUMNS)
-        scenario_rows.append(
-            {
-                "scenario_id": scenario.scenario_id,
-                "方案名称": scenario.scenario_name,
-                "包含display": "；".join(included_display_ids),
-                "包含清单": "；".join(included_names),
-                "计价display": "；".join(amount_display_ids),
-                "计价清单": "；".join(amount_names),
                 "方案说明": scenario.reason,
-                "需确认事项": join_non_empty(scenario.confirmation_items),
-                "估算金额最低值": amount_sum(scenario_frame, "估算金额最低值"),
-                "估算金额中位数": amount_sum(scenario_frame, "估算金额中位数"),
-                "估算金额最高值": amount_sum(scenario_frame, "估算金额最高值"),
+                "方案需确认事项": join_non_empty(scenario.confirmation_items),
             }
-        )
-    return (
-        pd.DataFrame(scenario_rows, columns=ESTIMATE_SCENARIO_COLUMNS).fillna(""),
-        pd.DataFrame(bill_rows, columns=SCENARIO_BILL_COLUMNS).fillna(""),
-    )
+            scenario_detail_rows.append(row)
+        scenario_frame = pd.DataFrame(scenario_detail_rows)
+        scenario_totals = {
+            "方案总金额最低值": amount_sum(scenario_frame, "估算金额最低值"),
+            "方案总金额中位数": amount_sum(scenario_frame, "估算金额中位数"),
+            "方案总金额最高值": amount_sum(scenario_frame, "估算金额最高值"),
+        }
+        for row in scenario_detail_rows:
+            row.update(scenario_totals)
+            scenario_rows.append(row)
+    return pd.DataFrame(scenario_rows, columns=ESTIMATE_SCENARIO_COLUMNS).fillna("")
 
 
 def display_frame(frame: pd.DataFrame, display: bool) -> pd.DataFrame:
-    if not display:
-        return frame
     output = frame.copy()
+    _ = display  # 保留 CLI 参数兼容；显示精度由 Excel number_format 控制。
     for column in output.columns:
-        if pd.api.types.is_numeric_dtype(output[column]):
-            output[column] = output[column].map(lambda value: "" if pd.isna(value) else f"{float(value):.2f}")
+        if is_text_identifier_column(column):
+            output[column] = output[column].map(cell_text)
     return output
+
+
+TEXT_IDENTIFIER_COLUMNS = {
+    "scenario_id",
+    "display_id",
+    "family_id",
+    "selected_family_id",
+    "project_package_id",
+    "project_key",
+    "item_key",
+    "stable_sample_id",
+    "source_ref",
+    "catalog_id",
+    "batch_id",
+    "source_row_id",
+    "item_row_id",
+    "project_code",
+}
+
+INTEGER_COLUMNS = {
+    "序号",
+    "rank",
+    "selection_rank",
+    "support_rank",
+    "family_count",
+    "历史family数量",
+    "默认family历史样本数",
+    "默认family来源工程包数",
+    "历史样本数",
+    "来源工程包数",
+    "historical_item_row_count",
+    "historical_package_count",
+    "item_count",
+    "page_no",
+    "prompt_chars",
+    "estimated_tokens",
+    "max_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+}
+
+DECIMAL_VALUE_COLUMNS = {
+    "quantity",
+    "unit_price",
+    "labor_unit_price",
+    "machinery_unit_price",
+}
+
+AMOUNT_VALUE_COLUMNS = {
+    "total_price",
+}
+
+
+def is_text_identifier_column(column: Any) -> bool:
+    name = cell_text(column)
+    return (
+        name in TEXT_IDENTIFIER_COLUMNS
+        or name.endswith("_id")
+        or name.endswith("_ids")
+    )
+
+
+def excel_number_format(column: Any) -> str | None:
+    name = cell_text(column)
+    lower_name = name.lower()
+    if is_text_identifier_column(name):
+        return "@"
+    if name == "package_evidence_weight":
+        return "0.000000"
+    if "similarity" in lower_name or "相似度" in name or lower_name.endswith("_ratio"):
+        return "0.0000"
+    if (
+        name in INTEGER_COLUMNS
+        or lower_name.endswith("_count")
+        or lower_name.endswith("_rank")
+        or "样本数" in name
+        or "工程包数" in name
+        or ("数量" in name and "工程量" not in name)
+    ):
+        return "0"
+    if name in AMOUNT_VALUE_COLUMNS or "金额" in name or "合价" in name:
+        return "#,##0.00"
+    if name in DECIMAL_VALUE_COLUMNS or "工程量" in name or "单价" in name:
+        return "0.00"
+    return None
 
 
 def query_catalog_dict(query_catalog: QueryCatalog) -> dict[str, Any]:
@@ -4402,13 +4490,14 @@ def build_estimate_summary(
     low_amount = amount_sum(amount_bill, "估算金额最低值")
     mid_amount = amount_sum(amount_bill, "估算金额中位数")
     high_amount = amount_sum(amount_bill, "估算金额最高值")
-    scenario_count = len(estimate_scenarios)
+    scenario_summaries = estimate_scenarios.drop_duplicates(subset=["scenario_id"], keep="first")
+    scenario_count = len(scenario_summaries)
     scenario_overviews: list[str] = []
-    for _index, scenario in estimate_scenarios.iterrows():
+    for _index, scenario in scenario_summaries.iterrows():
         name = cell_text(scenario.get("方案名称"))
-        scenario_low = numeric_or_none(scenario.get("估算金额最低值"))
-        scenario_mid = numeric_or_none(scenario.get("估算金额中位数"))
-        scenario_high = numeric_or_none(scenario.get("估算金额最高值"))
+        scenario_low = numeric_or_none(scenario.get("方案总金额最低值"))
+        scenario_mid = numeric_or_none(scenario.get("方案总金额中位数"))
+        scenario_high = numeric_or_none(scenario.get("方案总金额最高值"))
         if scenario_low is not None and scenario_high is not None:
             text = f"{name}：{scenario_low:,.2f}～{scenario_high:,.2f}元"
             if scenario_mid is not None:
@@ -4631,7 +4720,6 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
         display_frame(result.estimate_summary, display).to_excel(writer, sheet_name="estimate_summary", index=False)
         display_frame(result.estimate_scenarios, display).to_excel(writer, sheet_name="estimate_scenarios", index=False)
         display_frame(result.suggested_bill, display).to_excel(writer, sheet_name="suggested_bill", index=False)
-        display_frame(result.scenario_bill, display).to_excel(writer, sheet_name="scenario_bill", index=False)
         display_frame(result.candidate_display_groups, display).to_excel(
             writer,
             sheet_name="candidate_display_groups",
@@ -4678,12 +4766,19 @@ def apply_workbook_style(path: Path) -> None:
     workbook = openpyxl.load_workbook(path)
     for worksheet in workbook.worksheets:
         worksheet.freeze_panes = None
+        column_formats = {
+            cell.column: excel_number_format(cell.value)
+            for cell in worksheet[1]
+        }
         for cell in worksheet[1]:
             cell.font = Font(bold=True)
             cell.alignment = Alignment(wrap_text=False, vertical="top")
         for row in worksheet.iter_rows():
             for cell in row:
                 cell.alignment = Alignment(wrap_text=False, vertical="top")
+                number_format = column_formats.get(cell.column)
+                if number_format:
+                    cell.number_format = number_format
     workbook.save(path)
     workbook.close()
 
@@ -4845,7 +4940,7 @@ def run_query(
         suggested_bill,
         warnings=warnings,
     )
-    estimate_scenarios, scenario_bill = build_scenario_outputs(scenarios, suggested_bill)
+    estimate_scenarios = build_scenario_outputs(scenarios, suggested_bill)
     estimate_summary = build_estimate_summary(rewrite, query_catalog, suggested_bill, estimate_scenarios)
     if warnings:
         append_trace_warnings(display_selection_trace, warnings)
@@ -4928,7 +5023,6 @@ def run_query(
         estimate_summary=estimate_summary,
         suggested_bill=suggested_bill,
         estimate_scenarios=estimate_scenarios,
-        scenario_bill=scenario_bill,
         matched_project_packages=matched_project_packages,
         candidate_families=candidate_families,
         candidate_display_groups=candidate_display_groups,
