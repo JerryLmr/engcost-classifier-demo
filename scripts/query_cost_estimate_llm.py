@@ -2694,6 +2694,13 @@ def build_display_dedup_selection_prompt(raw_query: str, selected_records: list[
 判断时同时比较 display 工作内容和默认参考做法。
 如果一个 display 的 selected family 已包含另一个 display 的全部施工内容，可以抑制被包含项。
 
+【疑似重叠拆除项】
+- 对名称不同但都表示既有层、老化层、原有层拆除或铲除的 display，只有默认参考做法明确证明它们属于不同构造层、部位或施工范围时，才允许同时保留。
+- 不得仅根据“老化层”“防水层”“基层”等名称差异，推断为两个独立施工项。
+- 证据不足时，优先保留施工对象更明确、做法更具体、历史支持更充分的 display。
+- 如果同时保留两个疑似重叠项，keep_reasons 必须明确说明它们分别对应什么不同施工对象或施工范围。
+- 不得只写“属于不同基层处理”“可能是不同施工层”等推测性理由。
+
 【不得抑制】
 - 不同施工目标。
 - 拆除与新做工作内容。
@@ -4013,6 +4020,9 @@ def build_estimate_scenario_prompt(
 8. amount_included_display_ids 必须是 included_display_ids 的子集，且只计入 has_amount_basis=true 的清单。
 9. 所有输入 display 至少出现在一个方案的 included_display_ids 中，禁止丢弃任何输入 display。即使某个 display 与其他清单重复、被上位清单包含或不应计价，也必须保留在最适用方案的 included_display_ids 中，只从 amount_included_display_ids 排除。
 10. 输出前逐一核对输入中的每个 display_id，确认它至少在一个 included_display_ids 中；不同方案的 included_display_ids 合集必须严格覆盖全部输入 display_id。
+11. scenario 不重新执行全局重复展示抑制。某个 display 可以不适用于当前方案，但必须至少出现在另一个方案的 included_display_ids 中。
+12. 如果疑似施工内容重叠、但不属于互斥主体工艺的 display 未在上游被抑制，应将其保留在最适合的方案中用于确认，并从 amount_included_display_ids 排除；reason 写明“保留用于确认，暂不重复计价”。互斥主体工艺不得按本条处理，必须按规则 2 拆成不同方案。
+13. reason 与结构化结果必须一致。如果 reason 明确说某个 display 重复、被覆盖、不应计价、暂不计价或仅保留提醒，该 display 不得出现在 amount_included_display_ids 中。
 
 只输出一个 JSON object：
 {{
@@ -4334,6 +4344,22 @@ AMOUNT_VALUE_COLUMNS = {
     "total_price",
 }
 
+AMOUNT_WIDTH_COLUMNS = {
+    "total_price",
+    "估算金额最低值",
+    "估算金额中位数",
+    "估算金额最高值",
+    "估算金额中包含人工费最低值",
+    "估算金额中包含人工费中位数",
+    "估算金额中包含人工费最高值",
+    "估算金额中包含机械费最低值",
+    "估算金额中包含机械费中位数",
+    "估算金额中包含机械费最高值",
+    "方案总金额最低值",
+    "方案总金额中位数",
+    "方案总金额最高值",
+}
+
 
 def is_text_identifier_column(column: Any) -> bool:
     name = cell_text(column)
@@ -4366,6 +4392,15 @@ def excel_number_format(column: Any) -> str | None:
         return "#,##0.00"
     if name in DECIMAL_VALUE_COLUMNS or "工程量" in name or "单价" in name:
         return "0.00"
+    return None
+
+
+def excel_min_column_width(column: Any) -> float | None:
+    name = cell_text(column)
+    if name in AMOUNT_WIDTH_COLUMNS:
+        return 15.0
+    if name in DECIMAL_VALUE_COLUMNS or "工程量" in name or "单价" in name:
+        return 12.0
     return None
 
 
@@ -4764,12 +4799,36 @@ def apply_workbook_style(path: Path) -> None:
         return
 
     workbook = openpyxl.load_workbook(path)
+    scenario_worksheet = workbook["estimate_scenarios"] if "estimate_scenarios" in workbook.sheetnames else None
+    if scenario_worksheet is not None:
+        header_by_name = {cell_text(cell.value): cell.column for cell in scenario_worksheet[1]}
+        scenario_id_column = header_by_name.get("scenario_id")
+        if scenario_id_column is not None:
+            separator_rows: list[int] = []
+            previous_scenario_id = ""
+            for row_index in range(2, scenario_worksheet.max_row + 1):
+                scenario_id = cell_text(scenario_worksheet.cell(row_index, scenario_id_column).value)
+                if previous_scenario_id and scenario_id and scenario_id != previous_scenario_id:
+                    separator_rows.append(row_index)
+                if scenario_id:
+                    previous_scenario_id = scenario_id
+            for row_index in reversed(separator_rows):
+                scenario_worksheet.insert_rows(row_index)
+                scenario_worksheet.row_dimensions[row_index].height = 16
+
     for worksheet in workbook.worksheets:
         worksheet.freeze_panes = None
         column_formats = {
             cell.column: excel_number_format(cell.value)
             for cell in worksheet[1]
         }
+        for cell in worksheet[1]:
+            min_width = excel_min_column_width(cell.value)
+            if min_width is None:
+                continue
+            column_letter = cell.column_letter
+            current_width = worksheet.column_dimensions[column_letter].width or 0
+            worksheet.column_dimensions[column_letter].width = max(current_width, min_width)
         for cell in worksheet[1]:
             cell.font = Font(bold=True)
             cell.alignment = Alignment(wrap_text=False, vertical="top")
