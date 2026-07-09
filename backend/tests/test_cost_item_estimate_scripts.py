@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import importlib.util
 import sys
 import tempfile
@@ -40,6 +41,162 @@ if np is not None and pd is not None:
 else:
     build_index = None
     query_estimate_llm = None
+
+
+class MergeCostItemSampleBatchesTestCase(unittest.TestCase):
+    SAMPLE_HEADERS = [
+        "source_row_id",
+        "file_name",
+        "consultation_project_name",
+        "sub_project_id",
+        "seq",
+        "project_name",
+        "project_description",
+        "unit",
+        "quantity",
+    ]
+
+    def write_batch(self, input_dir: Path, batch_id: str, rows: list[dict[str, object]]) -> None:
+        batch_dir = input_dir / batch_id
+        batch_dir.mkdir(parents=True)
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = "samples"
+        sheet.append(self.SAMPLE_HEADERS)
+        for row in rows:
+            sheet.append([row.get(header) for header in self.SAMPLE_HEADERS])
+        workbook.save(batch_dir / merge_samples.BATCH_SAMPLE_NAME)
+
+    def sample_row(
+        self,
+        source_row_id: int,
+        file_name: str,
+        sub_project_id: str,
+        project_name: str,
+        *,
+        consultation_project_name: str = "咨询项目",
+        seq: int = 1,
+    ) -> dict[str, object]:
+        return {
+            "source_row_id": source_row_id,
+            "file_name": file_name,
+            "consultation_project_name": consultation_project_name,
+            "sub_project_id": sub_project_id,
+            "seq": seq,
+            "project_name": project_name,
+            "project_description": f"{project_name}特征",
+            "unit": "项",
+            "quantity": 1,
+        }
+
+    def test_merge_keeps_latest_project_groups_then_latest_stable_rows(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            input_dir = tmp_path / "samples"
+            output_path = tmp_path / "cost_item_samples_all.xlsx"
+            report_path = merge_samples.dedup_report_path(output_path)
+
+            old_blank_duplicate = self.sample_row(6, "", "空键子项目", "空键重复")
+            latest_blank_duplicate = dict(old_blank_duplicate, source_row_id=16)
+            same_batch_duplicate = self.sample_row(17, "同批次文件", "同批次子项目", "同批次重复")
+
+            self.write_batch(
+                input_dir,
+                "20260618_001",
+                [
+                    self.sample_row(1, "楼幢项目", "7幢", "7幢旧数据"),
+                    self.sample_row(2, "楼幢项目", "8幢", "8幢旧数据"),
+                    self.sample_row(3, "楼幢项目", "9幢", "9幢旧数据一"),
+                    self.sample_row(4, "楼幢项目", "9幢", "9幢旧数据二", seq=2),
+                    self.sample_row(5, "另一个文件", "9幢", "不同文件保留"),
+                    old_blank_duplicate,
+                ],
+            )
+            self.write_batch(
+                input_dir,
+                "20260630_001",
+                [
+                    self.sample_row(10, "楼幢项目", "9幢", "9幢中间批次"),
+                ],
+            )
+            self.write_batch(
+                input_dir,
+                "20260701_001",
+                [
+                    self.sample_row(15, "楼幢项目", "9幢", "9幢最新完整数据"),
+                    latest_blank_duplicate,
+                    same_batch_duplicate,
+                    dict(same_batch_duplicate, source_row_id=18),
+                ],
+            )
+
+            stats = merge_samples.merge_batches(input_dir, output_path, report_path)
+
+            self.assertEqual(stats, (11, 6, 2, 3, 2))
+
+            workbook = openpyxl.load_workbook(output_path, read_only=True, data_only=True)
+            sheet = workbook["samples"]
+            headers = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+            output_rows = [dict(zip(headers, values)) for values in sheet.iter_rows(min_row=2, values_only=True)]
+            workbook.close()
+
+            self.assertEqual(
+                headers,
+                [*self.SAMPLE_HEADERS, "batch_id", "project_key", "stable_sample_id"],
+            )
+            output_names = [row["project_name"] for row in output_rows]
+            self.assertEqual(
+                output_names,
+                [
+                    "7幢旧数据",
+                    "8幢旧数据",
+                    "不同文件保留",
+                    "9幢最新完整数据",
+                    "空键重复",
+                    "同批次重复",
+                ],
+            )
+            self.assertNotIn("9幢旧数据一", output_names)
+            self.assertNotIn("9幢旧数据二", output_names)
+            self.assertNotIn("9幢中间批次", output_names)
+
+            blank_row = next(row for row in output_rows if row["project_name"] == "空键重复")
+            tie_row = next(row for row in output_rows if row["project_name"] == "同批次重复")
+            self.assertEqual(blank_row["batch_id"], "20260701_001")
+            self.assertEqual(blank_row["project_key"], "20260701_001::16")
+            self.assertEqual(tie_row["project_key"], "20260701_001::17")
+            for output_row in output_rows:
+                source_row = {header: output_row[header] for header in self.SAMPLE_HEADERS}
+                self.assertEqual(output_row["stable_sample_id"], merge_samples.stable_sample_id(source_row))
+                self.assertEqual(
+                    output_row["project_key"],
+                    merge_samples.build_project_key(output_row["batch_id"], output_row["source_row_id"]),
+                )
+
+            with report_path.open("r", encoding="utf-8-sig", newline="") as report_file:
+                report_rows = list(csv.DictReader(report_file))
+
+            self.assertEqual(list(report_rows[0]), merge_samples.DEDUP_REPORT_HEADERS)
+            group_reports = [row for row in report_rows if row["dedup_type"] == "project_group_replaced"]
+            stable_reports = [row for row in report_rows if row["dedup_type"] == "stable_sample_duplicate"]
+            self.assertEqual(len(group_reports), 2)
+            self.assertEqual(
+                {(row["duplicate_batch_id"], row["duplicate_row_count"]) for row in group_reports},
+                {("20260618_001", "2"), ("20260630_001", "1")},
+            )
+            self.assertTrue(all(row["kept_batch_id"] == "20260701_001" for row in group_reports))
+            self.assertTrue(all(row["dedup_key"] == "楼幢项目::9幢" for row in group_reports))
+            self.assertTrue(all(row["stable_sample_id"] == "" for row in group_reports))
+            self.assertTrue(all(row["cost_item_name"] == "" for row in group_reports))
+
+            self.assertEqual(len(stable_reports), 2)
+            self.assertTrue(all(row["duplicate_row_count"] == "1" for row in stable_reports))
+            self.assertTrue(all(row["kept_batch_id"] == "20260701_001" for row in stable_reports))
+            self.assertEqual(
+                {row["duplicate_batch_id"] for row in stable_reports},
+                {"20260618_001", "20260701_001"},
+            )
+            self.assertTrue(all(row["dedup_key"] == row["stable_sample_id"] for row in stable_reports))
 
 
 @unittest.skipIf(np is None or pd is None, "cost item estimate dependencies are not installed")
