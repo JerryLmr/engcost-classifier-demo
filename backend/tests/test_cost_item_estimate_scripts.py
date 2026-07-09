@@ -1062,6 +1062,60 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertIn("unknown_family_relations", warnings)
         self.assertIn("duplicate_display_family_relation_ids", warnings)
 
+    def test_display_family_selection_downgrades_structurally_inconsistent_same_scope_variants(self):
+        selected_displays = pd.DataFrame([{"display_id": "D001", "selection_reason": ""}])
+        display_groups = pd.DataFrame([{"display_id": "D001", "display_name": "屋面防水", "unit": "m²"}])
+        display_families = pd.DataFrame(
+            [
+                {
+                    "display_id": "D001",
+                    "family_id": "F001",
+                    "representative_cost_item_name": "屋面防水",
+                    "unit": "m²",
+                },
+                {
+                    "display_id": "D001",
+                    "family_id": "F002",
+                    "representative_cost_item_name": "屋面防水",
+                    "unit": "项",
+                },
+                {
+                    "display_id": "D001",
+                    "family_id": "F003",
+                    "representative_cost_item_name": "外墙防水",
+                    "unit": "m²",
+                },
+            ]
+        )
+        warnings = []
+
+        parsed, meta = query_estimate_llm.parse_display_family_selection_result(
+            {
+                "display_results": [
+                    {
+                        "display_id": "D001",
+                        "selected_family_id": "F001",
+                        "family_relations": [
+                            {"family_id": "F002", "relation": "same_scope_variant", "difference": "边界不同"},
+                            {"family_id": "F003", "relation": "same_scope_variant", "difference": "边界不同"},
+                        ],
+                    }
+                ]
+            },
+            selected_displays,
+            display_groups,
+            display_families,
+            warnings,
+        )
+
+        self.assertEqual(
+            [relation["relation"] for relation in parsed.loc[0, "family_relations"]],
+            ["different_method", "different_method"],
+        )
+        self.assertEqual(meta["other_family_ids"], ["F002", "F003"])
+        self.assertIn("same_scope_variant_unit_mismatch", warnings)
+        self.assertIn("same_scope_variant_display_mismatch", warnings)
+
     def test_suggested_bill_merges_same_scope_family_raw_evidence(self):
         families = pd.DataFrame(
             [
@@ -1220,7 +1274,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(trace.loc["F004", "relation_to_selected"], "different_method")
         self.assertEqual(trace.loc["F005", "relation_to_selected"], "exclude")
 
-    def test_scenario_fallback_splits_waterproof_methods_and_reuses_common_items(self):
+    def test_scenario_fallback_returns_one_generic_scenario(self):
         selected = pd.DataFrame(
             [
                 {"display_id": "D001", "display_name": "防水层拆除", "default_practice": "拆除原防水层"},
@@ -1253,18 +1307,29 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         scenarios = query_estimate_llm.fallback_estimate_scenarios(selected, suggested_bill)
         estimate_scenarios, scenario_bill = query_estimate_llm.build_scenario_outputs(scenarios, suggested_bill)
 
-        self.assertEqual([scenario.scenario_name for scenario in scenarios], ["涂膜防水方案", "卷材防水方案"])
-        self.assertIn("D001", scenarios[0].included_display_ids)
-        self.assertIn("D001", scenarios[1].included_display_ids)
-        self.assertNotIn("D003", scenarios[0].included_display_ids)
-        self.assertNotIn("D002", scenarios[1].included_display_ids)
+        self.assertEqual([scenario.scenario_name for scenario in scenarios], ["默认估价方案"])
+        self.assertEqual(scenarios[0].included_display_ids, ["D001", "D002", "D003", "D004"])
+        self.assertEqual(scenarios[0].amount_included_display_ids, ["D001", "D002", "D003"])
+        self.assertEqual(
+            scenarios[0].reason,
+            "方案生成失败，按已选清单形成单一默认估价方案",
+        )
         self.assertNotIn("D004", scenarios[0].amount_included_display_ids)
-        self.assertEqual(estimate_scenarios["估算金额最低值"].tolist(), [300.0, 400.0])
+        self.assertEqual(estimate_scenarios["包含display"].tolist(), ["D001；D002；D003；D004"])
+        self.assertEqual(estimate_scenarios["包含清单"].tolist(), ["防水层拆除；屋面涂膜防水；屋面卷材防水；垂直运输"])
+        self.assertEqual(estimate_scenarios["计价display"].tolist(), ["D001；D002；D003"])
+        self.assertEqual(estimate_scenarios["计价清单"].tolist(), ["防水层拆除；屋面涂膜防水；屋面卷材防水"])
+        self.assertEqual(estimate_scenarios["估算金额最低值"].tolist(), [600.0])
         transport_rows = scenario_bill[scenario_bill["display_id"] == "D004"]
-        self.assertEqual(transport_rows["是否计入本方案金额"].tolist(), ["否", "否"])
+        self.assertEqual(transport_rows["是否计入本方案金额"].tolist(), ["否"])
         self.assertTrue(transport_rows["估算金额最低值"].eq("").all())
+        priced_rows = scenario_bill[scenario_bill["是否计入本方案金额"] == "是"]
+        self.assertEqual(
+            estimate_scenarios.loc[0, "估算金额最低值"],
+            priced_rows["估算金额最低值"].sum(),
+        )
 
-    def test_scenario_parser_rejects_mutually_exclusive_methods_in_one_scenario(self):
+    def test_scenario_parser_uses_only_generic_composition_validation(self):
         selected = pd.DataFrame(
             [
                 {"display_id": "D001", "display_name": "屋面涂膜防水"},
@@ -1277,20 +1342,59 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"display_id": "D002", "是否计入参考金额区间": "是"},
             ]
         )
-        with self.assertRaisesRegex(ValueError, "不能同时包含"):
-            query_estimate_llm.parse_estimate_scenario_result(
-                {
-                    "scenarios": [
-                        {
-                            "scenario_name": "错误方案",
-                            "included_display_ids": ["D001", "D002"],
-                            "amount_included_display_ids": ["D001", "D002"],
-                        }
-                    ]
-                },
-                selected,
-                bill,
-            )
+        scenarios = query_estimate_llm.parse_estimate_scenario_result(
+            {
+                "scenarios": [
+                    {
+                        "scenario_name": "LLM 判断方案",
+                        "included_display_ids": ["D001", "D002"],
+                        "amount_included_display_ids": ["D001", "D002"],
+                    }
+                ]
+            },
+            selected,
+            bill,
+        )
+        self.assertEqual(len(scenarios), 1)
+        self.assertEqual(scenarios[0].included_display_ids, ["D001", "D002"])
+
+    def test_scenario_parser_deduplicates_compositions_independent_of_id_order(self):
+        selected = pd.DataFrame(
+            [
+                {"display_id": "D001", "display_name": "项目一"},
+                {"display_id": "D002", "display_name": "项目二"},
+            ]
+        )
+        bill = pd.DataFrame(
+            [
+                {"display_id": "D001", "是否计入参考金额区间": "是"},
+                {"display_id": "D002", "是否计入参考金额区间": "是"},
+            ]
+        )
+        warnings = []
+
+        scenarios = query_estimate_llm.parse_estimate_scenario_result(
+            {
+                "scenarios": [
+                    {
+                        "scenario_name": "方案一",
+                        "included_display_ids": ["D001", "D002"],
+                        "amount_included_display_ids": ["D001"],
+                    },
+                    {
+                        "scenario_name": "方案二",
+                        "included_display_ids": ["D002", "D001"],
+                        "amount_included_display_ids": ["D002"],
+                    },
+                ]
+            },
+            selected,
+            bill,
+            warnings,
+        )
+
+        self.assertEqual(len(scenarios), 1)
+        self.assertIn("duplicate_estimate_scenarios", warnings)
 
     def test_dedup_selection_validation_rejects_cycles_and_invalid_ids(self):
         with self.assertRaisesRegex(ValueError, "形成环"):
@@ -1367,48 +1471,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(meta["invalid_quantity_sources"], ["非法来源"])
         self.assertEqual(meta["invalid_quantity_ranges"], ["D001"])
 
-    def test_explicit_area_is_applied_to_both_mutually_exclusive_methods(self):
-        rewrite = query_estimate_llm.QueryRewrite(
-            "屋面漏水，面积大概500平",
-            "屋面维修",
-            "屋面防水",
-            [{"value": 500, "unit": "m²", "meaning": "维修面积"}],
-            [],
-            "屋面",
-            [],
-            [],
-            True,
-        )
-        selected = pd.DataFrame(
-            [
-                {"display_id": "D001", "display_name": "屋面涂膜防水", "selected_family_id": "F001"},
-                {"display_id": "D002", "display_name": "屋面卷材防水", "selected_family_id": "F002"},
-            ]
-        )
-        decisions = pd.DataFrame(
-            [
-                {"display_id": "D001", "quantity_source": "需现场确认", "include_in_amount": False},
-                {"display_id": "D002", "quantity_source": "需现场确认", "include_in_amount": False},
-            ]
-        )
-        families = pd.DataFrame(
-            [
-                {"family_id": "F001", "unit": "m²", "unit_normalized": "m²"},
-                {"family_id": "F002", "unit": "m²", "unit_normalized": "m²"},
-            ],
-            columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
-        )
-
-        output = query_estimate_llm.apply_explicit_quantity_to_mutually_exclusive_methods(
-            rewrite,
-            selected,
-            decisions,
-            families,
-        )
-
-        self.assertEqual(output["suggested_quantity_mid"].tolist(), [500.0, 500.0])
-        self.assertEqual(output["include_in_amount"].tolist(), [True, True])
-        self.assertEqual(output["quantity_source"].tolist(), ["用户明确给定", "用户明确给定"])
+    def test_scenario_keyword_quantity_override_is_removed(self):
+        self.assertFalse(hasattr(query_estimate_llm, "display_method_kind"))
+        self.assertFalse(hasattr(query_estimate_llm, "apply_explicit_quantity_to_mutually_exclusive_methods"))
 
     def test_final_suggested_bill_backfills_prices_and_calculates_amounts(self):
         families = pd.DataFrame(
@@ -1730,8 +1795,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 workbook.sheetnames,
                 [
                     "estimate_summary",
-                    "suggested_bill",
                     "estimate_scenarios",
+                    "suggested_bill",
                     "scenario_bill",
                     "candidate_display_groups",
                     "candidate_families",
