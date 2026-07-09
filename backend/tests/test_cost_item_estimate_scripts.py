@@ -1486,36 +1486,95 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             priced_rows["估算金额最低值"].sum(),
         )
 
-    def test_scenario_parser_uses_only_generic_composition_validation(self):
+    def test_scenario_prompt_defines_fields_and_separates_mutually_exclusive_methods(self):
         selected = pd.DataFrame(
             [
-                {"display_id": "D001", "display_name": "屋面涂膜防水"},
-                {"display_id": "D002", "display_name": "屋面卷材防水"},
+                {"display_id": "D001", "display_name": "屋面涂膜防水", "default_practice": "涂膜", "unit": "m²"},
+                {"display_id": "D002", "display_name": "屋面卷材防水", "default_practice": "卷材", "unit": "m²"},
+                {"display_id": "D006", "display_name": "防水层拆除", "default_practice": "拆除", "unit": "m²"},
+                {"display_id": "D035", "display_name": "垂直运输", "default_practice": "运输", "unit": "项"},
             ]
         )
         bill = pd.DataFrame(
             [
-                {"display_id": "D001", "是否计入参考金额区间": "是"},
-                {"display_id": "D002", "是否计入参考金额区间": "是"},
+                {"display_id": display_id, "是否计入参考金额区间": "是"}
+                for display_id in ["D001", "D002", "D006", "D035"]
             ]
         )
+        prompt, records = query_estimate_llm.build_estimate_scenario_prompt("屋面漏水", selected, bill)
+
+        self.assertIn("included_display_ids 中实际参与该方案金额汇总的清单项", prompt)
+        self.assertIn("这是上游工程量与价格判断后的既定结果", prompt)
+        self.assertIn("涂膜防水和卷材防水不得同时出现在同一个方案", prompt)
+        self.assertIn("所有方案的 included_display_ids 并集", prompt)
+        self.assertIn("scenario 不重新执行工程量估算、价格判断或全局去重", prompt)
+        self.assertIn("“项”等单位", prompt)
+        self.assertEqual(
+            set(records[0]),
+            {"display_id", "display_name", "default_practice", "unit", "has_amount_basis"},
+        )
+
         scenarios = query_estimate_llm.parse_estimate_scenario_result(
             {
                 "scenarios": [
                     {
-                        "scenario_name": "LLM 判断方案",
-                        "included_display_ids": ["D001", "D002"],
-                        "amount_included_display_ids": ["D001", "D002"],
-                    }
+                        "scenario_name": "涂膜方案",
+                        "included_display_ids": ["D006", "D001", "D035"],
+                        "amount_included_display_ids": ["D006", "D001", "D035"],
+                    },
+                    {
+                        "scenario_name": "卷材方案",
+                        "included_display_ids": ["D006", "D002", "D035"],
+                        "amount_included_display_ids": ["D006", "D002", "D035"],
+                    },
                 ]
             },
             selected,
             bill,
         )
-        self.assertEqual(len(scenarios), 1)
-        self.assertEqual(scenarios[0].included_display_ids, ["D001", "D002"])
+        self.assertNotIn("D002", scenarios[0].included_display_ids)
+        self.assertNotIn("D001", scenarios[1].included_display_ids)
+        self.assertTrue({"D006", "D035"}.issubset(scenarios[0].included_display_ids))
+        self.assertTrue({"D006", "D035"}.issubset(scenarios[1].included_display_ids))
 
-    def test_scenario_parser_deduplicates_compositions_independent_of_id_order(self):
+    def test_scenario_parser_keeps_same_included_with_different_amount(self):
+        selected = pd.DataFrame(
+            [
+                {"display_id": display_id, "display_name": display_id}
+                for display_id in ["D001", "D002", "D006", "D035"]
+            ]
+        )
+        bill = pd.DataFrame(
+            [
+                {"display_id": display_id, "是否计入参考金额区间": "是"}
+                for display_id in ["D001", "D002", "D006", "D035"]
+            ]
+        )
+        warnings = []
+        scenarios = query_estimate_llm.parse_estimate_scenario_result(
+            {
+                "scenarios": [
+                    {
+                        "scenario_name": "方案一",
+                        "included_display_ids": ["D006", "D001", "D002", "D035"],
+                        "amount_included_display_ids": ["D006", "D001", "D035"],
+                    },
+                    {
+                        "scenario_name": "方案二",
+                        "included_display_ids": ["D035", "D002", "D001", "D006"],
+                        "amount_included_display_ids": ["D035", "D002", "D006"],
+                    },
+                ]
+            },
+            selected,
+            bill,
+            warnings,
+        )
+
+        self.assertEqual(len(scenarios), 2)
+        self.assertNotIn("duplicate_estimate_scenarios", warnings)
+
+    def test_scenario_parser_deduplicates_identical_included_and_amount(self):
         selected = pd.DataFrame(
             [
                 {"display_id": "D001", "display_name": "项目一"},
@@ -1529,7 +1588,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ]
         )
         warnings = []
-
         scenarios = query_estimate_llm.parse_estimate_scenario_result(
             {
                 "scenarios": [
@@ -1541,7 +1599,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     {
                         "scenario_name": "方案二",
                         "included_display_ids": ["D002", "D001"],
-                        "amount_included_display_ids": ["D002"],
+                        "amount_included_display_ids": ["D001"],
                     },
                 ]
             },
@@ -1552,6 +1610,35 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         self.assertEqual(len(scenarios), 1)
         self.assertIn("duplicate_estimate_scenarios", warnings)
+
+    def test_scenario_parser_filters_missing_amount_basis_but_allows_item_unit_with_basis(self):
+        selected = pd.DataFrame(
+            [
+                {"display_id": "D001", "display_name": "无金额依据项目", "unit": "m²"},
+                {"display_id": "D035", "display_name": "垂直运输", "unit": "项"},
+            ]
+        )
+        bill = pd.DataFrame(
+            [
+                {"display_id": "D001", "是否计入参考金额区间": "否"},
+                {"display_id": "D035", "是否计入参考金额区间": "是"},
+            ]
+        )
+        scenarios = query_estimate_llm.parse_estimate_scenario_result(
+            {
+                "scenarios": [
+                    {
+                        "scenario_name": "方案一",
+                        "included_display_ids": ["D001", "D035"],
+                        "amount_included_display_ids": ["D001", "D035"],
+                    }
+                ]
+            },
+            selected,
+            bill,
+        )
+
+        self.assertEqual(scenarios[0].amount_included_display_ids, ["D035"])
 
     def test_dedup_selection_validation_rejects_cycles_and_invalid_ids(self):
         with self.assertRaisesRegex(ValueError, "形成环"):

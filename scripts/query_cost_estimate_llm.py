@@ -3994,31 +3994,68 @@ def build_estimate_scenario_prompt(
     prompt = f"""
 你是物业维修工程估价方案组织器。
 
-只使用输入中已经选中的 display_id，将清单组织为互斥估价方案，不得新增清单项。
+只使用输入中已选中的 display_id，将清单组织为 1～3 个互斥估价方案。
+不得新增、改名或静默删除输入 display。
 
-规则：
-1. 自行判断哪些 display 是不同方案的主体工艺、哪些是共用前置工序、哪些只适用于某一个方案、哪些存在重复或包含关系、哪些应保留但不计价。
-2. 将互斥的主体工艺拆成不同方案；同一方案中不能同时包含或计入互斥的主体工艺。
-3. 共用前置工序可以出现在多个方案中，但上位清单和更具体的同义清单不得在同一方案中重复计价。例如“防水层拆除”“铲除卷材防水层”“原有屋面卷材铲除”如属于相同拆除范围，同一方案只能选择其中一个计价，可保留更具体或历史支持更充分的一个。
-4. 不得将相互重叠的基层拆除重复计价。例如“防水层拆除”“老化层铲除”“铲除卷材防水层”，只有描述明确表示它们是不同构造层、不同工作范围时才允许同时计价，否则必须在同一方案中去重。
-5. 如果某个拆除清单的默认做法或价格证据已明确包含垃圾清理、建筑垃圾外运、现场保洁或运距，单独的“建筑垃圾外运”默认不计入该方案金额，但可保留在 included_display_ids 并作为需确认项目。
-6. 措施项目缺乏可靠计价依据时可保留在 included_display_ids，但不要放入 amount_included_display_ids。
-7. 最多输出 3 个方案；不要把是否含垃圾清运、运距等小口径差异拆成独立方案；如果当前只有一种主体工艺，则只生成一个方案。
-8. amount_included_display_ids 必须是 included_display_ids 的子集，且只计入 has_amount_basis=true 的清单。
-9. 所有输入 display 至少出现在一个方案的 included_display_ids 中，禁止丢弃任何输入 display。即使某个 display 与其他清单重复、被上位清单包含或不应计价，也必须保留在最适用方案的 included_display_ids 中，只从 amount_included_display_ids 排除。
-10. 输出前逐一核对输入中的每个 display_id，确认它至少在一个 included_display_ids 中；不同方案的 included_display_ids 合集必须严格覆盖全部输入 display_id。
-11. scenario 不重新执行全局重复展示抑制。某个 display 可以不适用于当前方案，但必须至少出现在另一个方案的 included_display_ids 中。
-12. 如果疑似施工内容重叠、但不属于互斥主体工艺的 display 未在上游被抑制，应将其保留在最适合的方案中用于确认，并从 amount_included_display_ids 排除；reason 写明“保留用于确认，暂不重复计价”。互斥主体工艺不得按本条处理，必须按规则 2 拆成不同方案。
-13. reason 与结构化结果必须一致。如果 reason 明确说某个 display 重复、被覆盖、不应计价、暂不计价或仅保留提醒，该 display 不得出现在 amount_included_display_ids 中。
+字段含义：
+
+- included_display_ids：
+  该方案实际需要向用户展示的清单项。
+
+- amount_included_display_ids：
+  included_display_ids 中实际参与该方案金额汇总的清单项。
+  它必须是 included_display_ids 的子集。
+
+- has_amount_basis：
+  这是上游工程量与价格判断后的既定结果。
+  true 表示当前已有可计算数量和价格依据，可以进入 amount；
+  false 表示当前缺少可靠数量或价格依据，只能展示，不能进入 amount。
+  不得仅根据单位是“项”“m²”“m³”等重新判断。
+  “项”等单位如果已通过历史工程包中与核心工程量的稳定关系完成估算，也可能为 true。
+
+组织规则：
+
+1. 多个互斥主体工艺必须拆成不同方案。
+   例如涂膜防水和卷材防水不得同时出现在同一个方案的 included_display_ids 中。
+
+2. 互斥主体工艺只能出现在各自对应方案中，
+   不得为了覆盖全部输入，把其他方案的主体工艺作为“展示但不计价”塞进本方案。
+
+3. 共用前置工序可以出现在多个方案中。
+
+4. 垃圾外运、措施项目或疑似与其他项目范围重叠的清单，
+   可以保留在最合适方案的 included_display_ids 中；
+   但存在重复计价风险，或 has_amount_basis=false 时，
+   不得进入 amount_included_display_ids。
+
+5. 所有输入 display 只要求被“所有方案的 included_display_ids 并集”覆盖至少一次，
+   不要求每个方案都包含全部 display。
+
+6. scenario 不重新执行工程量估算、价格判断或全局去重。
+   只根据已有输入组织方案。
+
+7. 最多输出 3 个方案。
+   不要把垃圾清运、运距等小口径差异单独拆成方案。
+
+8. reason 必须与 included_display_ids 和 amount_included_display_ids 一致。
+
+输出前检查：
+
+- 每个互斥主体工艺只出现在其对应方案；
+- amount 是 included 的子集；
+- amount 中所有项目 has_amount_basis=true；
+- 所有输入 display 的并集均被覆盖；
+- 不存在 included 和 amount 都完全相同的重复方案。
 
 只输出一个 JSON object：
+
 {{
-    "scenarios": [
+  "scenarios": [
     {{
       "scenario_name": "方案A",
-      "included_display_ids": ["D001", "D002", "D004"],
-      "amount_included_display_ids": ["D001", "D002"],
-      "reason": "采用一种主体工艺并保留必要前置项，重叠范围不重复计价"
+      "included_display_ids": ["D006", "D001", "D035", "D033"],
+      "amount_included_display_ids": ["D006", "D001", "D035"],
+      "reason": "采用涂膜防水，垃圾外运保留展示但不重复计价"
     }}
   ]
 }}
@@ -4049,7 +4086,7 @@ def parse_estimate_scenario_result(
     bill_map = {cell_text(row.get("display_id")): row for _index, row in suggested_bill.iterrows()}
     scenarios: list[EstimateScenario] = []
     covered_ids: set[str] = set()
-    seen_compositions: set[tuple[str, ...]] = set()
+    seen_compositions: set[tuple[tuple[str, ...], tuple[str, ...]]] = set()
     for raw_scenario in raw_scenarios:
         if not isinstance(raw_scenario, dict):
             continue
@@ -4071,7 +4108,10 @@ def parse_estimate_scenario_result(
             for display_id in amount_ids
             if cell_text(bill_map.get(display_id, pd.Series(dtype=object)).get("是否计入参考金额区间")) == "是"
         ]
-        composition = tuple(sorted(included_ids))
+        composition = (
+            tuple(sorted(included_ids)),
+            tuple(sorted(amount_ids)),
+        )
         if composition in seen_compositions:
             append_warning(warnings, "duplicate_estimate_scenarios")
             continue
