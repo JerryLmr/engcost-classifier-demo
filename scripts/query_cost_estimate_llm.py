@@ -156,6 +156,7 @@ CANDIDATE_DISPLAY_GROUP_COLUMNS = [
     "family_count",
     "family_ids",
     "historical_support_ratio",
+    "support_rank",
     "historical_item_row_count",
     "historical_package_count",
     "top_family_examples",
@@ -185,6 +186,7 @@ DISPLAY_SELECTION_TRACE_COLUMNS = [
     "family_count",
     "family_ids",
     "historical_support_ratio",
+    "support_rank",
     "historical_item_row_count",
     "historical_package_count",
     "direct_item_similarity_max",
@@ -1266,6 +1268,13 @@ def attach_display_support_ratios(
     output["historical_item_row_count"] = item_counts
     output["historical_package_count"] = package_counts
     output["direct_item_similarity_max"] = direct_item_similarity_values
+    ranked = output.sort_values(
+        ["historical_support_ratio", "historical_package_count", "historical_item_row_count", "display_id"],
+        ascending=[False, False, False, True],
+        kind="mergesort",
+    )
+    ranks = pd.Series(range(1, len(ranked) + 1), index=ranked.index)
+    output["support_rank"] = ranks.reindex(output.index).astype(int)
     return output[CANDIDATE_DISPLAY_GROUP_COLUMNS].reset_index(drop=True)
 
 
@@ -1404,6 +1413,7 @@ def display_selection_records(candidate_displays: pd.DataFrame, limit: int | Non
                 "name": truncate_text(row.get("display_name"), 40),
                 "unit": cell_text(row.get("unit")),
                 "historical_support_ratio": round(float(row.get("historical_support_ratio") or 0.0), 3),
+                "support_rank": int(row.get("support_rank") or 0),
                 "examples": examples,
             }
         )
@@ -1455,6 +1465,19 @@ historical_support_ratio 表示该工作项获得的相关历史工程证据支�
 判断时可以比较不同候选的 historical_support_ratio，
 但不能只按比例机械选择，还应结合工作项名称、做法示例及其与用户需求的实际关系。
 
+【support_rank】
+
+support_rank 表示该工作项按 historical_support_ratio
+在本次全部候选 display 中的排名，1 表示历史支持最强。
+
+当某个工作项的 historical_support_ratio 绝对值不高，
+但 support_rank 较靠前时，仍说明它相对于本次其他候选
+具有较强的历史工程支持。
+
+support_rank 只表示相对支持强度，
+仍需结合用户需求、工作项名称、做法示例、
+施工关系、替代关系和现场条件综合判断。
+
 请综合判断：
 
 1. 用户明确描述的维修对象、问题、材料、规格和工程量；
@@ -1474,24 +1497,18 @@ historical_support_ratio 表示该工作项获得的相关历史工程证据支�
 1. 只能选择 candidate_displays 中存在的 display_id。
 2. 同一 display_id 最多选择一次。
 3. 不设置固定选择数量。
-4. 不得为了凑数量选择无关工作项。
-5. 不得创造候选中不存在的工作项。
-6. 不得仅凭一般施工常识补充缺乏候选证据的工作项。
-7. 不得仅因为现场条件尚未明确，就自动排除一个与当前工程有较强关系的候选。
-8. 如果某个工作项是否实施依赖现场条件，可以选择，但 selection_reason 必须说明需要确认的条件。
-9. 对实质重复、相互包含或通常互为替代的 display，不要同时选择，除非它们确实代表可以独立计价且同时实施的不同工作内容。
-10. 用户已明确材料、设备或工艺时，不应选择与其明显冲突的替代工作项。
-11. 不输出价格、工程量，也不自行改写清单名称。
+4. 不得仅因为现场条件尚未明确，就自动排除一个与当前工程有较强关系的候选。
+5. 如果某个工作项是否实施依赖现场条件，可以选择，但 selection_reason 必须说明需要确认的条件。
+6. 对于 historical_support_ratio 排名靠前，且与已选主要工作项存在清楚、合理施工关系或实施关系的候选，即使其是否实施依赖现场条件、原有构造、楼层高度、运输条件、施工组织、作业方式或实施方案，也不要仅因为这些条件尚未明确而直接排除。
+7. 可以将上述候选条件性选入建议清单，并在 selection_reason 中说明它与当前主要工作项的关系，以及是否实施需要确认的具体条件。
+8. 对实质重复、相互包含或通常互为替代的 display，不要同时选择，除非它们确实代表可以独立计价且同时实施的不同工作内容。
 
 【selection_reason】
 
 每个已选 display 的 selection_reason 必须说明：
 
 1. 它为什么与用户需求相关；
-2. 它与用户明确需求或其他拟选工作项之间有什么关系；
-3. 如果是否实施依赖现场条件，需要确认什么条件。
-
-不要只写“历史中常见”“与需求相关”等空泛理由。
+2. 如果是否实施依赖现场条件，需要确认什么条件。
 
 【输出 JSON】
 
@@ -1526,6 +1543,7 @@ def build_display_selection_trace_frame(displays_for_llm: pd.DataFrame) -> pd.Da
                 "family_count": row.get("family_count", ""),
                 "family_ids": cell_text(row.get("family_ids")),
                 "historical_support_ratio": row.get("historical_support_ratio", ""),
+                "support_rank": row.get("support_rank", ""),
                 "historical_item_row_count": row.get("historical_item_row_count", ""),
                 "historical_package_count": row.get("historical_package_count", ""),
                 "direct_item_similarity_max": row.get("direct_item_similarity_max", ""),
