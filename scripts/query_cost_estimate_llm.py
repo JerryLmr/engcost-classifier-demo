@@ -22,7 +22,6 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from classifier.llm_client import LLMServiceError, check_lmstudio_service, request_llm_json, request_llm_json_with_usage  # noqa: E402
-from services.standard_classifier import classify_project_standard  # noqa: E402
 
 
 DEFAULT_PACKAGE_WEIGHT_TEMPERATURE = 0.10
@@ -47,23 +46,23 @@ CANDIDATE_FAMILY_COLUMNS = [
     "representative_project_description",
     "unit",
     "unit_normalized",
-    "历史样本数",
-    "来源工程包数",
-    "历史工程量最低值",
-    "历史工程量中位数",
-    "历史工程量最高值",
-    "历史综合单价最低值",
-    "历史综合单价中位数",
-    "历史综合单价最高值",
-    "历史合价最低值",
-    "历史合价中位数",
-    "历史合价最高值",
-    "历史人工单价最低值",
-    "历史人工单价中位数",
-    "历史人工单价最高值",
-    "历史机械单价最低值",
-    "历史机械单价中位数",
-    "历史机械单价最高值",
+    "本次召回样本数",
+    "本次召回工程包数",
+    "本次召回工程量最低值",
+    "本次召回工程量中位数",
+    "本次召回工程量最高值",
+    "本次召回综合单价最低值",
+    "本次召回综合单价中位数",
+    "本次召回综合单价最高值",
+    "本次召回合价最低值",
+    "本次召回合价中位数",
+    "本次召回合价最高值",
+    "本次召回人工费单价最低值",
+    "本次召回人工费单价中位数",
+    "本次召回人工费单价最高值",
+    "本次召回机械费单价最低值",
+    "本次召回机械费单价中位数",
+    "本次召回机械费单价最高值",
     "package_query_similarity最大值",
     "item_query_similarity最大值",
     "source_refs",
@@ -117,10 +116,10 @@ SUGGESTED_BILL_COLUMNS = [
     "价格证据family",
     "价格证据样本数",
     "价格证据说明",
-    "其他历史做法",
-    "历史family数量",
-    "默认family历史样本数",
-    "默认family来源工程包数",
+    "其他参考做法",
+    "本次召回family数量",
+    "默认family本次召回样本数",
+    "默认family本次召回工程包数",
     "工程量来源",
     "建议工程量最低值",
     "建议工程量中位数",
@@ -157,10 +156,10 @@ CANDIDATE_DISPLAY_GROUP_COLUMNS = [
     "unit",
     "family_count",
     "family_ids",
-    "historical_support_ratio",
+    "retrieval_package_support_ratio",
     "support_rank",
-    "historical_item_row_count",
-    "historical_package_count",
+    "retrieval_item_count",
+    "retrieval_package_count",
     "top_family_examples",
     "direct_item_similarity_max",
 ]
@@ -174,8 +173,8 @@ DISPLAY_GROUP_FAMILY_COLUMNS = [
     "representative_cost_item_name",
     "representative_project_description",
     "unit",
-    "历史样本数",
-    "来源工程包数",
+    "本次召回样本数",
+    "本次召回工程包数",
     "item_query_similarity最大值",
 ]
 
@@ -187,27 +186,11 @@ DISPLAY_SELECTION_TRACE_COLUMNS = [
     "unit",
     "family_count",
     "family_ids",
-    "historical_support_ratio",
+    "retrieval_package_support_ratio",
     "support_rank",
-    "historical_item_row_count",
-    "historical_package_count",
+    "retrieval_item_count",
+    "retrieval_package_count",
     "direct_item_similarity_max",
-    "candidate_source",
-    "selected_by_llm",
-    "selection_reason",
-    "selection_source",
-]
-
-FAMILY_SELECTION_TRACE_COLUMNS = [
-    "selection_rank",
-    "family_id",
-    "fine_signature",
-    "representative_cost_item_name",
-    "representative_project_description",
-    "unit",
-    "历史样本数",
-    "来源工程包数",
-    "item_query_similarity最大值",
     "candidate_source",
     "selected_by_llm",
     "selection_reason",
@@ -222,8 +205,8 @@ DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS = [
     "representative_cost_item_name",
     "representative_project_description",
     "display_project_description",
-    "历史样本数",
-    "来源工程包数",
+    "本次召回样本数",
+    "本次召回工程包数",
     "item_query_similarity最大值",
     "unit_price_min",
     "unit_price_median",
@@ -248,7 +231,7 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "价格证据样本数",
     "价格证据说明",
     "默认参考做法",
-    "其他历史做法",
+    "其他参考做法",
     "工程量来源",
     "建议工程量最低值",
     "建议工程量中位数",
@@ -303,7 +286,7 @@ LLM_TRACE_COLUMNS = [
 
 ALLOWED_QUANTITY_SOURCES = {
     "用户明确给定",
-    "历史样本估算",
+    "本次召回样本估算",
     "需现场确认",
 }
 
@@ -328,19 +311,6 @@ class QueryRewrite:
 
 
 @dataclass(frozen=True)
-class QueryCatalog:
-    catalog_id: str
-    一级分类: str
-    二级分类: str
-    维修状态: str
-    标准对象: str
-    confidence: float | None
-    raw_result: dict[str, Any]
-    success: bool
-    notes: list[str]
-
-
-@dataclass(frozen=True)
 class EstimateScenario:
     scenario_id: str
     scenario_name: str
@@ -352,7 +322,6 @@ class EstimateScenario:
 @dataclass(frozen=True)
 class QueryResult:
     rewrite: QueryRewrite
-    query_catalog: QueryCatalog
     estimate_summary: pd.DataFrame
     suggested_bill: pd.DataFrame
     estimate_scenarios: pd.DataFrame
@@ -390,8 +359,8 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="同一 cache_subject 最多保留的相似历史工程包数量，默认 1；设为 0 表示不限制",
     )
-    parser.add_argument("--family-selection-limit", type=int, default=50, help="发送给 display_selection LLM 的 display 上限，默认 50")
-    parser.add_argument("--family-exploration-limit", type=int, default=5, help="display_selection 等距探索候选上限，默认 5")
+    parser.add_argument("--display-selection-limit", type=int, default=50, help="发送给 display_selection LLM 的 display 上限，默认 50")
+    parser.add_argument("--display-exploration-limit", type=int, default=5, help="display_selection 等距探索候选上限，默认 5")
     parser.add_argument(
         "--package-weight-temperature",
         type=float,
@@ -713,78 +682,6 @@ def query_rewrite_for_embedding(query: str) -> tuple[QueryRewrite, dict[str, Any
     )
 
 
-def empty_query_catalog(raw_query: str, note: str, raw_result: dict[str, Any] | None = None) -> QueryCatalog:
-    return QueryCatalog(
-        catalog_id="",
-        一级分类="",
-        二级分类="",
-        维修状态="",
-        标准对象="",
-        confidence=None,
-        raw_result=raw_result or {},
-        success=False,
-        notes=[note],
-    )
-
-
-def classify_query_catalog(
-    raw_query: str,
-    project_package_query_text: str,
-    item_query_text: str,
-) -> tuple[QueryCatalog, dict[str, Any]]:
-    classify_subject = project_package_query_text or raw_query
-    item_summary = [item_query_text] if item_query_text else None
-    input_summary = json_text(
-        {
-            "consultation_project_name": raw_query,
-            "classify_subject": classify_subject,
-            "item_summary": item_summary or [],
-        }
-    )
-    try:
-        result = classify_project_standard(
-            classify_subject,
-            consultation_project_name=raw_query,
-            item_summary=item_summary,
-        )
-    except Exception as exc:  # noqa: BLE001
-        catalog = empty_query_catalog(raw_query, f"标准目录分类异常，后续仅保留原始分类追溯: {exc}")
-        return catalog, trace_row(
-            "query_catalog_classification",
-            "复用标准目录分类器选择主目录",
-            False,
-            error=str(exc),
-            prompt=input_summary,
-            max_tokens="standard_classifier",
-            input_summary=input_summary,
-        )
-
-    success = cell_text(result.get("catalog_id")) and cell_text(result.get("catalog_id")) != "OUT_OF_SCOPE"
-    notes: list[str] = []
-    if not success:
-        notes.append("标准目录分类未命中有效主目录，后续仅保留原始分类追溯")
-    catalog = QueryCatalog(
-        catalog_id=cell_text(result.get("catalog_id")),
-        一级分类=cell_text(result.get("category") or result.get("一级分类")),
-        二级分类=cell_text(result.get("item") or result.get("二级分类")),
-        维修状态=cell_text(result.get("repair_status") or result.get("维修状态")),
-        标准对象=cell_text(result.get("standard_group") or result.get("标准对象")),
-        confidence=None,
-        raw_result=result,
-        success=bool(success),
-        notes=notes,
-    )
-    return catalog, trace_row(
-        "query_catalog_classification",
-        "复用标准目录分类器选择主目录",
-        bool(success),
-        error="；".join(notes),
-        prompt=input_summary,
-        max_tokens="standard_classifier",
-        input_summary=input_summary,
-    )
-
-
 def top_score_indices(scores: np.ndarray, top_k: int) -> np.ndarray:
     if top_k <= 0 or scores.size == 0:
         return np.array([], dtype=int)
@@ -947,12 +844,11 @@ def build_package_evidence_weights(
     )
 
 
-def candidate_pool(
+def build_retrieved_evidence_items(
     samples: pd.DataFrame,
     matched_project_packages: pd.DataFrame,
     direct_item_hits: pd.DataFrame,
     item_query_similarities: np.ndarray,
-    query_catalog: QueryCatalog,
     package_query_similarity_by_id: dict[str, float] | None = None,
     warnings: list[str] | None = None,
 ) -> pd.DataFrame:
@@ -1066,23 +962,23 @@ def build_candidate_families(candidates: pd.DataFrame) -> pd.DataFrame:
                 "representative_project_description": cell_text(representative.get("project_description")),
                 "unit": cell_text(representative.get("unit")),
                 "unit_normalized": cell_text(representative.get("unit_normalized")) or cell_text(representative.get("unit")),
-                "历史样本数": int(len(group)),
-                "来源工程包数": source_package_count(group),
-                "历史工程量最低值": quantity_min,
-                "历史工程量中位数": quantity_median,
-                "历史工程量最高值": quantity_max,
-                "历史综合单价最低值": unit_price_min,
-                "历史综合单价中位数": unit_price_median,
-                "历史综合单价最高值": unit_price_max,
-                "历史合价最低值": total_price_min,
-                "历史合价中位数": total_price_median,
-                "历史合价最高值": total_price_max,
-                "历史人工单价最低值": labor_min,
-                "历史人工单价中位数": labor_median,
-                "历史人工单价最高值": labor_max,
-                "历史机械单价最低值": machinery_min,
-                "历史机械单价中位数": machinery_median,
-                "历史机械单价最高值": machinery_max,
+                "本次召回样本数": int(len(group)),
+                "本次召回工程包数": source_package_count(group),
+                "本次召回工程量最低值": quantity_min,
+                "本次召回工程量中位数": quantity_median,
+                "本次召回工程量最高值": quantity_max,
+                "本次召回综合单价最低值": unit_price_min,
+                "本次召回综合单价中位数": unit_price_median,
+                "本次召回综合单价最高值": unit_price_max,
+                "本次召回合价最低值": total_price_min,
+                "本次召回合价中位数": total_price_median,
+                "本次召回合价最高值": total_price_max,
+                "本次召回人工费单价最低值": labor_min,
+                "本次召回人工费单价中位数": labor_median,
+                "本次召回人工费单价最高值": labor_max,
+                "本次召回机械费单价最低值": machinery_min,
+                "本次召回机械费单价中位数": machinery_median,
+                "本次召回机械费单价最高值": machinery_max,
                 "package_query_similarity最大值": max_numeric_or_zero(group, "package_query_similarity"),
                 "item_query_similarity最大值": max_numeric_or_zero(group, "item_query_similarity"),
                 "source_refs": ordered_refs(group.get("source_ref", pd.Series(dtype=object)), limit=10),
@@ -1090,7 +986,7 @@ def build_candidate_families(candidates: pd.DataFrame) -> pd.DataFrame:
         )
 
     output = pd.DataFrame(rows)
-    output = output.sort_values(["item_query_similarity最大值", "历史样本数", "来源工程包数"], ascending=[False, False, False])
+    output = output.sort_values(["item_query_similarity最大值", "本次召回样本数", "本次召回工程包数"], ascending=[False, False, False])
     output.insert(0, "family_id", [f"F{index:03d}" for index in range(1, len(output) + 1)])
     for column in CANDIDATE_FAMILY_COLUMNS:
         if column not in output.columns:
@@ -1098,7 +994,7 @@ def build_candidate_families(candidates: pd.DataFrame) -> pd.DataFrame:
     return output[CANDIDATE_FAMILY_COLUMNS].reset_index(drop=True)
 
 
-def build_evidence_items(candidates: pd.DataFrame, candidate_families: pd.DataFrame) -> pd.DataFrame:
+def attach_family_ids_to_evidence_items(candidates: pd.DataFrame, candidate_families: pd.DataFrame) -> pd.DataFrame:
     if candidates.empty:
         return pd.DataFrame(columns=EVIDENCE_ITEM_COLUMNS)
     signature_to_family_id = {
@@ -1160,7 +1056,7 @@ def top_family_examples(group: pd.DataFrame, limit: int = 3) -> list[dict[str, A
     if group.empty:
         return []
     ordered = group.sort_values(
-        ["item_query_similarity最大值", "历史样本数", "来源工程包数"],
+        ["item_query_similarity最大值", "本次召回样本数", "本次召回工程包数"],
         ascending=[False, False, False],
     )
     rows: list[dict[str, Any]] = []
@@ -1177,8 +1073,8 @@ def top_family_examples(group: pd.DataFrame, limit: int = 3) -> list[dict[str, A
             {
                 "family_id": cell_text(row.get("family_id")),
                 "项目特征简述": truncate_text(normalize_display_description(row.get("representative_project_description")), 60),
-                "samples": int(row.get("历史样本数") or 0),
-                "packages": int(row.get("来源工程包数") or 0),
+                "samples": int(row.get("本次召回样本数") or 0),
+                "packages": int(row.get("本次召回工程包数") or 0),
             }
         )
         if len(rows) >= limit:
@@ -1206,7 +1102,7 @@ def build_candidate_display_groups(
     display_id_by_key: dict[str, str] = {}
     raw_groups: list[tuple[dict[str, Any], pd.DataFrame]] = []
     for display_key, group in families.groupby("_display_key", sort=False, dropna=False):
-        group = group.sort_values(["item_query_similarity最大值", "历史样本数", "来源工程包数"], ascending=[False, False, False])
+        group = group.sort_values(["item_query_similarity最大值", "本次召回样本数", "本次召回工程包数"], ascending=[False, False, False])
         representative = group.iloc[0]
         family_ids = [cell_text(value) for value in group["family_id"].tolist() if cell_text(value)]
         evidence = evidence_items[evidence_items.get("family_id", pd.Series(dtype=object)).map(cell_text).isin(family_ids)].copy()
@@ -1223,9 +1119,9 @@ def build_candidate_display_groups(
                     "unit": display_unit_for_family(representative),
                     "family_count": int(len(group)),
                     "family_ids": ",".join(family_ids),
-                    "historical_support_ratio": 0.0,
-                    "historical_item_row_count": 0,
-                    "historical_package_count": int(package_values.nunique()),
+                    "retrieval_package_support_ratio": 0.0,
+                    "retrieval_item_count": 0,
+                    "retrieval_package_count": int(package_values.nunique()),
                     "top_family_examples": json_text(top_family_examples(group)),
                     "direct_item_similarity_max": max_numeric_or_zero(group, "item_query_similarity最大值"),
                 },
@@ -1236,7 +1132,7 @@ def build_candidate_display_groups(
     raw_groups.sort(
         key=lambda item: (
             -float(item[0].get("direct_item_similarity_max") or 0.0),
-            -int(item[0].get("historical_package_count") or 0),
+            -int(item[0].get("retrieval_package_count") or 0),
             cell_text(item[0].get("display_name")),
         )
     )
@@ -1261,8 +1157,8 @@ def build_candidate_display_groups(
                     "representative_cost_item_name": cell_text(family.get("representative_cost_item_name")),
                     "representative_project_description": cell_text(family.get("representative_project_description")),
                     "unit": display_unit_for_family(family),
-                    "历史样本数": family.get("历史样本数", ""),
-                    "来源工程包数": family.get("来源工程包数", ""),
+                    "本次召回样本数": family.get("本次召回样本数", ""),
+                    "本次召回工程包数": family.get("本次召回工程包数", ""),
                     "item_query_similarity最大值": family.get("item_query_similarity最大值", ""),
                 }
             )
@@ -1330,12 +1226,12 @@ def attach_display_support_ratios(
         package_counts.append(int(len(package_ids)))
         direct_item_similarity_values.append(max_numeric_or_zero(evidence, "item_query_similarity"))
 
-    output["historical_support_ratio"] = support_values
-    output["historical_item_row_count"] = item_counts
-    output["historical_package_count"] = package_counts
+    output["retrieval_package_support_ratio"] = support_values
+    output["retrieval_item_count"] = item_counts
+    output["retrieval_package_count"] = package_counts
     output["direct_item_similarity_max"] = direct_item_similarity_values
     ranked = output.sort_values(
-        ["historical_support_ratio", "historical_package_count", "historical_item_row_count", "display_id"],
+        ["retrieval_package_support_ratio", "retrieval_package_count", "retrieval_item_count", "display_id"],
         ascending=[False, False, False, True],
         kind="mergesort",
     )
@@ -1377,23 +1273,23 @@ def select_displays_for_llm(
     ranking_limit = max(display_selection_limit - min(exploration_limit, display_selection_limit), 0)
     rankings = [
         (
-            "historical_support_ratio",
+            "retrieval_package_support_ratio",
             candidate_display_groups.sort_values(
-                ["historical_support_ratio", "historical_package_count", "historical_item_row_count"],
+                ["retrieval_package_support_ratio", "retrieval_package_count", "retrieval_item_count"],
                 ascending=[False, False, False],
             ),
         ),
         (
             "direct_item_similarity",
             candidate_display_groups.sort_values(
-                ["direct_item_similarity_max", "historical_support_ratio", "historical_item_row_count"],
+                ["direct_item_similarity_max", "retrieval_package_support_ratio", "retrieval_item_count"],
                 ascending=[False, False, False],
             ),
         ),
         (
-            "historical_package_count",
+            "retrieval_package_count",
             candidate_display_groups.sort_values(
-                ["historical_package_count", "historical_item_row_count", "historical_support_ratio"],
+                ["retrieval_package_count", "retrieval_item_count", "retrieval_package_support_ratio"],
                 ascending=[False, False, False],
             ),
         ),
@@ -1478,7 +1374,7 @@ def display_selection_records(candidate_displays: pd.DataFrame, limit: int | Non
                 "id": cell_text(row.get("display_id")),
                 "name": truncate_text(row.get("display_name"), 40),
                 "unit": cell_text(row.get("unit")),
-                "historical_support_ratio": round(float(row.get("historical_support_ratio") or 0.0), 3),
+                "retrieval_package_support_ratio": round(float(row.get("retrieval_package_support_ratio") or 0.0), 3),
                 "support_rank": int(row.get("support_rank") or 0),
                 "examples": examples,
             }
@@ -1488,14 +1384,12 @@ def display_selection_records(candidate_displays: pd.DataFrame, limit: int | Non
 
 def build_display_selection_prompt(
     rewrite: QueryRewrite,
-    query_catalog: QueryCatalog,
     candidate_displays: pd.DataFrame,
 ) -> tuple[str, list[dict[str, Any]]]:
     records = display_selection_records(candidate_displays)
     payload = {
         "raw_query": rewrite.raw_query,
         "parsed_query": parsed_query_dict(rewrite),
-        "query_catalog": query_catalog_dict(query_catalog),
         "candidate_displays": records,
     }
     prompt = f"""
@@ -1503,42 +1397,42 @@ def build_display_selection_prompt(
 
 【任务】
 
-根据用户需求和历史候选证据，从 candidate_displays 中选择应进入本次建议清单的工作项。
+根据用户需求和本次召回候选证据，从 candidate_displays 中选择应进入本次建议清单的工作项。
 
-每个 display 代表一个清单工作项，内部可能包含多个不同历史做法。
+每个 display 代表一个清单工作项，内部可能包含多个不同参考做法。
 本阶段只判断哪些 display 应进入建议清单：
 
 - 不选择具体 family；
 - 不判断价格和工程量；
 - 不撰写最终方案总结。
 
-【historical_support_ratio】
+【retrieval_package_support_ratio】
 
-historical_support_ratio 表示该工作项获得的相关历史工程证据支持比例。
+retrieval_package_support_ratio 表示该工作项获得的本次召回工程包支持比例。
 
 计算方法：
-1. 对本次候选涉及的历史工程包，按照其与用户需求的整体语义相似度计算并归一化权重；
+1. 对本次召回涉及的工程包，按照其与用户需求的整体语义相似度计算并归一化权重；
 2. 将包含当前工作项的工程包权重相加；
 3. 所得结果范围为 0 到 1。
 
 例如 0.62 表示：
-在本次查询相关的历史工程证据中，约 62% 的相关性权重支持该工作项。
+在本次召回工程包证据中，约 62% 的相关性权重支持该工作项。
 
 该比例已经同时考虑：
-- 该工作项出现于哪些历史工程；
-- 这些历史工程与当前需求有多相似。
+- 该工作项出现于哪些本次召回工程包；
+- 这些工程包与当前需求有多相似。
 
-判断时可以比较不同候选的 historical_support_ratio，
+判断时可以比较不同候选的 retrieval_package_support_ratio，
 但不能只按比例机械选择，还应结合工作项名称、做法示例及其与用户需求的实际关系。
 
 【support_rank】
 
-support_rank 表示该工作项按 historical_support_ratio
-在本次全部候选 display 中的排名，1 表示历史支持最强。
+support_rank 表示该工作项按 retrieval_package_support_ratio
+在本次全部候选 display 中的排名，1 表示本次召回工程包支持最高。
 
-当某个工作项的 historical_support_ratio 绝对值不高，
+当某个工作项的 retrieval_package_support_ratio 绝对值不高，
 但 support_rank 较靠前时，仍说明它相对于本次其他候选
-具有较强的历史工程支持。
+具有较强的本次召回工程包支持。
 
 support_rank 只表示相对支持强度，
 仍需结合用户需求、工作项名称、做法示例、
@@ -1548,14 +1442,14 @@ support_rank 只表示相对支持强度，
 
 1. 用户明确描述的维修对象、问题、材料、规格和工程量；
 2. display 与用户维修目标的直接相关性；
-3. display 在相似历史工程中的出现情况；
+3. display 在本次召回相似工程包中的出现情况；
 4. display 与其他拟选工作项之间是否存在合理的施工或配套关系；
 5. 该工作项是否可能因现场条件、原有构造、施工组织或实施方案而需要。
 
 用户通常只描述维修目标，不会完整列出实际工程中的全部清单工作项。
 因此，不要只选择与用户原文措辞最相似的项目。
 
-但历史工程中出现过，也不代表当前工程一定需要。
+但本次召回工程包中出现过，也不代表当前工程一定需要。
 只有当候选与本次需求存在清楚、可解释的关系时，才应选择。
 
 【选择规则】
@@ -1565,7 +1459,7 @@ support_rank 只表示相对支持强度，
 3. 不设置固定选择数量。
 4. 不得仅因为现场条件尚未明确，就自动排除一个与当前工程有较强关系的候选。
 5. 如果某个工作项是否实施依赖现场条件，可以选择，但 selection_reason 必须说明需要确认的条件。
-6. 对于 historical_support_ratio 排名靠前，且与已选主要工作项存在清楚、合理施工关系或实施关系的候选，即使其是否实施依赖现场条件、原有构造、楼层高度、运输条件、施工组织、作业方式或实施方案，也不要仅因为这些条件尚未明确而直接排除。
+6. 对于 retrieval_package_support_ratio 排名靠前，且与已选主要工作项存在清楚、合理施工关系或实施关系的候选，即使其是否实施依赖现场条件、原有构造、楼层高度、运输条件、施工组织、作业方式或实施方案，也不要仅因为这些条件尚未明确而直接排除。
 7. 可以将上述候选条件性选入建议清单，并在 selection_reason 中说明它与当前主要工作项的关系，以及是否实施需要确认的具体条件。
 8. 对实质重复、相互包含或通常互为替代的 display，不要同时选择，除非它们确实代表可以独立计价且同时实施的不同工作内容。
 
@@ -1608,10 +1502,10 @@ def build_display_selection_trace_frame(displays_for_llm: pd.DataFrame) -> pd.Da
                 "unit": cell_text(row.get("unit")),
                 "family_count": row.get("family_count", ""),
                 "family_ids": cell_text(row.get("family_ids")),
-                "historical_support_ratio": row.get("historical_support_ratio", ""),
+                "retrieval_package_support_ratio": row.get("retrieval_package_support_ratio", ""),
                 "support_rank": row.get("support_rank", ""),
-                "historical_item_row_count": row.get("historical_item_row_count", ""),
-                "historical_package_count": row.get("historical_package_count", ""),
+                "retrieval_item_count": row.get("retrieval_item_count", ""),
+                "retrieval_package_count": row.get("retrieval_package_count", ""),
                 "direct_item_similarity_max": row.get("direct_item_similarity_max", ""),
                 "candidate_source": cell_text(row.get("candidate_source")),
                 "selected_by_llm": "否",
@@ -1689,7 +1583,6 @@ def parse_display_selection_result(
 
 def generate_display_selection(
     rewrite: QueryRewrite,
-    query_catalog: QueryCatalog,
     candidate_display_groups: pd.DataFrame,
     display_selection_limit: int = 50,
     exploration_limit: int = 5,
@@ -1701,7 +1594,7 @@ def generate_display_selection(
         exploration_limit=exploration_limit,
     )
     trace_frame = build_display_selection_trace_frame(displays_for_llm)
-    prompt, records = build_display_selection_prompt(rewrite, query_catalog, displays_for_llm)
+    prompt, records = build_display_selection_prompt(rewrite, displays_for_llm)
     allowed_display_ids = {cell_text(row.get("id")) for row in records}
     candidate_ids = [cell_text(row.get("id")) for row in records if cell_text(row.get("id"))]
     source_counts = display_selection_candidate_source_counts(trace_frame)
@@ -1778,216 +1671,6 @@ def generate_display_selection(
         return pd.DataFrame(columns=["display_id", "selection_reason"]), False, True, str(exc), prompt, trace, meta, trace_frame
 
 
-def select_families_for_llm(
-    candidate_families: pd.DataFrame,
-    family_selection_limit: int = 50,
-    exploration_limit: int = 5,
-) -> pd.DataFrame:
-    if candidate_families.empty or family_selection_limit <= 0:
-        return candidate_families.head(0).copy()
-
-    family_selection_limit = max(int(family_selection_limit), 0)
-    exploration_limit = max(int(exploration_limit), 0)
-    ranking_limit = max(family_selection_limit - min(exploration_limit, family_selection_limit), 0)
-
-    item_ranked = candidate_families.sort_values(
-        ["item_query_similarity最大值", "历史样本数", "来源工程包数"],
-        ascending=[False, False, False],
-    )
-    source_ranked = candidate_families.sort_values(
-        ["来源工程包数", "历史样本数", "item_query_similarity最大值"],
-        ascending=[False, False, False],
-    )
-    package_ranked = candidate_families.sort_values(
-        ["package_query_similarity最大值", "历史样本数", "来源工程包数"],
-        ascending=[False, False, False],
-    )
-    rankings = [
-        ("item_query_similarity", item_ranked),
-        ("source_package_count", source_ranked),
-        ("package_query_similarity", package_ranked),
-    ]
-    family_rows = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
-
-    selected_ids: list[str] = []
-    selected_set: set[str] = set()
-    selected_sources: dict[str, list[str]] = {}
-    positions = {name: 0 for name, _frame in rankings}
-
-    while len(selected_ids) < ranking_limit:
-        advanced = False
-        for source_name, ranked in rankings:
-            if len(selected_ids) >= ranking_limit:
-                break
-            while positions[source_name] < len(ranked):
-                advanced = True
-                row = ranked.iloc[positions[source_name]]
-                positions[source_name] += 1
-                family_id = cell_text(row.get("family_id"))
-                if not family_id:
-                    continue
-                if family_id in selected_set:
-                    sources = selected_sources.setdefault(family_id, [])
-                    if source_name not in sources:
-                        sources.append(source_name)
-                    continue
-                selected_set.add(family_id)
-                selected_ids.append(family_id)
-                selected_sources[family_id] = [source_name]
-                break
-        if not advanced:
-            break
-
-    remaining = candidate_families[~candidate_families["family_id"].map(cell_text).isin(selected_set)].reset_index(drop=True)
-    exploration_count = min(exploration_limit, family_selection_limit - len(selected_ids), len(remaining))
-    if exploration_count > 0:
-        indices = np.linspace(0, len(remaining) - 1, num=exploration_count, dtype=int).tolist()
-        indices = list(dict.fromkeys(indices))
-        used_indices = set(indices)
-        for index in range(len(remaining)):
-            if len(indices) >= exploration_count:
-                break
-            if index not in used_indices:
-                indices.append(index)
-                used_indices.add(index)
-        for index in indices[:exploration_count]:
-            family_id = cell_text(remaining.iloc[index].get("family_id"))
-            if not family_id or family_id in selected_set:
-                continue
-            selected_set.add(family_id)
-            selected_ids.append(family_id)
-            selected_sources[family_id] = ["exploration"]
-
-    output = pd.DataFrame([family_rows[family_id] for family_id in selected_ids], columns=candidate_families.columns).reset_index(drop=True)
-    output.insert(0, "selection_rank", range(1, len(output) + 1))
-    output["candidate_source"] = [
-        ",".join(selected_sources.get(cell_text(row.get("family_id")), []))
-        for _index, row in output.iterrows()
-    ]
-    return output
-
-
-def family_selection_records(candidate_families: pd.DataFrame, limit: int | None = None) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    frame = candidate_families if limit is None else candidate_families.head(limit)
-    for _index, row in frame.iterrows():
-        rows.append(
-            {
-                "id": cell_text(row.get("family_id")),
-                "name": truncate_text(row.get("representative_cost_item_name"), 40),
-                "spec": truncate_text(row.get("representative_project_description"), 80),
-                "unit": cell_text(row.get("unit_normalized")) or cell_text(row.get("unit")),
-                "samples": int(row.get("历史样本数") or 0),
-                "packages": int(row.get("来源工程包数") or 0),
-                "item_query_similarity": round(float(row.get("item_query_similarity最大值") or 0.0), 4),
-            }
-        )
-    return rows
-
-
-def build_family_selection_prompt(
-    rewrite: QueryRewrite,
-    query_catalog: QueryCatalog,
-    candidate_families: pd.DataFrame,
-) -> tuple[str, list[dict[str, Any]]]:
-    records = family_selection_records(candidate_families)
-    payload = {
-        "raw_query": rewrite.raw_query,
-        "parsed_query": parsed_query_dict(rewrite),
-        "query_catalog": query_catalog_dict(query_catalog),
-        "candidate_families": records,
-    }
-    prompt = f"""
-你是物业维修工程建议清单选择器。
-
-【任务】
-
-根据用户需求，从 candidate_families 中选择应进入建议清单的历史施工做法。
-
-每个 family 代表一种历史做法。本阶段只判断哪些 family 与本次需求存在清楚、可解释的关系。
-
-【选择规则】
-
-1. 只能选择 candidate_families 中存在的 family_id，同一 family_id 最多选择一次。
-2. 不设置固定选择数量，不得为了凑数量选择无关项。
-3. 不得创造候选中不存在的项目。
-4. 用户已明确材料、设备或工艺时，不应选择与其明显冲突的替代做法。
-5. 实质相同、仅措辞不同的 family 不要重复选择；
-   存在明确施工边界差异的项目可以分别选择。
-6. 不输出价格、工程量或自行改写清单内容。
-7. 只能输出一个 JSON object，不得输出解释、Markdown 或思考过程。
-
-【输出 JSON】
-
-{{
-  "selected_families": [
-    {{
-      "family_id": "F001",
-      "selection_reason": "该施工做法与用户提出的维修对象和施工目标直接相关"
-    }}
-  ]
-}}
-
-【输入数据】
-
-{json_text(payload)}
-""".strip()
-    return prompt, records
-
-
-def build_family_selection_trace_frame(families_for_llm: pd.DataFrame) -> pd.DataFrame:
-    rows: list[dict[str, Any]] = []
-    for fallback_rank, (_index, row) in enumerate(families_for_llm.iterrows(), start=1):
-        rows.append(
-            {
-                "selection_rank": int(row.get("selection_rank") or fallback_rank),
-                "family_id": cell_text(row.get("family_id")),
-                "fine_signature": cell_text(row.get("fine_signature")),
-                "representative_cost_item_name": cell_text(row.get("representative_cost_item_name")),
-                "representative_project_description": cell_text(row.get("representative_project_description")),
-                "unit": cell_text(row.get("unit_normalized")) or cell_text(row.get("unit")),
-                "历史样本数": row.get("历史样本数", ""),
-                "来源工程包数": row.get("来源工程包数", ""),
-                "item_query_similarity最大值": row.get("item_query_similarity最大值", ""),
-                "candidate_source": cell_text(row.get("candidate_source")),
-                "selected_by_llm": "否",
-                "selection_reason": "",
-                "selection_source": "not_selected",
-            }
-        )
-    return pd.DataFrame(rows, columns=FAMILY_SELECTION_TRACE_COLUMNS)
-
-
-def apply_family_selection_trace_result(
-    trace_frame: pd.DataFrame,
-    selected: pd.DataFrame,
-    selection_source: str,
-) -> pd.DataFrame:
-    output = trace_frame.copy()
-    if output.empty or selected.empty:
-        return output
-    selected_map = {cell_text(row.get("family_id")): row for _index, row in selected.iterrows()}
-    for index, row in output.iterrows():
-        family_id = cell_text(row.get("family_id"))
-        selected_row = selected_map.get(family_id)
-        if selected_row is None:
-            continue
-        output.at[index, "selected_by_llm"] = "是" if selection_source == "llm" else "否"
-        output.at[index, "selection_reason"] = cell_text(selected_row.get("selection_reason"))
-        output.at[index, "selection_source"] = selection_source
-    return output
-
-
-def family_selection_candidate_source_counts(trace_frame: pd.DataFrame) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    if trace_frame.empty or "candidate_source" not in trace_frame.columns:
-        return counts
-    for value in trace_frame["candidate_source"].tolist():
-        for source in split_refs(value):
-            counts[source] = counts.get(source, 0) + 1
-    return counts
-
-
 def trace_id_summary(ids: list[str], limit: int = 20) -> dict[str, Any]:
     if len(ids) <= limit:
         return {"ids": ids}
@@ -2011,132 +1694,6 @@ def append_trace_warnings(trace: dict[str, Any], warnings: list[str]) -> None:
         trace["input_summary"] = f"{summary}; warnings={';'.join(warnings)}"
 
 
-def parse_family_selection_result(
-    result: dict[str, Any],
-    allowed_family_ids: set[str],
-    warnings: list[str] | None = None,
-) -> tuple[pd.DataFrame, dict[str, Any]]:
-    raw_rows = result.get("selected_families")
-    if not isinstance(raw_rows, list):
-        raise ValueError("LLM 输出缺少 selected_families list")
-
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    meta = {"invalid_family_ids": [], "duplicate_family_ids": []}
-    for item in raw_rows:
-        if not isinstance(item, dict):
-            continue
-        family_id = cell_text(item.get("family_id"))
-        if family_id not in allowed_family_ids:
-            if family_id:
-                meta["invalid_family_ids"].append(family_id)
-                append_warning(warnings, "invalid_family_ids")
-            continue
-        if family_id in seen:
-            meta["duplicate_family_ids"].append(family_id)
-            append_warning(warnings, "duplicate_family_ids")
-            continue
-        seen.add(family_id)
-        rows.append(
-            {
-                "family_id": family_id,
-                "selection_reason": cell_text(item.get("selection_reason")),
-            }
-        )
-    return pd.DataFrame(rows, columns=["family_id", "selection_reason"]), meta
-
-
-def generate_family_selection(
-    rewrite: QueryRewrite,
-    query_catalog: QueryCatalog,
-    candidate_families: pd.DataFrame,
-    family_selection_limit: int = 50,
-    exploration_limit: int = 5,
-    warnings: list[str] | None = None,
-) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any], dict[str, Any], pd.DataFrame]:
-    families_for_llm = select_families_for_llm(
-        candidate_families,
-        family_selection_limit=family_selection_limit,
-        exploration_limit=exploration_limit,
-    )
-    trace_frame = build_family_selection_trace_frame(families_for_llm)
-    prompt, records = build_family_selection_prompt(rewrite, query_catalog, families_for_llm)
-    allowed_family_ids = {cell_text(row.get("id")) for row in records}
-    candidate_ids = [cell_text(row.get("id")) for row in records if cell_text(row.get("id"))]
-    source_counts = family_selection_candidate_source_counts(trace_frame)
-    exploration_count = source_counts.get("exploration", 0)
-    max_tokens = 2048
-    try:
-        response = request_llm_json_with_usage(
-            prompt,
-            max_tokens=max_tokens,
-            system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
-        )
-        selected, meta = parse_family_selection_result(response.content, allowed_family_ids, warnings)
-        selected_ids = selected["family_id"].map(cell_text).tolist() if "family_id" in selected.columns else []
-        selected_detail = replace_nan_records(selected)
-        meta.update(
-            {
-                "candidate_ids": candidate_ids,
-                "selected_ids": selected_ids,
-                "selected_detail": selected_detail,
-                "candidate_source_counts": source_counts,
-                "exploration_count": exploration_count,
-            }
-        )
-        trace_frame = apply_family_selection_trace_result(trace_frame, selected, "llm")
-        trace = trace_row(
-            "family_selection",
-            "选择相关 fine_signature family 并判断项目角色",
-            True,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text(
-                {
-                    "families_sent": len(records),
-                    "selected": len(selected),
-                    "candidate_ids": trace_id_summary(candidate_ids),
-                    "selected_ids": trace_id_summary(selected_ids),
-                    "exploration_count": exploration_count,
-                }
-            ),
-            usage=response.usage,
-        )
-        return selected, True, False, "", prompt, trace, meta, trace_frame
-    except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-        append_warning(warnings, "family_selection_failed")
-        if not trace_frame.empty:
-            trace_frame = trace_frame.copy()
-            trace_frame["selection_source"] = "fallback"
-        meta = {
-            "invalid_family_ids": [],
-            "duplicate_family_ids": [],
-            "candidate_ids": candidate_ids,
-            "selected_ids": [],
-            "selected_detail": [],
-            "candidate_source_counts": source_counts,
-            "exploration_count": exploration_count,
-        }
-        trace = trace_row(
-            "family_selection",
-            "选择相关 fine_signature family 并判断项目角色",
-            False,
-            error=str(exc),
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text(
-                {
-                    "families_sent": len(records),
-                    "selected": 0,
-                    "candidate_ids": trace_id_summary(candidate_ids),
-                    "selected_ids": [],
-                    "exploration_count": exploration_count,
-                }
-            ),
-        )
-        return pd.DataFrame(columns=["family_id", "selection_reason"]), False, True, str(exc), prompt, trace, meta, trace_frame
-
-
 def family_selection_payload_for_display(
     display_id: str,
     display_group_families: pd.DataFrame,
@@ -2144,7 +1701,7 @@ def family_selection_payload_for_display(
 ) -> list[dict[str, Any]]:
     family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
     rows = display_group_families[display_group_families["display_id"].map(cell_text).eq(display_id)].copy()
-    rows = rows.sort_values(["item_query_similarity最大值", "历史样本数", "来源工程包数"], ascending=[False, False, False])
+    rows = rows.sort_values(["item_query_similarity最大值", "本次召回样本数", "本次召回工程包数"], ascending=[False, False, False])
     payload: list[dict[str, Any]] = []
     for _index, row in rows.iterrows():
         family_id = cell_text(row.get("family_id"))
@@ -2156,12 +1713,12 @@ def family_selection_payload_for_display(
                 "family_id": family_id,
                 "name": truncate_text(row.get("representative_cost_item_name"), 40),
                 "spec": truncate_text(normalize_display_description(row.get("representative_project_description")), 80),
-                "samples": int(row.get("历史样本数") or 0),
-                "packages": int(row.get("来源工程包数") or 0),
+                "samples": int(row.get("本次召回样本数") or 0),
+                "packages": int(row.get("本次召回工程包数") or 0),
                 "item_query_similarity": round(float(row.get("item_query_similarity最大值") or 0.0), 4),
-                "unit_price_min": family.get("历史综合单价最低值"),
-                "unit_price_median": family.get("历史综合单价中位数"),
-                "unit_price_max": family.get("历史综合单价最高值"),
+                "unit_price_min": family.get("本次召回综合单价最低值"),
+                "unit_price_median": family.get("本次召回综合单价中位数"),
+                "unit_price_max": family.get("本次召回综合单价最高值"),
             }
         )
     return payload
@@ -2195,7 +1752,7 @@ def build_display_family_selection_prompt(
         "selected_displays": records,
     }
     prompt = f"""
-你是物业维修工程历史做法选择器。
+你是物业维修工程参考做法选择器。
 
 【任务】
 
@@ -2211,7 +1768,7 @@ def build_display_family_selection_prompt(
 1. 优先匹配用户明确提出的材料、规格、部位和工艺。
 2. 优先选择描述清晰、没有明显 OCR 歧义的 family。
 3. 优先选择施工边界适合作为默认参考口径的 family。
-4. 历史样本数和来源工程包数越充分越优先。
+4. 本次召回样本数和本次召回工程包数越充分越优先。
 5. 样本数最多是重要依据，但不能覆盖材料、规格或施工边界不匹配。
 
 【family relation】
@@ -2236,8 +1793,8 @@ relation 只能取：
     {{
       "display_id": "D001",
       "selected_family_id": "F004",
-      "default_practice": "与用户需求匹配的默认历史做法",
-      "selection_reason": "与用户明确要求一致，描述清晰，历史样本可追溯",
+      "default_practice": "与用户需求匹配的默认参考做法",
+      "selection_reason": "与用户明确要求一致，描述清晰，本次召回样本可追溯",
       "family_relations": [
         {{
           "family_id": "F007",
@@ -2260,7 +1817,7 @@ def fallback_family_for_display(display_id: str, display_group_families: pd.Data
     rows = display_group_families[display_group_families["display_id"].map(cell_text).eq(display_id)].copy()
     if rows.empty:
         return ""
-    rows = rows.sort_values(["item_query_similarity最大值", "历史样本数", "来源工程包数"], ascending=[False, False, False])
+    rows = rows.sort_values(["item_query_similarity最大值", "本次召回样本数", "本次召回工程包数"], ascending=[False, False, False])
     return cell_text(rows.iloc[0].get("family_id"))
 
 
@@ -2423,7 +1980,7 @@ def fallback_display_family_selection(
                 "selection_reason": cell_text(selected.get("selection_reason")),
                 "selected_family_id": selected_family_id,
                 "default_practice": truncate_text(normalize_display_description(family.get("representative_project_description")), 120),
-                "family_selection_reason": "按组内 item_query_similarity、样本数和来源工程包数确定默认参考做法",
+                "family_selection_reason": "按组内 item_query_similarity、样本数和本次召回工程包数确定默认参考做法",
                 "family_relations": [
                     {
                         "family_id": cell_text(candidate.get("family_id")),
@@ -2488,12 +2045,12 @@ def build_display_family_selection_trace_frame(
                 "representative_cost_item_name": cell_text(row.get("representative_cost_item_name")),
                 "representative_project_description": cell_text(row.get("representative_project_description")),
                 "display_project_description": normalize_display_description(row.get("representative_project_description")),
-                "历史样本数": row.get("历史样本数", ""),
-                "来源工程包数": row.get("来源工程包数", ""),
+                "本次召回样本数": row.get("本次召回样本数", ""),
+                "本次召回工程包数": row.get("本次召回工程包数", ""),
                 "item_query_similarity最大值": row.get("item_query_similarity最大值", ""),
-                "unit_price_min": candidate.get("历史综合单价最低值", ""),
-                "unit_price_median": candidate.get("历史综合单价中位数", ""),
-                "unit_price_max": candidate.get("历史综合单价最高值", ""),
+                "unit_price_min": candidate.get("本次召回综合单价最低值", ""),
+                "unit_price_median": candidate.get("本次召回综合单价中位数", ""),
+                "unit_price_max": candidate.get("本次召回综合单价最高值", ""),
                 "is_selected_family": "是" if family_id == selected_family_id else "否",
                 "is_other_practice": "是" if relation == "different_method" else "否",
                 "other_practice_difference": cell_text(relation_item.get("difference")),
@@ -2524,7 +2081,7 @@ def generate_display_family_selection(
     if selected_displays.empty:
         trace = trace_row(
             "display_family_selection",
-            "为已选 display 选择默认 family 和其他历史做法",
+            "为已选 display 选择默认 family 和其他参考做法",
             True,
             prompt=prompt,
             max_tokens=max_tokens,
@@ -2552,7 +2109,7 @@ def generate_display_family_selection(
         family_count = sum(len(item.get("candidate_families") or []) for item in records)
         trace = trace_row(
             "display_family_selection",
-            "为已选 display 选择默认 family 和其他历史做法",
+            "为已选 display 选择默认 family 和其他参考做法",
             True,
             prompt=prompt,
             max_tokens=max_tokens,
@@ -2574,7 +2131,7 @@ def generate_display_family_selection(
         family_count = sum(len(item.get("candidate_families") or []) for item in records)
         trace = trace_row(
             "display_family_selection",
-            "为已选 display 选择默认 family 和其他历史做法",
+            "为已选 display 选择默认 family 和其他参考做法",
             False,
             error=str(exc),
             prompt=prompt,
@@ -2604,8 +2161,8 @@ def normalize_dedup_text(value: Any) -> str:
 def display_strength(row: pd.Series) -> tuple[int, int, float]:
     return (
         int(row.get("family_count") or 0),
-        int(row.get("默认family历史样本数") or 0),
-        float(row.get("historical_support_ratio") or 0.0),
+        int(row.get("默认family本次召回样本数") or 0),
+        float(row.get("retrieval_package_support_ratio") or 0.0),
     )
 
 
@@ -2695,7 +2252,7 @@ def build_display_dedup_selection_prompt(raw_query: str, selected_records: list[
 【疑似重叠拆除项】
 - 对名称不同但都表示既有层、老化层、原有层拆除或铲除的 display，只有默认参考做法明确证明它们属于不同构造层、部位或施工范围时，才允许同时保留。
 - 不得仅根据“老化层”“防水层”“基层”等名称差异，推断为两个独立施工项。
-- 证据不足时，优先保留施工对象更明确、做法更具体、历史支持更充分的 display。
+- 证据不足时，优先保留施工对象更明确、做法更具体、本次召回支持更充分的 display。
 - 如果同时保留两个疑似重叠项，keep_reasons 必须明确说明它们分别对应什么不同施工对象或施工范围。
 - 不得只写“属于不同基层处理”“可能是不同施工层”等推测性理由。
 
@@ -2876,8 +2433,8 @@ def generate_display_dedup_selection(
 
 def family_strength(row: pd.Series) -> tuple[int, int, float]:
     return (
-        int(row.get("历史样本数") or 0),
-        int(row.get("来源工程包数") or 0),
+        int(row.get("本次召回样本数") or 0),
+        int(row.get("本次召回工程包数") or 0),
         float(row.get("item_query_similarity最大值") or 0.0),
     )
 
@@ -3216,7 +2773,7 @@ def matched_user_quantity(parsed_quantities: list[dict[str, Any]], unit: Any) ->
     return None
 
 
-def build_historical_quantity_context(
+def build_retrieval_quantity_context(
     selected_families: pd.DataFrame,
     candidate_families: pd.DataFrame,
     candidates: pd.DataFrame,
@@ -3303,7 +2860,7 @@ def build_historical_quantity_context(
                 "project_description": cell_text(family.get("representative_project_description")),
                 "unit": unit,
                 "user_quantity_match": user_quantity,
-                "historical_relations": compact_relations,
+                "retrieval_relations": compact_relations,
             }
         )
     return contexts
@@ -3311,27 +2868,27 @@ def build_historical_quantity_context(
 
 def build_quantity_decision_prompt(
     rewrite: QueryRewrite,
-    selected_families_with_history: list[dict[str, Any]],
+    selected_families_with_retrieval_context: list[dict[str, Any]],
 ) -> str:
     payload = {
         "raw_query": rewrite.raw_query,
         "parsed_quantities": rewrite.parsed_quantities,
-        "selected_families": selected_families_with_history,
+        "selected_families": selected_families_with_retrieval_context,
     }
     return f"""
 你是物业维修工程量与金额口径判断助手。
 
-根据用户需求、已选施工项和历史数量关系，为每个 family 判断工程量范围及是否计入参考金额。
+根据用户需求、已选施工项和本次召回数量关系，为每个 family 判断工程量范围及是否计入参考金额。
 
 quantity_source 只能取：
 - 用户明确给定
-- 历史样本估算
+- 本次召回样本估算
 - 需现场确认
 
 规则：
 1. 用户数量能直接对应施工项单位时，使用“用户明确给定”。
-2. 历史相似工程存在稳定、可解释的规模关系时，可使用“历史样本估算”。
-3. 不得机械复制单条历史数量；历史关系不稳定或现场条件影响较大时，使用“需现场确认”，数量填 null。
+2. 本次召回相似工程存在稳定、可解释的规模关系时，可使用“本次召回样本估算”。
+3. 不得机械复制单条本次召回数量；本次召回关系不稳定或现场条件影响较大时，使用“需现场确认”，数量填 null。
 4. suggested_quantity_low、suggested_quantity_mid、suggested_quantity_high 分别表示最低、最可能、最高估计；用户明确数量时三者相同。
 5. include_in_amount=true 仅当该项属于实际建议方案、数量有合理依据且不会与替代方案重复计算。
 6. 数量全部为 null 时必须不计入。
@@ -3436,9 +2993,9 @@ def generate_quantity_decisions(
     candidates: pd.DataFrame,
     warnings: list[str] | None = None,
 ) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any], dict[str, Any], int]:
-    selected_with_history = build_historical_quantity_context(selected_families, candidate_families, candidates, rewrite)
-    relation_count = sum(len(item.get("historical_relations") or []) for item in selected_with_history)
-    prompt = build_quantity_decision_prompt(rewrite, selected_with_history)
+    selected_with_retrieval_context = build_retrieval_quantity_context(selected_families, candidate_families, candidates, rewrite)
+    relation_count = sum(len(item.get("retrieval_relations") or []) for item in selected_with_retrieval_context)
+    prompt = build_quantity_decision_prompt(rewrite, selected_with_retrieval_context)
     max_tokens = 3072
     if selected_families.empty:
         trace = trace_row(
@@ -3495,7 +3052,7 @@ def generate_quantity_decisions(
         return pd.DataFrame(fallback), False, True, str(exc), prompt, trace, meta, relation_count
 
 
-def build_display_historical_quantity_context(
+def build_display_retrieval_quantity_context(
     selected_displays: pd.DataFrame,
     candidate_families: pd.DataFrame,
     candidates: pd.DataFrame,
@@ -3582,7 +3139,7 @@ def build_display_historical_quantity_context(
                 "default_practice": cell_text(selected.get("default_practice")),
                 "unit": unit,
                 "user_quantity_match": user_quantity,
-                "historical_relations": compact_relations,
+                "retrieval_relations": compact_relations,
             }
         )
     return contexts
@@ -3590,28 +3147,28 @@ def build_display_historical_quantity_context(
 
 def build_display_quantity_decision_prompt(
     rewrite: QueryRewrite,
-    selected_displays_with_history: list[dict[str, Any]],
+    selected_displays_with_retrieval_context: list[dict[str, Any]],
 ) -> str:
     payload = {
         "raw_query": rewrite.raw_query,
         "parsed_quantities": rewrite.parsed_quantities,
-        "selected_displays": selected_displays_with_history,
+        "selected_displays": selected_displays_with_retrieval_context,
     }
     return f"""
 你是物业维修工程量与金额口径判断助手。
 
-根据用户需求、已选 display 和历史数量关系，为每个 display 判断工程量范围及是否计入参考金额。
+根据用户需求、已选 display 和本次召回数量关系，为每个 display 判断工程量范围及是否计入参考金额。
 价格和单位来自 selected_family_id，但本阶段只输出 display_id。
 
 quantity_source 只能取：
 - 用户明确给定
-- 历史样本估算
+- 本次召回样本估算
 - 需现场确认
 
 规则：
 1. 用户数量能直接对应施工项单位时，使用“用户明确给定”。
-2. 历史相似工程存在稳定、可解释的规模关系时，可使用“历史样本估算”。
-3. 不得机械复制单条历史数量；历史关系不稳定或现场条件影响较大时，使用“需现场确认”，数量填 null。
+2. 本次召回相似工程存在稳定、可解释的规模关系时，可使用“本次召回样本估算”。
+3. 不得机械复制单条本次召回数量；本次召回关系不稳定或现场条件影响较大时，使用“需现场确认”，数量填 null。
 4. suggested_quantity_low、suggested_quantity_mid、suggested_quantity_high 分别表示最低、最可能、最高估计；用户明确数量时三者相同。
 5. include_in_amount=true 仅要求该项数量有合理依据；互斥主体工艺会在后续拆成独立方案，不要因为存在替代工艺而设为 false。
 6. 用户给出的施工面积可分别用于涂膜、卷材等互斥方案的主体工艺估价，各方案会独立汇总。
@@ -3710,9 +3267,9 @@ def generate_display_quantity_decisions(
     candidates: pd.DataFrame,
     warnings: list[str] | None = None,
 ) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any], dict[str, Any], int]:
-    selected_with_history = build_display_historical_quantity_context(selected_displays, candidate_families, candidates, rewrite)
-    relation_count = sum(len(item.get("historical_relations") or []) for item in selected_with_history)
-    prompt = build_display_quantity_decision_prompt(rewrite, selected_with_history)
+    selected_with_retrieval_context = build_display_retrieval_quantity_context(selected_displays, candidate_families, candidates, rewrite)
+    relation_count = sum(len(item.get("retrieval_relations") or []) for item in selected_with_retrieval_context)
+    prompt = build_display_quantity_decision_prompt(rewrite, selected_with_retrieval_context)
     max_tokens = 3072
     if selected_displays.empty:
         trace = trace_row(
@@ -3819,13 +3376,13 @@ def amount_calc_note(row: pd.Series, price_family_ids: list[str]) -> str:
         numeric_or_none(row.get("综合单价最高值")),
     ]
     if not any(value is not None for value in quantities):
-        note = "缺少可计算工程量，暂不计算金额，仅保留历史单价参考"
+        note = "缺少可计算工程量，暂不计算金额，仅保留本次召回单价参考"
     elif not any(value is not None for value in prices):
-        note = "缺少历史单价，暂不计算金额"
+        note = "缺少本次召回单价，暂不计算金额"
     else:
         note = (
-            "按建议工程量低/中/高 × 历史综合单价低/中/高计算；"
-            f"单价来自 {','.join(price_family_ids)} 的原始历史样本统计"
+            "按建议工程量低/中/高 × 本次召回综合单价低/中/高计算；"
+            f"单价来自 {','.join(price_family_ids)} 的本次召回样本统计"
         )
     if cell_text(row.get("是否计入参考金额区间")) == "否":
         note = f"{note}；本行不参与参考金额区间汇总"
@@ -3868,18 +3425,18 @@ def build_final_suggested_bill(
         if price_stats["unit_price_min"] is None:
             price_stats.update(
                 {
-                    "unit_price_min": family.get("历史综合单价最低值"),
-                    "unit_price_median": family.get("历史综合单价中位数"),
-                    "unit_price_max": family.get("历史综合单价最高值"),
+                    "unit_price_min": family.get("本次召回综合单价最低值"),
+                    "unit_price_median": family.get("本次召回综合单价中位数"),
+                    "unit_price_max": family.get("本次召回综合单价最高值"),
                 }
             )
         fallback_price_columns = {
-            "labor_unit_price_min": "历史人工单价最低值",
-            "labor_unit_price_median": "历史人工单价中位数",
-            "labor_unit_price_max": "历史人工单价最高值",
-            "machinery_unit_price_min": "历史机械单价最低值",
-            "machinery_unit_price_median": "历史机械单价中位数",
-            "machinery_unit_price_max": "历史机械单价最高值",
+            "labor_unit_price_min": "本次召回人工费单价最低值",
+            "labor_unit_price_median": "本次召回人工费单价中位数",
+            "labor_unit_price_max": "本次召回人工费单价最高值",
+            "machinery_unit_price_min": "本次召回机械费单价最低值",
+            "machinery_unit_price_median": "本次召回机械费单价中位数",
+            "machinery_unit_price_max": "本次召回机械费单价最高值",
         }
         for stat_column, family_column in fallback_price_columns.items():
             if price_stats[stat_column] is None:
@@ -3897,10 +3454,10 @@ def build_final_suggested_bill(
         variant_family_ids = [price_family_id for price_family_id in price_family_ids if price_family_id != family_id]
         if variant_family_ids:
             price_evidence_note = (
-                f"默认做法 {family_id}，并合并 {'、'.join(variant_family_ids)} 的同范围历史样本"
+                f"默认做法 {family_id}，并合并 {'、'.join(variant_family_ids)} 的同范围本次召回样本"
             )
         else:
-            price_evidence_note = f"默认做法 {family_id} 的历史样本"
+            price_evidence_note = f"默认做法 {family_id} 的本次召回样本"
         row = {
             "序号": len(rows) + 1,
             "display_id": display_id,
@@ -3911,10 +3468,10 @@ def build_final_suggested_bill(
             "价格证据family": ",".join(price_family_ids),
             "价格证据样本数": price_stats["evidence_count"],
             "价格证据说明": price_evidence_note,
-            "其他历史做法": other_text,
-            "历史family数量": selected.get("family_count", ""),
-            "默认family历史样本数": family.get("历史样本数"),
-            "默认family来源工程包数": family.get("来源工程包数"),
+            "其他参考做法": other_text,
+            "本次召回family数量": selected.get("family_count", ""),
+            "默认family本次召回样本数": family.get("本次召回样本数"),
+            "默认family本次召回工程包数": family.get("本次召回工程包数"),
             "工程量来源": cell_text(decision.get("quantity_source")),
             "建议工程量最低值": low_quantity,
             "建议工程量中位数": mid_quantity,
@@ -4011,7 +3568,7 @@ def build_estimate_scenario_prompt(
   true 表示当前已有可计算数量和价格依据，可以进入 amount；
   false 表示当前缺少可靠数量或价格依据，只能展示，不能进入 amount。
   不得仅根据单位是“项”“m²”“m³”等重新判断。
-  “项”等单位如果已通过历史工程包中与核心工程量的稳定关系完成估算，也可能为 true。
+  “项”等单位如果已通过本次召回工程包中与核心工程量的稳定关系完成估算，也可能为 true。
 
 组织规则：
 
@@ -4251,7 +3808,7 @@ def build_scenario_outputs(
                 "价格证据样本数": source.get("价格证据样本数", ""),
                 "价格证据说明": source.get("价格证据说明", ""),
                 "默认参考做法": source.get("默认参考做法", ""),
-                "其他历史做法": source.get("其他历史做法", ""),
+                "其他参考做法": source.get("其他参考做法", ""),
                 "工程量来源": source.get("工程量来源", ""),
                 "建议工程量最低值": source.get("建议工程量最低值", ""),
                 "建议工程量中位数": source.get("建议工程量中位数", ""),
@@ -4300,7 +3857,15 @@ def display_frame(frame: pd.DataFrame, display: bool) -> pd.DataFrame:
     for column in output.columns:
         if is_text_identifier_column(column):
             output[column] = output[column].map(cell_text)
-    return output
+    return output.rename(columns=EXCEL_DISPLAY_COLUMN_LABELS)
+
+
+EXCEL_DISPLAY_COLUMN_LABELS = {
+    "retrieval_package_support_ratio": "本次召回工程包支持比例",
+    "retrieval_item_count": "本次召回清单行数",
+    "retrieval_package_count": "本次召回工程包数",
+    "support_rank": "本次召回支持度排序",
+}
 
 
 TEXT_IDENTIFIER_COLUMNS = {
@@ -4326,13 +3891,15 @@ INTEGER_COLUMNS = {
     "selection_rank",
     "support_rank",
     "family_count",
-    "历史family数量",
-    "默认family历史样本数",
-    "默认family来源工程包数",
-    "历史样本数",
-    "来源工程包数",
-    "historical_item_row_count",
-    "historical_package_count",
+    "本次召回family数量",
+    "默认family本次召回样本数",
+    "默认family本次召回工程包数",
+    "本次召回样本数",
+    "本次召回工程包数",
+    "retrieval_item_count",
+    "retrieval_package_count",
+    "本次召回清单行数",
+    "本次召回支持度排序",
     "item_count",
     "page_no",
     "prompt_chars",
@@ -4387,7 +3954,7 @@ def excel_number_format(column: Any) -> str | None:
         return "@"
     if name == "package_evidence_weight":
         return "0.000000"
-    if "similarity" in lower_name or "相似度" in name or lower_name.endswith("_ratio"):
+    if "similarity" in lower_name or "相似度" in name or lower_name.endswith("_ratio") or "比例" in name:
         return "0.0000"
     if (
         name in INTEGER_COLUMNS
@@ -4412,20 +3979,6 @@ def excel_min_column_width(column: Any) -> float | None:
     if name in DECIMAL_VALUE_COLUMNS or "工程量" in name or "单价" in name:
         return 12.0
     return None
-
-
-def query_catalog_dict(query_catalog: QueryCatalog) -> dict[str, Any]:
-    return {
-        "catalog_id": query_catalog.catalog_id,
-        "一级分类": query_catalog.一级分类,
-        "二级分类": query_catalog.二级分类,
-        "维修状态": query_catalog.维修状态,
-        "标准对象": query_catalog.标准对象,
-        "confidence": query_catalog.confidence,
-        "success": query_catalog.success,
-        "notes": query_catalog.notes,
-        "raw_result": query_catalog.raw_result,
-    }
 
 
 def parsed_query_dict(rewrite: QueryRewrite) -> dict[str, Any]:
@@ -4474,7 +4027,6 @@ def display_item_label(row: pd.Series) -> str:
 
 def build_estimate_summary(
     rewrite: QueryRewrite,
-    query_catalog: QueryCatalog,
     suggested_bill: pd.DataFrame,
     estimate_scenarios: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -4505,15 +4057,6 @@ def build_estimate_summary(
     if quantity_texts:
         demand_parts.append(f"明确{join_non_empty(quantity_texts)}")
     demand_understanding = "，".join(demand_parts) + "。"
-
-    catalog_parts = [
-        f"catalog_id={query_catalog.catalog_id or '未匹配'}",
-        f"一级分类={query_catalog.一级分类 or '未匹配'}",
-        f"二级分类={query_catalog.二级分类 or '未匹配'}",
-        f"维修状态={query_catalog.维修状态 or '未匹配'}",
-        f"标准对象={query_catalog.标准对象 or '未匹配'}",
-    ]
-    catalog_summary = "；".join(catalog_parts) + "。"
 
     if "清单名称" in suggested_bill.columns or "清单项名称" in suggested_bill.columns:
         overview = join_non_empty([display_item_label(row) for _index, row in suggested_bill.iterrows()], limit=10)
@@ -4551,7 +4094,6 @@ def build_estimate_summary(
 
     rows = [
         ("需求理解", demand_understanding),
-        ("匹配分类", catalog_summary),
         ("建议方案概览", suggested_overview),
         ("方案数量", scenario_count),
         ("推荐方案概览", scenario_overview),
@@ -4562,7 +4104,6 @@ def build_estimate_summary(
 
 def build_parse_info(
     rewrite: QueryRewrite,
-    query_catalog: QueryCatalog,
     top_packages: int,
     top_items: int,
     max_packages_per_cache_subject: int,
@@ -4573,7 +4114,7 @@ def build_parse_info(
     meta: dict[str, Any],
     sample_count: int,
     package_count: int,
-    candidate_pool_row_count: int,
+    retrieved_evidence_item_row_count: int,
     evidence_item_row_count: int,
     candidate_family_count: int,
     candidate_display_group_count: int,
@@ -4620,7 +4161,6 @@ def build_parse_info(
         ("project_package_query_text", rewrite.project_package_query_text),
         ("item_query_text", rewrite.item_query_text),
         ("ParsedQuery", json_text(parsed_query_dict(rewrite))),
-        ("query_catalog", json_text(query_catalog_dict(query_catalog))),
         ("item_retrieval_text_fields", "cost_item_name + project_description + unit_normalized"),
         ("package_retrieval_text_fields", "工程名称 + project_name_text + cost_item_names_summary"),
         ("top_packages", top_packages),
@@ -4634,8 +4174,7 @@ def build_parse_info(
         ("sample_count", sample_count),
         ("package_count", package_count),
         ("LLM query rewrite 是否成功", "是" if rewrite.success else "否"),
-        ("query_catalog_classification 是否成功", "是" if query_catalog.success else "否"),
-        ("candidate_pool_row_count", candidate_pool_row_count),
+        ("retrieved_evidence_item_row_count", retrieved_evidence_item_row_count),
         ("evidence_item_row_count", evidence_item_row_count),
         ("candidate_family_count", candidate_family_count),
         ("candidate_display_group_count", candidate_display_group_count),
@@ -4697,7 +4236,6 @@ def build_parse_info(
         ("index_dir", str(index_dir)),
         ("主要文件路径", json_text((meta.get("files") or {}))),
         ("rewrite_notes", "；".join(rewrite.notes)),
-        ("catalog_notes", "；".join(query_catalog.notes)),
         ("warnings", "；".join(warnings or [])),
     ]
     if include_debug_text:
@@ -4809,8 +4347,8 @@ def run_query(
     top_items: int,
     output: Path | None,
     max_packages_per_cache_subject: int = 1,
-    family_selection_limit: int = 50,
-    family_exploration_limit: int = 5,
+    display_selection_limit: int = 50,
+    display_exploration_limit: int = 5,
     package_weight_temperature: float = DEFAULT_PACKAGE_WEIGHT_TEMPERATURE,
     include_debug_text: bool = False,
     display: bool = False,
@@ -4821,11 +4359,6 @@ def run_query(
     warnings: list[str] = []
     samples, project_packages, project_package_embeddings, item_embeddings, meta = load_index(index_dir)
     rewrite, rewrite_trace = query_rewrite_for_embedding(raw_text)
-    query_catalog, catalog_trace = classify_query_catalog(
-        raw_text,
-        rewrite.project_package_query_text,
-        rewrite.item_query_text,
-    )
 
     model = load_embedding_model(str(meta.get("model") or "BAAI/bge-m3"))
     try:
@@ -4857,17 +4390,16 @@ def run_query(
         package_query_similarity_by_id,
         package_weight_temperature,
     )
-    candidates = candidate_pool(
+    retrieved_evidence_items = build_retrieved_evidence_items(
         samples,
         matched_raw,
         direct_item_hits,
         item_query_similarities,
-        query_catalog,
         package_query_similarity_by_id=package_query_similarity_by_id,
         warnings=warnings,
     )
-    candidate_families = build_candidate_families(candidates)
-    evidence_items = build_evidence_items(candidates, candidate_families)
+    candidate_families = build_candidate_families(retrieved_evidence_items)
+    evidence_items = attach_family_ids_to_evidence_items(retrieved_evidence_items, candidate_families)
     candidate_display_groups, display_group_families = build_candidate_display_groups(candidate_families, evidence_items)
     candidate_display_groups = attach_display_support_ratios(
         candidate_display_groups,
@@ -4888,10 +4420,9 @@ def run_query(
         display_selection_trace_frame,
     ) = generate_display_selection(
         rewrite,
-        query_catalog,
         candidate_display_groups,
-        display_selection_limit=family_selection_limit,
-        exploration_limit=family_exploration_limit,
+        display_selection_limit=display_selection_limit,
+        exploration_limit=display_exploration_limit,
         warnings=warnings,
     )
     (
@@ -4937,7 +4468,7 @@ def run_query(
         rewrite,
         deduped_displays,
         candidate_families,
-        candidates,
+        retrieved_evidence_items,
         warnings=warnings,
     )
     suggested_bill = build_final_suggested_bill(
@@ -4960,7 +4491,7 @@ def run_query(
         warnings=warnings,
     )
     estimate_scenarios = build_scenario_outputs(scenarios, suggested_bill)
-    estimate_summary = build_estimate_summary(rewrite, query_catalog, suggested_bill, estimate_scenarios)
+    estimate_summary = build_estimate_summary(rewrite, suggested_bill, estimate_scenarios)
     if warnings:
         append_trace_warnings(display_selection_trace, warnings)
         append_trace_warnings(display_family_selection_trace, warnings)
@@ -4970,7 +4501,6 @@ def run_query(
     displays_for_llm_count = len(display_selection_meta.get("candidate_ids") or [])
     parse_info = build_parse_info(
         rewrite=rewrite,
-        query_catalog=query_catalog,
         top_packages=top_packages,
         top_items=top_items,
         max_packages_per_cache_subject=max_packages_per_cache_subject,
@@ -4981,7 +4511,7 @@ def run_query(
         meta=meta,
         sample_count=len(samples),
         package_count=len(project_packages),
-        candidate_pool_row_count=len(candidates),
+        retrieved_evidence_item_row_count=len(retrieved_evidence_items),
         evidence_item_row_count=len(evidence_items),
         candidate_family_count=len(candidate_families),
         candidate_display_group_count=len(candidate_display_groups),
@@ -5026,7 +4556,6 @@ def run_query(
     llm_trace = pd.DataFrame(
         [
             rewrite_trace,
-            catalog_trace,
             display_selection_trace,
             display_family_selection_trace,
             dedup_selection_trace,
@@ -5038,7 +4567,6 @@ def run_query(
 
     result = QueryResult(
         rewrite=rewrite,
-        query_catalog=query_catalog,
         estimate_summary=estimate_summary,
         suggested_bill=suggested_bill,
         estimate_scenarios=estimate_scenarios,
@@ -5061,14 +4589,6 @@ def run_query(
 def print_terminal_summary(result: QueryResult, output_path: Path | None) -> None:
     print(f"[DONE] package query: {result.rewrite.project_package_query_text}")
     print(f"[DONE] item query: {result.rewrite.item_query_text}")
-    if result.query_catalog.success:
-        print(
-            "[DONE] query catalog: "
-            f"{result.query_catalog.catalog_id} "
-            f"{result.query_catalog.一级分类}/{result.query_catalog.二级分类}/{result.query_catalog.维修状态}"
-        )
-    else:
-        print("[WARN] query catalog classification failed; continuing with retrieval evidence only")
     print(f"[DONE] matched project packages: {len(result.matched_project_packages)}")
     print(f"[DONE] candidate families: {len(result.candidate_families)}")
     print(f"[DONE] candidate display groups: {len(result.candidate_display_groups)}")
@@ -5077,8 +4597,6 @@ def print_terminal_summary(result: QueryResult, output_path: Path | None) -> Non
     print(f"[DONE] estimate scenarios: {len(result.estimate_scenarios)}")
     if result.rewrite.notes:
         print(f"rewrite notes: {'；'.join(result.rewrite.notes)}")
-    if result.query_catalog.notes:
-        print(f"catalog notes: {'；'.join(result.query_catalog.notes)}")
     if output_path:
         print(f"输出文件: {output_path}")
 
@@ -5112,8 +4630,8 @@ def main() -> int:
             top_items=args.top_items,
             output=output_path,
             max_packages_per_cache_subject=args.max_packages_per_cache_subject,
-            family_selection_limit=args.family_selection_limit,
-            family_exploration_limit=args.family_exploration_limit,
+            display_selection_limit=args.display_selection_limit,
+            display_exploration_limit=args.display_exploration_limit,
             package_weight_temperature=args.package_weight_temperature,
             include_debug_text=args.include_debug_text,
             display=args.display,
