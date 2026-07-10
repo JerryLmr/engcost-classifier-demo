@@ -1331,7 +1331,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(set(records[0]), {"display_id", "display_name", "unit", "practice_options"})
         self.assertEqual(set(records[0]["practice_options"][0]), {"practice_option_id", "practice_description", "sample_count"})
         self.assertIn("scenario_summary", prompt)
-        self.assertIn("selection_reason", prompt)
+        self.assertIn("item_explanation", prompt)
+        self.assertIn("不得用 scenario_summary 或 item_explanation 简单复述 practice_description", prompt)
+        self.assertIn("已计价与未计价范围", prompt)
+        self.assertIn("按用户给出的同一施工面积暂估，最终以现场核定为准", prompt)
         self.assertNotIn("project_package_query_text", prompt)
         self.assertNotIn("item_query_text", prompt)
         self.assertNotIn("family_ids", prompt)
@@ -1352,7 +1355,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                             "practice_option_id": "D001-O01",
                             "include": True,
                             "amount": True,
-                            "selection_reason": "用户提到屋面防水，卷材做法匹配。",
+                            "item_explanation": "该项用于屋面防水层施工，位于基层处理后的主防水环节；按用户给出的同一施工面积暂估，最终以现场核定为准；纳入方案并计入金额。",
                             "quantity": {"type": "exact", "value": 100},
                         },
                         {
@@ -1360,7 +1363,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                             "practice_option_id": "D002-O01",
                             "include": True,
                             "amount": False,
-                            "selection_reason": "拆除可能是前置工序。",
+                            "item_explanation": "该项用于拆除原防水层，属于新做防水前置工序；因原层范围和厚度待现场确认，纳入方案但暂不计价。",
                             "quantity": {"type": "unknown"},
                         },
                     ],
@@ -1389,7 +1392,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "practice_option_id": "D001-BAD"}]}]}, "不属于对应 display"),
             ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "include": "true"}]}]}, "include 必须为布尔值"),
             ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "amount": "true"}]}]}, "amount 必须为布尔值"),
-            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "selection_reason": ""}]}]}, "selection_reason"),
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "item_explanation": ""}]}]}, "item_explanation"),
             ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "unit_price": 100}]}]}, "未要求字段"),
         ]
         for result, message in invalid_cases:
@@ -1421,14 +1424,20 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"family_id": "F001", "本次召回综合单价最低值": 80, "本次召回综合单价中位数": 100, "本次召回综合单价最高值": 120},
                 {"family_id": "F002", "本次召回综合单价最低值": 90, "本次召回综合单价中位数": 110, "本次召回综合单价最高值": 140},
                 {"family_id": "F003", "本次召回综合单价最低值": 50, "本次召回综合单价中位数": 60, "本次召回综合单价最高值": 70},
-                {"family_id": "F004", "本次召回综合单价最低值": 10, "本次召回综合单价中位数": 20, "本次召回综合单价最高值": 30},
+                {
+                    "family_id": "F004",
+                    "本次召回综合单价最低值": 10,
+                    "本次召回综合单价中位数": 20,
+                    "本次召回综合单价最高值": 30,
+                    "source_refs": ["fallback-ref"],
+                },
             ],
             columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
         )
         evidence_items = pd.DataFrame(
             [
-                {"family_id": "F001", "source_ref": "a", "unit_price": 80},
-                {"family_id": "F002", "source_ref": "b", "unit_price": 140},
+                {"family_id": "F001", "source_ref": "a", "unit_price": 80, "labor_unit_price": 10, "machinery_unit_price": 1},
+                {"family_id": "F002", "source_ref": "b", "unit_price": 140, "labor_unit_price": 30, "machinery_unit_price": 5},
                 {"family_id": "F004", "source_ref": "c", "unit_price": 20},
             ],
             columns=query_estimate_llm.EVIDENCE_ITEM_COLUMNS,
@@ -1440,19 +1449,40 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                         "scenario_id": "S001",
                         "scenario_order": 1,
                         "scenario_name": "卷材方案",
-                        "scenario_summary": "采用卷材防水。",
+                        "scenario_summary": "卷材方案包含拆除确认和3mm SBS主防水施工，适用于屋面基层可处理后铺贴卷材的现场；与涂膜方案差异在主材做法，防水已计价，拆除仅展示待确认。",
                         "items": [
-                            {"display_id": "D001", "practice_option_id": "D001-O01", "include": True, "amount": True, "selection_reason": "匹配", "quantity": {"type": "exact", "value": 10}},
-                            {"display_id": "D002", "practice_option_id": "D002-O01", "include": True, "amount": False, "selection_reason": "展示", "quantity": {"type": "unknown"}},
+                            {
+                                "display_id": "D001",
+                                "practice_option_id": "D001-O01",
+                                "include": True,
+                                "amount": True,
+                                "item_explanation": "用于屋面主防水层施工，按用户给出的同一施工面积暂估，最终以现场核定为准；纳入方案并计入金额。",
+                                "quantity": {"type": "exact", "value": 10},
+                            },
+                            {
+                                "display_id": "D002",
+                                "practice_option_id": "D002-O01",
+                                "include": True,
+                                "amount": False,
+                                "item_explanation": "用于拆除原防水层，属于前置工序；原防水层范围和厚度待现场确认，纳入方案但暂不计价。",
+                                "quantity": {"type": "unknown"},
+                            },
                         ],
                     },
                     {
                         "scenario_id": "S002",
                         "scenario_order": 2,
                         "scenario_name": "涂膜方案",
-                        "scenario_summary": "采用涂膜防水。",
+                        "scenario_summary": "涂膜方案不设置拆除项，采用聚氨酯涂膜作为主防水，适用于细部节点多且基层具备涂刷条件的现场；与卷材方案差异在材料做法和施工方式，主防水已计价。",
                         "items": [
-                            {"display_id": "D001", "practice_option_id": "D001-O02", "include": True, "amount": True, "selection_reason": "替代", "quantity": {"type": "range", "min": 5, "max": 15}}
+                            {
+                                "display_id": "D001",
+                                "practice_option_id": "D001-O02",
+                                "include": True,
+                                "amount": True,
+                                "item_explanation": "用于屋面主防水层施工，作为卷材之外的涂膜做法；工程量按区间暂估，纳入方案并计入金额。",
+                                "quantity": {"type": "range", "min": 5, "max": 15},
+                            }
                         ],
                     },
                 ]
@@ -1461,27 +1491,50 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
 
         estimate_scenarios = query_estimate_llm.build_scenario_outputs(scenarios, selected, families, evidence_items)
-        suggested_bill = query_estimate_llm.build_final_suggested_bill(estimate_scenarios)
-        summary = query_estimate_llm.build_estimate_summary(query_estimate_llm.QueryRewrite("屋面", "屋面", "屋面", [], True), suggested_bill, estimate_scenarios)
+        summary = query_estimate_llm.build_estimate_summary(scenarios, estimate_scenarios)
 
         first = estimate_scenarios.iloc[0]
+        self.assertEqual(estimate_scenarios.columns.tolist(), query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS)
+        self.assertEqual(first["方案编号"], "S001")
+        self.assertEqual(first["清单名称"], "屋面防水")
+        self.assertEqual(first["项目说明"], "用于屋面主防水层施工，按用户给出的同一施工面积暂估，最终以现场核定为准；纳入方案并计入金额。")
+        self.assertEqual(first["工程量类型"], "exact")
+        self.assertEqual(first["工程量最低值"], 10.0)
+        self.assertEqual(first["工程量中位数"], 10.0)
+        self.assertEqual(first["工程量最高值"], 10.0)
         self.assertEqual(first["综合单价最低值"], 80.0)
         self.assertEqual(first["综合单价最高值"], 140.0)
+        self.assertEqual(first["其中包含人工费单价最低值"], 10.0)
+        self.assertEqual(first["其中包含人工费单价中位数"], 20.0)
+        self.assertEqual(first["其中包含人工费单价最高值"], 30.0)
+        self.assertEqual(first["其中包含机械费单价最低值"], 1.0)
+        self.assertEqual(first["其中包含机械费单价中位数"], 3.0)
+        self.assertEqual(first["其中包含机械费单价最高值"], 5.0)
+        self.assertEqual(first["价格证据样本数"], 2)
+        self.assertEqual(first["来源样本"], "a, b")
+        self.assertEqual(first["价格证据family"], "F001,F002")
         self.assertEqual(first["合价最低值"], 800.0)
         self.assertEqual(first["合价中位数"], 1100.0)
         self.assertEqual(first["合价最高值"], 1400.0)
         self.assertEqual(estimate_scenarios.iloc[1]["合价最低值"], "")
-        range_row = estimate_scenarios[estimate_scenarios["方案ID"] == "S002"].iloc[0]
-        self.assertEqual(range_row["工程量"], "5～15")
+        self.assertEqual(estimate_scenarios.iloc[1]["综合单价中位数"], 20.0)
+        self.assertEqual(estimate_scenarios.iloc[1]["其中包含人工费单价最低值"], "")
+        self.assertEqual(estimate_scenarios.iloc[1]["其中包含机械费单价最低值"], "")
+        range_row = estimate_scenarios[estimate_scenarios["方案编号"] == "S002"].iloc[0]
+        self.assertEqual(range_row["工程量最低值"], 5.0)
+        self.assertEqual(range_row["工程量中位数"], 10.0)
+        self.assertEqual(range_row["工程量最高值"], 15.0)
         self.assertEqual(range_row["合价最低值"], 250.0)
         self.assertEqual(range_row["合价中位数"], 600.0)
         self.assertEqual(range_row["合价最高值"], 1050.0)
-        self.assertEqual(suggested_bill["清单名称"].tolist(), ["屋面防水", "防水层拆除"])
-        self.assertNotIn("selected_family_id", suggested_bill.columns)
-        self.assertNotIn("建议工程量中位数", suggested_bill.columns)
-        self.assertEqual(summary["方案ID"].tolist(), ["S001", "S002"])
+        self.assertEqual(summary["方案编号"].tolist(), ["S001", "S002"])
+        self.assertEqual(summary.loc[0, "是否推荐方案"], "是")
+        self.assertIn("屋面防水（3mm SBS卷材防水）", summary.loc[0, "主要施工内容"])
+        self.assertIn("防水层拆除（拆除原防水层）", summary.loc[0, "主要施工内容"])
         self.assertEqual(summary.loc[0, "计价项目数"], 1)
-        self.assertEqual(summary.loc[0, "估算金额最低值"], 800.0)
+        self.assertEqual(summary.loc[0, "展示但未计价项目数"], 1)
+        self.assertEqual(summary.loc[0, "合价最低值"], 800.0)
+        self.assertIn("原防水层范围和厚度待现场确认", summary.loc[0, "待现场确认事项"])
 
     def test_build_parse_info_includes_scenario_metrics(self):
         rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], True)
@@ -1562,7 +1615,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         result = query_estimate_llm.QueryResult(
             rewrite=rewrite,
             estimate_summary=pd.DataFrame(columns=query_estimate_llm.ESTIMATE_SUMMARY_COLUMNS),
-            suggested_bill=pd.DataFrame(columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS),
             estimate_scenarios=pd.DataFrame(columns=query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS),
             matched_project_packages=pd.DataFrame(columns=query_estimate_llm.MATCHED_PROJECT_PACKAGE_COLUMNS),
             candidate_families=pd.DataFrame(columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS),
@@ -1611,7 +1663,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 [
                     "estimate_summary",
                     "estimate_scenarios",
-                    "suggested_bill",
                     "candidate_display_groups",
                     "candidate_families",
                     "display_selection_trace",

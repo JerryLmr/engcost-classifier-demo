@@ -106,22 +106,6 @@ EVIDENCE_ITEM_COLUMNS = [
     "item_query_similarity",
 ]
 
-SUGGESTED_BILL_COLUMNS = [
-    "方案ID",
-    "清单名称",
-    "项目特征",
-    "单位",
-    "工程量",
-    "是否纳入",
-    "是否计价",
-    "综合单价最低值",
-    "综合单价中位数",
-    "综合单价最高值",
-    "合价最低值",
-    "合价中位数",
-    "合价最高值",
-]
-
 CANDIDATE_DISPLAY_GROUP_COLUMNS = [
     "display_id",
     "display_key",
@@ -192,38 +176,53 @@ DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS = [
 
 ESTIMATE_SCENARIO_COLUMNS = [
     "方案顺序",
-    "方案ID",
+    "方案编号",
     "方案名称",
-    "方案说明",
-    "项目名称",
+    "display_id",
+    "清单名称",
+    "单位",
     "选用工艺",
     "其他可选工艺",
-    "单位",
-    "工程量",
-    "是否纳入",
-    "是否计价",
-    "综合单价最低值",
-    "综合单价中位数",
-    "综合单价最高值",
+    "项目说明",
+    "是否纳入方案",
+    "是否计入金额",
+    "工程量类型",
+    "工程量最低值",
+    "工程量中位数",
+    "工程量最高值",
+    "工程量依据",
     "合价最低值",
     "合价中位数",
     "合价最高值",
-    "选用说明",
-    "display_id",
+    "综合单价最低值",
+    "综合单价中位数",
+    "综合单价最高值",
+    "其中包含人工费单价最低值",
+    "其中包含人工费单价中位数",
+    "其中包含人工费单价最高值",
+    "其中包含机械费单价最低值",
+    "其中包含机械费单价中位数",
+    "其中包含机械费单价最高值",
+    "价格证据样本数",
+    "来源样本",
     "practice_option_id",
+    "价格证据family",
 ]
 
 ESTIMATE_SUMMARY_COLUMNS = [
     "方案顺序",
-    "方案ID",
+    "方案编号",
     "方案名称",
+    "是否推荐方案",
     "方案说明",
-    "项目数",
-    "纳入项目数",
+    "主要施工内容",
+    "与其他方案的核心差异",
     "计价项目数",
-    "估算金额最低值",
-    "估算金额中位数",
-    "估算金额最高值",
+    "展示但未计价项目数",
+    "合价最低值",
+    "合价中位数",
+    "合价最高值",
+    "待现场确认事项",
 ]
 
 LLM_TRACE_COLUMNS = [
@@ -277,7 +276,6 @@ class EstimateScenario:
 class QueryResult:
     rewrite: QueryRewrite
     estimate_summary: pd.DataFrame
-    suggested_bill: pd.DataFrame
     estimate_scenarios: pd.DataFrame
     matched_project_packages: pd.DataFrame
     candidate_families: pd.DataFrame
@@ -2182,8 +2180,8 @@ sample_count 表示该 option 在当前历史样本中的支持数量，只作�
 2. 决定每个 scenario 应包含哪些 display。
 3. 为每个被纳入的 display 选择对应的 practice_option_id。
 4. 为每个 scenario 生成 scenario_name。
-5. 为每个 scenario 生成 scenario_summary，说明该 scenario 的整体内容以及与其他 scenario 的实际差异。
-6. 为每个 scenario item 生成 selection_reason，说明为什么在当前 scenario 中使用该 practice option。
+5. 为每个 scenario 生成 scenario_summary，说明该 scenario 的整体施工范围、施工链、适用现场条件、与其他 scenario 的实质差异、已计价范围和仅展示暂未计价范围。
+6. 为每个 scenario item 生成 item_explanation，说明当前 option 在本方案中的用途、施工环节、选用原因、工程量来源或继承逻辑、include/amount 判断，以及暂不计价时的待确认事项。
 7. 为每个 scenario item 判断 quantity：
    - 可以可靠确定单一数值时，输出 exact；
    - 可以可靠确定一个范围时，输出 range；
@@ -2204,7 +2202,24 @@ sample_count 表示该 option 在当前历史样本中的支持数量，只作�
 8. 不得根据 sample_count 推算工程量。
 9. 不得根据其他 item 的工程量推算当前 item 的工程量。
 10. 信息不足时应输出 unknown，不要为了计算金额而猜测工程量。
-11. scenario_summary 和 selection_reason 必须针对当前 scenario 的实际内容撰写，避免通用模板。
+11. scenario_summary 和 item_explanation 必须针对当前 scenario 的实际内容撰写，避免通用模板。
+12. practice_description 只描述工艺本身，不承担方案解释；不得用 scenario_summary 或 item_explanation 简单复述 practice_description。
+
+scenario_summary 必须同时覆盖：
+
+1. 整体施工内容：说明该方案包含的主要施工范围和施工链。
+2. 适用条件：说明适合什么现场条件、基层状态或维修目标。
+3. 与其他方案的差异：如果存在多个 scenario，必须明确指出与其他方案不同的前置工序、拆除范围、基层处理或材料做法；如果只有一个 scenario，也要说明该方案的关键取舍。
+4. 已计价与未计价范围：说明哪些重要项目已计价，哪些项目仅展示、暂未计价及原因。
+
+item_explanation 必须同时覆盖：
+
+1. 当前选用 option 的具体用途，不能只写“符合用户要求”“样本支持较多”或类似空泛理由。
+2. 该 item 在当前施工方案中的施工环节。
+3. 为什么选用该 practice option。
+4. 工程量来源或继承逻辑；如果工程量从同一施工范围继承，必须说明“按用户给出的同一施工面积暂估，最终以现场核定为准”。
+5. include 和 amount 的判断原因。
+6. include=true 且 amount=false 时，必须说明为什么属于方案但暂不计价，以及需要补充哪些现场信息。
 
 quantity 格式：
 
@@ -2244,7 +2259,7 @@ quantity 格式：
           "practice_option_id": "D001-O01",
           "include": true,
           "amount": true,
-          "selection_reason": "选择该工艺的具体原因",
+          "item_explanation": "当前项目说明，覆盖用途、施工环节、选用原因、工程量来源、include/amount 判断和待确认事项",
           "quantity": {{
             "type": "exact",
             "value": 100
@@ -2266,7 +2281,7 @@ quantity 格式：
 7. 同一 scenario 中不得重复相同的 display_id 和 practice_option_id。
 8. scenario_name 不得为空。
 9. scenario_summary 不得为空。
-10. selection_reason 不得为空。
+10. item_explanation 不得为空。
 11. include 必须为布尔值。
 12. amount 必须为布尔值。
 13. quantity.type 只能是 exact、range 或 unknown。
@@ -2331,7 +2346,7 @@ def parse_scenario_generation_result(
 ) -> list[EstimateScenario]:
     _ = warnings
     allowed_scenario_keys = {"scenario_id", "scenario_order", "scenario_name", "scenario_summary", "items"}
-    allowed_item_keys = {"display_id", "practice_option_id", "include", "amount", "selection_reason", "quantity"}
+    allowed_item_keys = {"display_id", "practice_option_id", "include", "amount", "item_explanation", "selection_reason", "quantity"}
     raw_scenarios = result.get("scenarios")
     if not isinstance(raw_scenarios, list) or not raw_scenarios:
         raise ValueError("scenario_generation 输出缺少非空 scenarios list")
@@ -2385,9 +2400,9 @@ def parse_scenario_generation_result(
                 raise ValueError("include 必须为布尔值")
             if not isinstance(raw_item.get("amount"), bool):
                 raise ValueError("amount 必须为布尔值")
-            selection_reason = cell_text(raw_item.get("selection_reason"))
+            selection_reason = cell_text(raw_item.get("item_explanation")) or cell_text(raw_item.get("selection_reason"))
             if not selection_reason:
-                raise ValueError("selection_reason 不得为空")
+                raise ValueError("item_explanation 不得为空")
             items.append(
                 ScenarioItem(
                     display_id=display_id,
@@ -2592,6 +2607,28 @@ def quantity_display(quantity: dict[str, Any]) -> Any:
     return "无法确定"
 
 
+def quantity_values(quantity: dict[str, Any]) -> tuple[Any, Any, Any]:
+    quantity_type = cell_text(quantity.get("type"))
+    if quantity_type == "exact":
+        value = quantity.get("value", "")
+        return value, value, value
+    if quantity_type == "range":
+        minimum = numeric_or_none(quantity.get("min"))
+        maximum = numeric_or_none(quantity.get("max"))
+        midpoint = None if minimum is None or maximum is None else (minimum + maximum) / 2
+        return minimum if minimum is not None else "", midpoint if midpoint is not None else "", maximum if maximum is not None else ""
+    return "", "", ""
+
+
+def quantity_basis(quantity: dict[str, Any]) -> str:
+    quantity_type = cell_text(quantity.get("type"))
+    if quantity_type == "exact":
+        return "按 scenario item 判断为精确工程量，最终以现场核定为准"
+    if quantity_type == "range":
+        return "按 scenario item 判断为工程量区间，中位数按区间中点暂估，最终以现场核定为准"
+    return "工程量暂无法可靠确定，需补充现场范围、尺寸或数量信息后计价"
+
+
 def quantity_amounts(quantity: dict[str, Any], price_stats: dict[str, Any], should_amount: bool) -> tuple[Any, Any, Any]:
     if not should_amount:
         return "", "", ""
@@ -2637,57 +2674,46 @@ def build_scenario_outputs(
             ]
             price_stats = price_stats_for_option(option, candidate_families, evidence_items)
             amount_low, amount_mid, amount_high = quantity_amounts(item.quantity, price_stats, item.amount)
+            quantity_low, quantity_mid, quantity_high = quantity_values(item.quantity)
+            family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
             scenario_rows.append(
                 {
                     "方案顺序": scenario.scenario_order,
-                    "方案ID": scenario.scenario_id,
+                    "方案编号": scenario.scenario_id,
                     "方案名称": scenario.scenario_name,
-                    "方案说明": scenario.scenario_summary,
-                    "项目名称": cell_text(display_row.get("display_name")),
+                    "display_id": item.display_id,
+                    "清单名称": cell_text(display_row.get("display_name")),
+                    "单位": cell_text(display_row.get("unit")),
                     "选用工艺": cell_text(option.get("practice_description")),
                     "其他可选工艺": "；".join([text for text in other_options if text]),
-                    "单位": cell_text(display_row.get("unit")),
-                    "工程量": quantity_display(item.quantity),
-                    "是否纳入": "是" if item.include else "否",
-                    "是否计价": "是" if item.amount else "否",
-                    "综合单价最低值": price_stats.get("unit_price_min"),
-                    "综合单价中位数": price_stats.get("unit_price_median"),
-                    "综合单价最高值": price_stats.get("unit_price_max"),
+                    "项目说明": item.selection_reason,
+                    "是否纳入方案": "是" if item.include else "否",
+                    "是否计入金额": "是" if item.amount else "否",
+                    "工程量类型": cell_text(item.quantity.get("type")),
+                    "工程量最低值": quantity_low,
+                    "工程量中位数": quantity_mid,
+                    "工程量最高值": quantity_high,
+                    "工程量依据": quantity_basis(item.quantity),
                     "合价最低值": amount_low,
                     "合价中位数": amount_mid,
                     "合价最高值": amount_high,
-                    "选用说明": item.selection_reason,
-                    "display_id": item.display_id,
+                    "综合单价最低值": price_stats.get("unit_price_min"),
+                    "综合单价中位数": price_stats.get("unit_price_median"),
+                    "综合单价最高值": price_stats.get("unit_price_max"),
+                    "其中包含人工费单价最低值": price_stats.get("labor_unit_price_min"),
+                    "其中包含人工费单价中位数": price_stats.get("labor_unit_price_median"),
+                    "其中包含人工费单价最高值": price_stats.get("labor_unit_price_max"),
+                    "其中包含机械费单价最低值": price_stats.get("machinery_unit_price_min"),
+                    "其中包含机械费单价中位数": price_stats.get("machinery_unit_price_median"),
+                    "其中包含机械费单价最高值": price_stats.get("machinery_unit_price_max"),
+                    "价格证据样本数": price_stats.get("evidence_count"),
+                    "来源样本": cell_text(price_stats.get("source_refs")),
                     "practice_option_id": item.practice_option_id,
+                    "价格证据family": ",".join(family_ids),
                 }
             )
     return pd.DataFrame(scenario_rows, columns=ESTIMATE_SCENARIO_COLUMNS).fillna("")
 
-
-def build_final_suggested_bill(estimate_scenarios: pd.DataFrame) -> pd.DataFrame:
-    if estimate_scenarios.empty:
-        return pd.DataFrame(columns=SUGGESTED_BILL_COLUMNS)
-    first_order = numeric_or_none(estimate_scenarios.iloc[0].get("方案顺序"))
-    first_scenario_rows = estimate_scenarios[estimate_scenarios["方案顺序"].map(numeric_or_none).eq(first_order)]
-    rows = [
-        {
-            "方案ID": row.get("方案ID", ""),
-            "清单名称": row.get("项目名称", ""),
-            "项目特征": row.get("选用工艺", ""),
-            "单位": row.get("单位", ""),
-            "工程量": row.get("工程量", ""),
-            "是否纳入": row.get("是否纳入", ""),
-            "是否计价": row.get("是否计价", ""),
-            "综合单价最低值": row.get("综合单价最低值", ""),
-            "综合单价中位数": row.get("综合单价中位数", ""),
-            "综合单价最高值": row.get("综合单价最高值", ""),
-            "合价最低值": row.get("合价最低值", ""),
-            "合价中位数": row.get("合价中位数", ""),
-            "合价最高值": row.get("合价最高值", ""),
-        }
-        for _index, row in first_scenario_rows.iterrows()
-    ]
-    return pd.DataFrame(rows, columns=SUGGESTED_BILL_COLUMNS).fillna("")
 
 def display_frame(frame: pd.DataFrame, display: bool) -> pd.DataFrame:
     output = frame.copy()
@@ -2707,6 +2733,7 @@ EXCEL_DISPLAY_COLUMN_LABELS = {
 
 
 TEXT_IDENTIFIER_COLUMNS = {
+    "方案编号",
     "scenario_id",
     "display_id",
     "family_id",
@@ -2720,6 +2747,21 @@ TEXT_IDENTIFIER_COLUMNS = {
     "source_row_id",
     "item_row_id",
     "project_code",
+}
+
+TEXT_VALUE_COLUMNS = {
+    "是否推荐方案",
+    "是否纳入方案",
+    "是否计入金额",
+    "工程量类型",
+    "工程量依据",
+    "方案说明",
+    "主要施工内容",
+    "与其他方案的核心差异",
+    "待现场确认事项",
+    "项目说明",
+    "来源样本",
+    "价格证据family",
 }
 
 INTEGER_COLUMNS = {
@@ -2760,18 +2802,9 @@ AMOUNT_VALUE_COLUMNS = {
 
 AMOUNT_WIDTH_COLUMNS = {
     "total_price",
-    "估算金额最低值",
-    "估算金额中位数",
-    "估算金额最高值",
-    "估算金额中包含人工费最低值",
-    "估算金额中包含人工费中位数",
-    "估算金额中包含人工费最高值",
-    "估算金额中包含机械费最低值",
-    "估算金额中包含机械费中位数",
-    "估算金额中包含机械费最高值",
-    "方案总金额最低值",
-    "方案总金额中位数",
-    "方案总金额最高值",
+    "合价最低值",
+    "合价中位数",
+    "合价最高值",
 }
 
 
@@ -2789,6 +2822,8 @@ def excel_number_format(column: Any) -> str | None:
     lower_name = name.lower()
     if is_text_identifier_column(name):
         return "@"
+    if name in TEXT_VALUE_COLUMNS:
+        return None
     if name == "package_evidence_weight":
         return "0.000000"
     if "similarity" in lower_name or "相似度" in name or lower_name.endswith("_ratio") or "比例" in name:
@@ -2852,30 +2887,35 @@ def display_item_label(row: pd.Series) -> str:
 
 
 def build_estimate_summary(
-    rewrite: QueryRewrite,
-    suggested_bill: pd.DataFrame,
+    scenarios: list[EstimateScenario],
     estimate_scenarios: pd.DataFrame,
 ) -> pd.DataFrame:
-    _ = rewrite
-    _ = suggested_bill
     if estimate_scenarios.empty:
         return pd.DataFrame(columns=ESTIMATE_SUMMARY_COLUMNS)
+    scenario_summary_by_id = {scenario.scenario_id: scenario.scenario_summary for scenario in scenarios}
     rows: list[dict[str, Any]] = []
-    for (_scenario_order, scenario_id), frame in estimate_scenarios.groupby(["方案顺序", "方案ID"], sort=True):
+    first_order = numeric_or_none(estimate_scenarios.iloc[0].get("方案顺序"))
+    for (_scenario_order, scenario_id), frame in estimate_scenarios.groupby(["方案顺序", "方案编号"], sort=True):
         scenario = frame.iloc[0]
-        amount_frame = frame[frame["是否计价"].map(cell_text).eq("是")]
+        amount_frame = frame[frame["是否计入金额"].map(cell_text).eq("是")]
+        included_frame = frame[frame["是否纳入方案"].map(cell_text).eq("是")]
+        unpriced_frame = included_frame[included_frame["是否计入金额"].map(cell_text).ne("是")]
+        scenario_summary = scenario_summary_by_id.get(cell_text(scenario_id), "")
         rows.append(
             {
                 "方案顺序": scenario.get("方案顺序", ""),
-                "方案ID": scenario_id,
+                "方案编号": scenario_id,
                 "方案名称": scenario.get("方案名称", ""),
-                "方案说明": scenario.get("方案说明", ""),
-                "项目数": int(len(frame)),
-                "纳入项目数": int(frame["是否纳入"].map(cell_text).eq("是").sum()),
-                "计价项目数": int(frame["是否计价"].map(cell_text).eq("是").sum()),
-                "估算金额最低值": amount_sum(amount_frame, "合价最低值"),
-                "估算金额中位数": amount_sum(amount_frame, "合价中位数"),
-                "估算金额最高值": amount_sum(amount_frame, "合价最高值"),
+                "是否推荐方案": "是" if numeric_or_none(scenario.get("方案顺序")) == first_order else "否",
+                "方案说明": scenario_summary,
+                "主要施工内容": join_non_empty([display_item_label(row) for _index, row in included_frame.iterrows()]),
+                "与其他方案的核心差异": scenario_summary,
+                "计价项目数": int(frame["是否计入金额"].map(cell_text).eq("是").sum()),
+                "展示但未计价项目数": int(len(unpriced_frame)),
+                "合价最低值": amount_sum(amount_frame, "合价最低值"),
+                "合价中位数": amount_sum(amount_frame, "合价中位数"),
+                "合价最高值": amount_sum(amount_frame, "合价最高值"),
+                "待现场确认事项": join_non_empty(unpriced_frame.get("项目说明", pd.Series(dtype=object)).tolist()),
             }
         )
     return pd.DataFrame(rows, columns=ESTIMATE_SUMMARY_COLUMNS).fillna("")
@@ -3006,7 +3046,6 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         display_frame(result.estimate_summary, display).to_excel(writer, sheet_name="estimate_summary", index=False)
         display_frame(result.estimate_scenarios, display).to_excel(writer, sheet_name="estimate_scenarios", index=False)
-        display_frame(result.suggested_bill, display).to_excel(writer, sheet_name="suggested_bill", index=False)
         display_frame(result.candidate_display_groups, display).to_excel(
             writer,
             sheet_name="candidate_display_groups",
@@ -3054,7 +3093,7 @@ def apply_workbook_style(path: Path) -> None:
     scenario_worksheet = workbook["estimate_scenarios"] if "estimate_scenarios" in workbook.sheetnames else None
     if scenario_worksheet is not None:
         header_by_name = {cell_text(cell.value): cell.column for cell in scenario_worksheet[1]}
-        scenario_id_column = header_by_name.get("scenario_id")
+        scenario_id_column = header_by_name.get("方案编号")
         if scenario_id_column is not None:
             separator_rows: list[int] = []
             previous_scenario_id = ""
@@ -3209,8 +3248,7 @@ def run_query(
         warnings=warnings,
     )
     estimate_scenarios = build_scenario_outputs(scenarios, selected_display_practices, candidate_families, evidence_items)
-    suggested_bill = build_final_suggested_bill(estimate_scenarios)
-    estimate_summary = build_estimate_summary(rewrite, suggested_bill, estimate_scenarios)
+    estimate_summary = build_estimate_summary(scenarios, estimate_scenarios)
     if warnings:
         append_trace_warnings(display_selection_trace, warnings)
         append_trace_warnings(display_family_selection_trace, warnings)
@@ -3281,7 +3319,6 @@ def run_query(
     result = QueryResult(
         rewrite=rewrite,
         estimate_summary=estimate_summary,
-        suggested_bill=suggested_bill,
         estimate_scenarios=estimate_scenarios,
         matched_project_packages=matched_project_packages,
         candidate_families=candidate_families,
@@ -3306,7 +3343,6 @@ def print_terminal_summary(result: QueryResult, output_path: Path | None) -> Non
     print(f"[DONE] candidate families: {len(result.candidate_families)}")
     print(f"[DONE] candidate display groups: {len(result.candidate_display_groups)}")
     print(f"[DONE] evidence items: {len(result.evidence_items)}")
-    print(f"[DONE] suggested bill rows: {len(result.suggested_bill)}")
     print(f"[DONE] estimate scenarios: {len(result.estimate_scenarios)}")
     if result.rewrite.notes:
         print(f"rewrite notes: {'；'.join(result.rewrite.notes)}")
