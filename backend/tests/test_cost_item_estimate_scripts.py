@@ -594,7 +594,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(rewrite.project_package_query_text, "屋面漏水维修工程 屋面卷材防水")
         self.assertEqual(rewrite.item_query_text, "屋面漏水维修工程 屋面卷材防水")
         self.assertIn("item_query_text 为空", rewrite.notes[0])
-        self.assertEqual(trace["step"], "query_rewrite_for_embedding")
+        self.assertEqual(trace["stage"], "query_rewrite_for_embedding")
 
         with patch.object(query_estimate_llm, "request_llm_json", side_effect=query_estimate_llm.LLMServiceError("down")):
             fallback, trace = query_estimate_llm.query_rewrite_for_embedding("屋面漏水")
@@ -602,7 +602,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertFalse(fallback.success)
         self.assertEqual(fallback.project_package_query_text, "屋面漏水")
         self.assertEqual(fallback.item_query_text, "屋面漏水")
-        self.assertEqual(trace["success"], "否")
+        self.assertEqual(trace["parsed_status"], "failed")
 
     def test_package_evidence_weights_use_continuous_softmax(self):
         weights = query_estimate_llm.build_package_evidence_weights(
@@ -1001,14 +1001,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertIn("不得在 group_reason 中写", prompt)
         self.assertIn("family_assignments", prompt)
 
-    def test_display_family_selection_groups_practice_options_and_derives_legacy_fields(self):
+    def test_display_family_selection_groups_practice_options_without_legacy_fields(self):
         selected_displays = pd.DataFrame([{"display_id": "D001", "selection_reason": ""}])
         display_groups = pd.DataFrame([{"display_id": "D001", "display_name": "屋面卷材防水", "unit": "m²", "family_count": 3}])
         display_families = pd.DataFrame(
             [
-                {"display_id": "D001", "family_id": "F004", "unit": "m²"},
-                {"display_id": "D001", "family_id": "F007", "unit": "m²"},
-                {"display_id": "D001", "family_id": "F010", "unit": "m²"},
+                {"display_id": "D001", "family_id": "F004", "unit": "m²", "本次召回样本数": 2},
+                {"display_id": "D001", "family_id": "F007", "unit": "m²", "本次召回样本数": 3},
+                {"display_id": "D001", "family_id": "F010", "unit": "m²", "本次召回样本数": 1},
             ]
         )
 
@@ -1042,25 +1042,15 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             [],
         )
 
-        self.assertEqual(selected.loc[0, "selected_family_id"], "F004")
-        self.assertEqual(selected.loc[0, "default_practice_option_id"], "D001-O01")
-        self.assertEqual(selected.loc[0, "default_representative_family_id"], "F004")
-        self.assertEqual(selected.loc[0, "default_practice"], "3mm SBS卷材防水")
         self.assertEqual(selected.loc[0, "practice_options"][0]["practice_option_id"], "D001-O01")
-        self.assertEqual(
-            selected.loc[0, "family_relations"],
-            [
-                {
-                    "family_id": "F007",
-                    "relation": "same_scope_variant",
-                    "difference": "与当前默认参考做法属于同一 practice option",
-                },
-                {"family_id": "F010", "relation": "different_method", "difference": "聚氨酯涂膜防水"},
-            ],
-        )
+        self.assertEqual(selected.loc[0, "practice_options"][0]["sample_count"], 5)
+        self.assertEqual(selected.loc[0, "practice_options"][1]["practice_option_id"], "D001-O02")
+        self.assertNotIn("selected_family_id", selected.columns)
+        self.assertNotIn("default_practice_option_id", selected.columns)
+        self.assertNotIn("default_practice", selected.columns)
+        self.assertNotIn("family_relations", selected.columns)
         self.assertEqual(meta["selected_display_ids"], ["D001"])
-        self.assertEqual(meta["default_practice_option_ids"], ["D001-O01"])
-        self.assertEqual(meta["default_representative_family_ids"], ["F004"])
+        self.assertNotIn("default_practice_option_ids", meta)
         self.assertEqual(meta["practice_option_count"], 2)
         self.assertEqual(meta["families_grouped_count"], 3)
         self.assertEqual(meta["option_count_by_display"], {"D001": 2})
@@ -1113,7 +1103,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "display_results": [
                     {
                         "display_id": "D001",
-                        "default_representative_family_id": "F001",
                         "practice_options": [
                             {
                                 "representative_family_id": "F001",
@@ -1132,7 +1121,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "display_results": [
                     {
                         "display_id": "D001",
-                        "default_representative_family_id": "F001",
                         "practice_options": [
                             {
                                 "representative_family_id": "F001",
@@ -1151,7 +1139,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "display_results": [
                     {
                         "display_id": "D001",
-                        "default_representative_family_id": "F001",
                         "practice_options": [
                             {
                                 "representative_family_id": "F001",
@@ -1170,64 +1157,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "display_results": [
                     {
                         "display_id": "D001",
-                        "default_representative_family_id": "F002",
-                        "practice_options": [
-                            {
-                                "representative_family_id": "F001",
-                                "practice_description": "3mm SBS",
-                                "family_ids": ["F001", "F002"],
-                                "group_reason": "同一做法",
-                            }
-                        ],
-                    }
-                ],
-            },
-            "default_representative_family_id",
-        )
-        assert_invalid(
-            {
-                "display_results": [
-                    {
-                        "display_id": "D001",
-                        "default_representative_family_id": "F001",
-                        "practice_options": [
-                            {
-                                "representative_family_id": "F001",
-                                "practice_description": "",
-                                "family_ids": ["F001", "F002"],
-                                "group_reason": "同一做法",
-                            }
-                        ],
-                    }
-                ],
-            },
-            "practice_description 不得为空",
-        )
-        assert_invalid(
-            {
-                "display_results": [
-                    {
-                        "display_id": "D001",
-                        "default_representative_family_id": "F001",
-                        "practice_options": [
-                            {
-                                "representative_family_id": "F001",
-                                "practice_description": "3mm SBS",
-                                "family_ids": ["F001", "F002"],
-                                "group_reason": "",
-                            }
-                        ],
-                    }
-                ],
-            },
-            "group_reason 不得为空",
-        )
-        assert_invalid(
-            {
-                "display_results": [
-                    {
-                        "display_id": "D001",
-                        "default_representative_family_id": "F001",
                         "family_assignments": [
                             {"family_id": "F001", "practice_option_index": 1},
                             {"family_id": "F002", "practice_option_index": 2},
@@ -1262,7 +1191,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "display_results": [
                         {
                             "display_id": "D001",
-                            "default_representative_family_id": "F001",
                             "practice_options": [
                                 {
                                     "representative_family_id": "F001",
@@ -1327,596 +1255,235 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         self.assertEqual(warnings, [])
 
-    def test_suggested_bill_merges_same_scope_family_raw_evidence(self):
-        families = pd.DataFrame(
-            [
-                {
-                    "family_id": "F001",
-                    "fine_signature": "sig-1",
-                    "representative_cost_item_name": "屋面卷材防水",
-                    "representative_project_description": "3.0mm SBS",
-                    "unit": "m²",
-                    "unit_normalized": "m²",
-                    "本次召回样本数": 1,
-                    "本次召回工程包数": 1,
-                    "本次召回综合单价最低值": 80,
-                    "本次召回综合单价中位数": 80,
-                    "本次召回综合单价最高值": 80,
-                    "source_refs": "batch-a::1::1-1",
-                },
-                {
-                    "family_id": "F002",
-                    "fine_signature": "sig-2",
-                    "representative_cost_item_name": "屋面卷材防水",
-                    "representative_project_description": "3.0mm SBS",
-                    "unit": "m²",
-                    "unit_normalized": "m²",
-                    "本次召回样本数": 3,
-                    "本次召回工程包数": 2,
-                    "本次召回综合单价最低值": 120,
-                    "本次召回综合单价中位数": 120,
-                    "本次召回综合单价最高值": 120,
-                    "source_refs": "batch-a::2::2-1",
-                },
-                {
-                    "family_id": "F003",
-                    "unit": "项",
-                    "unit_normalized": "项",
-                    "本次召回综合单价中位数": 999,
-                },
-                {
-                    "family_id": "F004",
-                    "unit": "m²",
-                    "unit_normalized": "m²",
-                    "本次召回综合单价中位数": 300,
-                },
-                {
-                    "family_id": "F005",
-                    "unit": "m²",
-                    "unit_normalized": "m²",
-                    "本次召回综合单价中位数": 500,
-                },
-            ],
-            columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
-        )
-        selected = pd.DataFrame(
-            [
-                {
-                    "display_id": "D001",
-                    "display_name": "屋面卷材防水",
-                    "unit": "m²",
-                    "family_count": 5,
-                    "selection_reason": "display 对应用户需求",
-                    "selected_family_id": "F002",
-                    "default_practice": "3.0mm SBS",
-                    "family_selection_reason": "样本更充分",
-                    "family_relations": [
-                        {"family_id": "F001", "relation": "same_scope_variant", "difference": "施工边界不同"},
-                        {"family_id": "F003", "relation": "same_scope_variant", "difference": "单位异常"},
-                        {"family_id": "F004", "relation": "different_method", "difference": "厚度和工艺不同"},
-                        {"family_id": "F005", "relation": "exclude", "difference": "描述不匹配"},
-                    ],
-                }
-            ]
-        )
-        decisions = pd.DataFrame(
-            [
-                {
-                    "display_id": "D001",
-                    "quantity_source": "用户明确给定",
-                    "suggested_quantity_low": 1,
-                    "suggested_quantity_mid": 1,
-                    "suggested_quantity_high": 1,
-                    "include_in_amount": True,
-                    "quantity_reason": "用户给定",
-                    "confirmation_note": "",
-                }
-            ]
-        )
-        evidence_items = pd.DataFrame(
-            [
-                {"family_id": "F001", "source_ref": "batch-a::1::1-1", "unit_price": 80, "labor_unit_price": 20, "machinery_unit_price": 5},
-                {"family_id": "F002", "source_ref": "batch-a::2::2-1", "unit_price": 120, "labor_unit_price": 30, "machinery_unit_price": 7},
-                {"family_id": "F002", "source_ref": "batch-a::3::3-1", "unit_price": 140, "labor_unit_price": 40, "machinery_unit_price": 9},
-                {"family_id": "F003", "source_ref": "batch-a::4::4-1", "unit_price": 999},
-                {"family_id": "F004", "source_ref": "batch-a::5::5-1", "unit_price": 300},
-                {"family_id": "F005", "source_ref": "batch-a::6::6-1", "unit_price": 500},
-            ],
-            columns=query_estimate_llm.EVIDENCE_ITEM_COLUMNS,
-        )
-        bill = query_estimate_llm.build_final_suggested_bill(selected, decisions, families, evidence_items)
-
-        self.assertEqual(bill["display_id"].tolist(), ["D001"])
-        self.assertNotIn("推荐依据", bill.columns)
-        self.assertEqual(bill["selected_family_id"].tolist(), ["F002"])
-        self.assertEqual(bill.loc[0, "清单名称"], "屋面卷材防水")
-        self.assertEqual(bill.loc[0, "默认参考做法"], "3.0mm SBS")
-        self.assertEqual(bill.loc[0, "其他参考做法"], "F004：厚度和工艺不同")
-        self.assertEqual(bill.loc[0, "价格证据family"], "F002,F001")
-        self.assertIn("F001", bill.loc[0, "价格证据说明"])
-        self.assertEqual(bill.loc[0, "综合单价中位数"], 120)
-        self.assertEqual(bill.loc[0, "综合单价最低值"], 80)
-        self.assertEqual(bill.loc[0, "综合单价最高值"], 140)
-        self.assertIn("batch-a::1::1-1", bill.loc[0, "来源样本"])
-        self.assertNotIn("batch-a::4::4-1", bill.loc[0, "来源样本"])
-        self.assertNotIn("F005", bill.loc[0, "其他参考做法"])
-
-    def test_display_family_trace_marks_practice_options_and_price_scope(self):
-        selected = pd.DataFrame(
+    def selected_practices_fixture(self):
+        return pd.DataFrame(
             [
                 {
                     "display_id": "D001",
                     "display_name": "屋面防水",
-                    "default_practice_option_id": "D001-O01",
-                    "selected_family_id": "F001",
-                    "family_selection_reason": "默认",
+                    "unit": "m²",
                     "practice_options": [
                         {
                             "practice_option_id": "D001-O01",
                             "representative_family_id": "F001",
-                            "practice_description": "3mm SBS",
-                            "family_ids": ["F002", "F001"],
-                            "group_reason": "同一做法",
+                            "practice_description": "3mm SBS卷材防水",
+                            "sample_count": 3,
+                            "family_ids": ["F001", "F002"],
+                            "group_reason": "同一卷材做法",
                         },
                         {
                             "practice_option_id": "D001-O02",
-                            "representative_family_id": "F004",
-                            "practice_description": "聚氨酯涂膜",
-                            "family_ids": ["F004", "F003"],
-                            "group_reason": "另一种做法",
+                            "representative_family_id": "F003",
+                            "practice_description": "聚氨酯涂膜防水",
+                            "sample_count": 1,
+                            "family_ids": ["F003"],
+                            "group_reason": "涂膜做法",
                         },
                     ],
-                    "family_relations": [
-                        {"family_id": "F002", "relation": "same_scope_variant", "difference": "边界不同"},
-                        {"family_id": "F003", "relation": "same_scope_variant", "difference": "单位异常"},
-                        {"family_id": "F004", "relation": "different_method", "difference": "工艺不同"},
+                },
+                {
+                    "display_id": "D002",
+                    "display_name": "防水层拆除",
+                    "unit": "m²",
+                    "practice_options": [
+                        {
+                            "practice_option_id": "D002-O01",
+                            "representative_family_id": "F004",
+                            "practice_description": "拆除原防水层",
+                            "sample_count": 2,
+                            "family_ids": ["F004"],
+                            "group_reason": "拆除做法",
+                        }
                     ],
-                }
+                },
             ]
         )
+
+    def test_display_family_trace_marks_practice_options_without_default_fields(self):
+        selected = self.selected_practices_fixture().iloc[[0]].copy()
         display_families = pd.DataFrame(
             [
                 {"display_id": "D001", "display_name": "屋面防水", "family_id": family_id}
-                for family_id in ["F001", "F002", "F003", "F004", "F005"]
+                for family_id in ["F001", "F002", "F003"]
             ]
         )
         families = pd.DataFrame(
             [
                 {"family_id": "F001", "unit": "m²", "unit_normalized": "m²"},
                 {"family_id": "F002", "unit": "m²", "unit_normalized": "m²"},
-                {"family_id": "F003", "unit": "项", "unit_normalized": "项"},
-                {"family_id": "F004", "unit": "m²", "unit_normalized": "m²"},
-                {"family_id": "F005", "unit": "m²", "unit_normalized": "m²"},
+                {"family_id": "F003", "unit": "m²", "unit_normalized": "m²"},
             ],
             columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
         )
 
-        trace = query_estimate_llm.build_display_family_selection_trace_frame(
-            selected,
-            display_families,
-            families,
-        ).set_index("family_id")
+        trace = query_estimate_llm.build_display_family_selection_trace_frame(selected, display_families, families).set_index("family_id")
 
-        self.assertIn("selection_reason", query_estimate_llm.DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS)
         self.assertIn("practice_option_id", query_estimate_llm.DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS)
-        self.assertEqual(trace.index.tolist(), ["F001", "F002", "F004", "F003"])
+        self.assertNotIn("is_current_default_option", query_estimate_llm.DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS)
+        self.assertNotIn("included_in_current_price_scope", query_estimate_llm.DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS)
+        self.assertEqual(trace.index.tolist(), ["F001", "F002", "F003"])
         self.assertEqual(trace.loc["F001", "practice_option_id"], "D001-O01")
-        self.assertEqual(trace.loc["F001", "family_role"], "representative")
-        self.assertEqual(trace.loc["F001", "relation_to_current_default"], "selected")
-        self.assertEqual(trace.loc["F001", "included_in_current_price_scope"], "是")
-        self.assertEqual(trace.loc["F002", "included_in_current_price_scope"], "是")
-        self.assertEqual(trace.loc["F003", "included_in_current_price_scope"], "否")
-        self.assertEqual(trace.loc["F004", "relation_to_current_default"], "different_method")
-        self.assertNotIn("F005", trace.index)
+        self.assertEqual(trace.loc["F003", "practice_option_id"], "D001-O02")
 
-    def test_scenario_fallback_returns_one_generic_scenario(self):
-        selected = pd.DataFrame(
-            [
-                {"display_id": "D001", "display_name": "防水层拆除", "default_practice": "拆除原防水层"},
-                {"display_id": "D002", "display_name": "屋面涂膜防水", "default_practice": "聚氨酯涂膜防水"},
-                {"display_id": "D003", "display_name": "屋面卷材防水", "default_practice": "SBS卷材防水"},
-                {"display_id": "D004", "display_name": "垂直运输", "default_practice": "材料垂直运输"},
-            ]
-        )
-        suggested_bill = pd.DataFrame(
-            [
-                {
-                    "display_id": display_id,
-                    "清单名称": name,
-                    "是否计入参考金额区间": "否" if display_id == "D004" else "是",
-                    "估算金额最低值": amount,
-                    "估算金额中位数": amount,
-                    "估算金额最高值": amount,
-                    "需确认事项": "确认范围",
-                }
-                for display_id, name, amount in [
-                    ("D001", "防水层拆除", 100),
-                    ("D002", "屋面涂膜防水", 200),
-                    ("D003", "屋面卷材防水", 300),
-                    ("D004", "垂直运输", 400),
-                ]
-            ],
-            columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS,
-        )
+    def test_scenario_generation_prompt_uses_only_display_options(self):
+        prompt, records = query_estimate_llm.build_scenario_generation_prompt("屋面漏水 100平", self.selected_practices_fixture())
 
-        scenarios = query_estimate_llm.fallback_estimate_scenarios(selected, suggested_bill)
-        estimate_scenarios = query_estimate_llm.build_scenario_outputs(scenarios, suggested_bill)
+        self.assertEqual(set(records[0]), {"display_id", "display_name", "unit", "practice_options"})
+        self.assertEqual(set(records[0]["practice_options"][0]), {"practice_option_id", "practice_description", "sample_count"})
+        self.assertIn("scenario_summary", prompt)
+        self.assertIn("selection_reason", prompt)
+        self.assertNotIn("project_package_query_text", prompt)
+        self.assertNotIn("item_query_text", prompt)
+        self.assertNotIn("family_ids", prompt)
+        self.assertNotIn("unit_price", prompt)
+        self.assertNotIn("suggested_quantity", prompt)
 
-        self.assertEqual([scenario.scenario_name for scenario in scenarios], ["默认估价方案"])
-        self.assertEqual(scenarios[0].included_display_ids, ["D001", "D002", "D003", "D004"])
-        self.assertEqual(scenarios[0].amount_included_display_ids, ["D001", "D002", "D003"])
-        self.assertEqual(
-            scenarios[0].reason,
-            "方案生成失败，按已选清单形成单一默认估价方案",
-        )
-        self.assertNotIn("D004", scenarios[0].amount_included_display_ids)
-        self.assertEqual(estimate_scenarios["display_id"].tolist(), ["D001", "D002", "D003", "D004"])
-        self.assertNotIn("推荐依据", estimate_scenarios.columns)
-        self.assertEqual(estimate_scenarios["清单名称"].tolist(), ["防水层拆除", "屋面涂膜防水", "屋面卷材防水", "垂直运输"])
-        self.assertEqual(estimate_scenarios["方案总金额最低值"].tolist(), [600.0, 600.0, 600.0, 600.0])
-        transport_rows = estimate_scenarios[estimate_scenarios["display_id"] == "D004"]
-        self.assertEqual(transport_rows["是否计入本方案金额"].tolist(), ["否"])
-        self.assertTrue(transport_rows["估算金额最低值"].eq("").all())
-        priced_rows = estimate_scenarios[estimate_scenarios["是否计入本方案金额"] == "是"]
-        self.assertEqual(
-            estimate_scenarios.loc[0, "方案总金额最低值"],
-            priced_rows["估算金额最低值"].sum(),
-        )
-
-    def test_scenario_prompt_defines_fields_and_separates_mutually_exclusive_methods(self):
-        selected = pd.DataFrame(
-            [
-                {"display_id": "D001", "display_name": "屋面涂膜防水", "default_practice": "涂膜", "unit": "m²"},
-                {"display_id": "D002", "display_name": "屋面卷材防水", "default_practice": "卷材", "unit": "m²"},
-                {"display_id": "D006", "display_name": "防水层拆除", "default_practice": "拆除", "unit": "m²"},
-                {"display_id": "D035", "display_name": "垂直运输", "default_practice": "运输", "unit": "项"},
-            ]
-        )
-        bill = pd.DataFrame(
-            [
-                {"display_id": display_id, "是否计入参考金额区间": "是"}
-                for display_id in ["D001", "D002", "D006", "D035"]
-            ]
-        )
-        prompt, records = query_estimate_llm.build_estimate_scenario_prompt("屋面漏水", selected, bill)
-
-        self.assertIn("included_display_ids 中实际参与该方案金额汇总的清单项", prompt)
-        self.assertIn("这是上游工程量与价格判断后的既定结果", prompt)
-        self.assertIn("涂膜防水和卷材防水不得同时出现在同一个方案", prompt)
-        self.assertIn("所有方案的 included_display_ids 并集", prompt)
-        self.assertIn("scenario 不重新执行工程量估算、价格判断或全局去重", prompt)
-        self.assertIn("“项”等单位", prompt)
-        self.assertEqual(
-            set(records[0]),
-            {"display_id", "display_name", "default_practice", "unit", "has_amount_basis"},
-        )
-
-        scenarios = query_estimate_llm.parse_estimate_scenario_result(
-            {
-                "scenarios": [
-                    {
-                        "scenario_name": "涂膜方案",
-                        "included_display_ids": ["D006", "D001", "D035"],
-                        "amount_included_display_ids": ["D006", "D001", "D035"],
-                    },
-                    {
-                        "scenario_name": "卷材方案",
-                        "included_display_ids": ["D006", "D002", "D035"],
-                        "amount_included_display_ids": ["D006", "D002", "D035"],
-                    },
-                ]
-            },
-            selected,
-            bill,
-        )
-        self.assertNotIn("D002", scenarios[0].included_display_ids)
-        self.assertNotIn("D001", scenarios[1].included_display_ids)
-        self.assertTrue({"D006", "D035"}.issubset(scenarios[0].included_display_ids))
-        self.assertTrue({"D006", "D035"}.issubset(scenarios[1].included_display_ids))
-
-    def test_scenario_parser_keeps_same_included_with_different_amount(self):
-        selected = pd.DataFrame(
-            [
-                {"display_id": display_id, "display_name": display_id}
-                for display_id in ["D001", "D002", "D006", "D035"]
-            ]
-        )
-        bill = pd.DataFrame(
-            [
-                {"display_id": display_id, "是否计入参考金额区间": "是"}
-                for display_id in ["D001", "D002", "D006", "D035"]
-            ]
-        )
-        warnings = []
-        scenarios = query_estimate_llm.parse_estimate_scenario_result(
-            {
-                "scenarios": [
-                    {
-                        "scenario_name": "方案一",
-                        "included_display_ids": ["D006", "D001", "D002", "D035"],
-                        "amount_included_display_ids": ["D006", "D001", "D035"],
-                    },
-                    {
-                        "scenario_name": "方案二",
-                        "included_display_ids": ["D035", "D002", "D001", "D006"],
-                        "amount_included_display_ids": ["D035", "D002", "D006"],
-                    },
-                ]
-            },
-            selected,
-            bill,
-            warnings,
-        )
-
-        self.assertEqual(len(scenarios), 2)
-        self.assertNotIn("duplicate_estimate_scenarios", warnings)
-
-    def test_scenario_parser_deduplicates_identical_included_and_amount(self):
-        selected = pd.DataFrame(
-            [
-                {"display_id": "D001", "display_name": "项目一"},
-                {"display_id": "D002", "display_name": "项目二"},
-            ]
-        )
-        bill = pd.DataFrame(
-            [
-                {"display_id": "D001", "是否计入参考金额区间": "是"},
-                {"display_id": "D002", "是否计入参考金额区间": "是"},
-            ]
-        )
-        warnings = []
-        scenarios = query_estimate_llm.parse_estimate_scenario_result(
-            {
-                "scenarios": [
-                    {
-                        "scenario_name": "方案一",
-                        "included_display_ids": ["D001", "D002"],
-                        "amount_included_display_ids": ["D001"],
-                    },
-                    {
-                        "scenario_name": "方案二",
-                        "included_display_ids": ["D002", "D001"],
-                        "amount_included_display_ids": ["D001"],
-                    },
-                ]
-            },
-            selected,
-            bill,
-            warnings,
-        )
-
-        self.assertEqual(len(scenarios), 1)
-        self.assertIn("duplicate_estimate_scenarios", warnings)
-
-    def test_scenario_parser_filters_missing_amount_basis_but_allows_item_unit_with_basis(self):
-        selected = pd.DataFrame(
-            [
-                {"display_id": "D001", "display_name": "无金额依据项目", "unit": "m²"},
-                {"display_id": "D035", "display_name": "垂直运输", "unit": "项"},
-            ]
-        )
-        bill = pd.DataFrame(
-            [
-                {"display_id": "D001", "是否计入参考金额区间": "否"},
-                {"display_id": "D035", "是否计入参考金额区间": "是"},
-            ]
-        )
-        scenarios = query_estimate_llm.parse_estimate_scenario_result(
-            {
-                "scenarios": [
-                    {
-                        "scenario_name": "方案一",
-                        "included_display_ids": ["D001", "D035"],
-                        "amount_included_display_ids": ["D001", "D035"],
-                    }
-                ]
-            },
-            selected,
-            bill,
-        )
-
-        self.assertEqual(scenarios[0].amount_included_display_ids, ["D035"])
-
-    def test_quantity_decision_validation_and_missing_defaults(self):
-        selected = pd.DataFrame(
-            [
-                {"display_id": "D001", "selection_reason": "", "selected_family_id": "F001"},
-                {"display_id": "D002", "selection_reason": "", "selected_family_id": "F002"},
-                {"display_id": "D003", "selection_reason": "", "selected_family_id": "F003"},
-            ]
-        )
-        result = {
-            "display_quantities": [
-                {
-                    "display_id": "D001",
-                    "quantity_source": "用户明确给定",
-                    "suggested_quantity_low": 100,
-                    "suggested_quantity_mid": 90,
-                    "suggested_quantity_high": 120,
-                    "include_in_amount": True,
-                },
-                {
-                    "display_id": "D002",
-                    "quantity_source": "本次召回样本估算",
-                    "suggested_quantity_low": 10,
-                    "suggested_quantity_mid": 20,
-                    "suggested_quantity_high": 30,
-                    "include_in_amount": True,
-                },
-                {"display_id": "BAD", "quantity_source": "用户明确给定"},
-                {"display_id": "D003", "quantity_source": "非法来源"},
-            ]
-        }
-        warnings: list[str] = []
-
-        decisions, meta = query_estimate_llm.parse_display_quantity_decision_result(result, selected, warnings)
-
-        d001 = decisions[decisions["display_id"] == "D001"].iloc[0]
-        d002 = decisions[decisions["display_id"] == "D002"].iloc[0]
-        d003 = decisions[decisions["display_id"] == "D003"].iloc[0]
-        self.assertTrue(pd.isna(d001["suggested_quantity_low"]))
-        self.assertFalse(d001["include_in_amount"])
-        self.assertTrue(d002["include_in_amount"])
-        self.assertEqual(d003["quantity_source"], "需现场确认")
-        self.assertEqual(d003["quantity_reason"], "")
-        self.assertEqual(meta["invalid_display_ids"], ["BAD"])
-        self.assertEqual(meta["invalid_quantity_sources"], ["非法来源"])
-        self.assertEqual(meta["invalid_quantity_ranges"], ["D001"])
-
-    def test_scenario_keyword_quantity_override_is_removed(self):
-        self.assertFalse(hasattr(query_estimate_llm, "display_method_kind"))
-        self.assertFalse(hasattr(query_estimate_llm, "apply_explicit_quantity_to_mutually_exclusive_methods"))
-
-    def test_final_suggested_bill_backfills_prices_and_calculates_amounts(self):
-        families = pd.DataFrame(
-            [
-                {
-                    "family_id": "F001",
-                    "fine_signature": "sig",
-                    "representative_cost_item_name": "屋面卷材防水",
-                    "representative_project_description": "3mm SBS",
-                    "unit": "m²",
-                    "unit_normalized": "m²",
-                    "本次召回样本数": 2,
-                    "本次召回工程包数": 2,
-                    "本次召回综合单价最低值": 80,
-                    "本次召回综合单价中位数": 100,
-                    "本次召回综合单价最高值": 130,
-                    "本次召回人工费单价最低值": 20,
-                    "本次召回人工费单价中位数": 25,
-                    "本次召回人工费单价最高值": 30,
-                    "本次召回机械费单价最低值": 5,
-                    "本次召回机械费单价中位数": None,
-                    "本次召回机械费单价最高值": 7,
-                    "source_refs": "batch-a::2::2-1, batch-a::5::5-1",
-                }
-            ],
-            columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
-        )
-        selected = pd.DataFrame(
-            [
-                {
-                    "display_id": "D001",
-                    "display_name": "屋面卷材防水",
-                    "unit": "m²",
-                    "family_count": 1,
-                    "selection_reason": "直接解决屋面防水需求",
-                    "selected_family_id": "F001",
-                    "default_practice": "3mm SBS",
-                    "family_selection_reason": "默认做法清晰",
-                    "family_relations": [],
-                }
-            ]
-        )
-        decisions = pd.DataFrame(
-            [
-                {
-                    "display_id": "D001",
-                    "quantity_source": "用户明确给定",
-                    "suggested_quantity_low": 10,
-                    "suggested_quantity_mid": 20,
-                    "suggested_quantity_high": 30,
-                    "include_in_amount": True,
-                    "quantity_reason": "用户给定",
-                    "confirmation_note": "确认边界",
-                }
-            ]
-        )
-
-        bill = query_estimate_llm.build_final_suggested_bill(
-            selected,
-            decisions,
-            families,
-            pd.DataFrame(columns=query_estimate_llm.EVIDENCE_ITEM_COLUMNS),
-        )
-
-        self.assertEqual(bill.columns.tolist(), query_estimate_llm.SUGGESTED_BILL_COLUMNS)
-        self.assertNotIn("candidate_id", bill.columns)
-        self.assertNotIn("推荐依据", bill.columns)
-        self.assertEqual(bill.loc[0, "清单名称"], "屋面卷材防水")
-        self.assertEqual(bill.loc[0, "selected_family_id"], "F001")
-        self.assertEqual(bill.loc[0, "综合单价中位数"], 100)
-        self.assertEqual(bill.loc[0, "估算金额最低值"], 800)
-        self.assertEqual(bill.loc[0, "估算金额中位数"], 2000)
-        self.assertEqual(bill.loc[0, "估算金额最高值"], 3900)
-        self.assertEqual(bill.loc[0, "估算金额中包含人工费最低值"], 200)
-        self.assertEqual(bill.loc[0, "估算金额中包含人工费中位数"], 500)
-        self.assertEqual(bill.loc[0, "估算金额中包含人工费最高值"], 900)
-        self.assertEqual(bill.loc[0, "估算金额中包含机械费最低值"], 50)
-        self.assertEqual(bill.loc[0, "估算金额中包含机械费最高值"], 210)
-        self.assertIn("F001", bill.loc[0, "金额计算口径"])
-        self.assertEqual(bill.loc[0, "来源样本"], "batch-a::2::2-1, batch-a::5::5-1")
-
-    def test_estimate_summary_sums_only_included_amount_rows(self):
-        rewrite = query_estimate_llm.QueryRewrite(
-            raw_query="维修",
-            project_package_query_text="维修",
-            item_query_text="维修",
-            notes=[],
-            success=True,
-        )
-        suggested_bill = pd.DataFrame(
-            [
-                {
-                    "序号": 1,
-                    "display_id": "D001",
-                    "清单名称": "核心做法",
-                    "默认参考做法": "3mm SBS",
-                    "selected_family_id": "F001",
-                    "工程量来源": "用户明确给定",
-                    "建议工程量中位数": 10,
-                    "是否计入参考金额区间": "是",
-                    "估算金额最低值": 100,
-                    "估算金额中位数": 100,
-                    "估算金额最高值": 100,
-                    "需确认事项": "核心范围需确认",
-                },
-                {
-                    "序号": 2,
-                    "display_id": "D002",
-                    "清单名称": "替代做法",
-                    "默认参考做法": "4mm SBS",
-                    "selected_family_id": "F002",
-                    "工程量来源": "用户明确给定",
-                    "建议工程量中位数": 10,
-                    "是否计入参考金额区间": "否",
-                    "估算金额最低值": 1000,
-                    "估算金额中位数": 1000,
-                    "估算金额最高值": 1000,
-                    "需确认事项": "替代做法需确认",
-                },
-            ],
-            columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS,
-        )
-
-        estimate_scenarios = pd.DataFrame(
-            [
+    def valid_scenario_result(self):
+        return {
+            "scenarios": [
                 {
                     "scenario_id": "S001",
-                    "方案名称": "默认估价方案",
-                    "估算金额最低值": 100,
-                    "估算金额中位数": 100,
-                    "估算金额最高值": 100,
+                    "scenario_order": 1,
+                    "scenario_name": "卷材方案",
+                    "scenario_summary": "采用卷材防水并包含拆除。",
+                    "items": [
+                        {
+                            "display_id": "D001",
+                            "practice_option_id": "D001-O01",
+                            "include": True,
+                            "amount": True,
+                            "selection_reason": "用户提到屋面防水，卷材做法匹配。",
+                            "quantity": {"type": "exact", "value": 100},
+                        },
+                        {
+                            "display_id": "D002",
+                            "practice_option_id": "D002-O01",
+                            "include": True,
+                            "amount": False,
+                            "selection_reason": "拆除可能是前置工序。",
+                            "quantity": {"type": "unknown"},
+                        },
+                    ],
                 }
+            ]
+        }
+
+    def test_scenario_parser_accepts_valid_result(self):
+        scenarios = query_estimate_llm.parse_scenario_generation_result(self.valid_scenario_result(), self.selected_practices_fixture())
+
+        self.assertEqual(len(scenarios), 1)
+        self.assertEqual(scenarios[0].scenario_id, "S001")
+        self.assertEqual(scenarios[0].scenario_order, 1)
+        self.assertEqual(scenarios[0].scenario_summary, "采用卷材防水并包含拆除。")
+        self.assertEqual(scenarios[0].items[0].quantity, {"type": "exact", "value": 100.0})
+
+    def test_scenario_parser_rejects_invalid_references_and_fields(self):
+        selected = self.selected_practices_fixture()
+
+        invalid_cases = [
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "scenario_id": "S001"}, {**self.valid_scenario_result()["scenarios"][0], "scenario_order": 2}]}, "scenario_id 重复"),
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "scenario_order": 2}]}, "scenario_order"),
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "scenario_summary": ""}]}, "scenario_summary"),
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": []}]}, "至少包含一个 item"),
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "display_id": "BAD"}]}]}, "无效 display_id"),
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "practice_option_id": "D001-BAD"}]}]}, "不属于对应 display"),
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "include": "true"}]}]}, "include 必须为布尔值"),
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "amount": "true"}]}]}, "amount 必须为布尔值"),
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "selection_reason": ""}]}]}, "selection_reason"),
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "unit_price": 100}]}]}, "未要求字段"),
+        ]
+        for result, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    query_estimate_llm.parse_scenario_generation_result(result, selected)
+
+    def test_quantity_validation(self):
+        self.assertEqual(query_estimate_llm.validate_quantity({"type": "exact", "value": 10}), {"type": "exact", "value": 10.0})
+        self.assertEqual(query_estimate_llm.validate_quantity({"type": "range", "min": 5, "max": 10}), {"type": "range", "min": 5.0, "max": 10.0})
+        self.assertEqual(query_estimate_llm.validate_quantity({"type": "unknown"}), {"type": "unknown"})
+
+        invalid_quantities = [
+            ({"type": "exact"}, "exact"),
+            ({"type": "range", "min": 10}, "range"),
+            ({"type": "range", "min": 20, "max": 10}, "不得大于"),
+            ({"type": "unknown", "value": 1}, "unknown"),
+            ({"type": "exact", "value": -1}, "非负"),
+        ]
+        for quantity, message in invalid_quantities:
+            with self.subTest(quantity=quantity):
+                with self.assertRaisesRegex(ValueError, message):
+                    query_estimate_llm.validate_quantity(quantity)
+
+    def test_scenario_outputs_backfill_prices_and_calculate_amounts(self):
+        selected = self.selected_practices_fixture()
+        families = pd.DataFrame(
+            [
+                {"family_id": "F001", "本次召回综合单价最低值": 80, "本次召回综合单价中位数": 100, "本次召回综合单价最高值": 120},
+                {"family_id": "F002", "本次召回综合单价最低值": 90, "本次召回综合单价中位数": 110, "本次召回综合单价最高值": 140},
+                {"family_id": "F003", "本次召回综合单价最低值": 50, "本次召回综合单价中位数": 60, "本次召回综合单价最高值": 70},
+                {"family_id": "F004", "本次召回综合单价最低值": 10, "本次召回综合单价中位数": 20, "本次召回综合单价最高值": 30},
             ],
-            columns=query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS,
+            columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
         )
-        summary = query_estimate_llm.build_estimate_summary(rewrite, suggested_bill, estimate_scenarios)
-        values = dict(summary.values.tolist())
-
-        self.assertEqual(
-            summary["字段"].tolist(),
-            ["需求理解", "建议方案概览", "方案数量", "推荐方案概览", "计入金额项目"],
+        evidence_items = pd.DataFrame(
+            [
+                {"family_id": "F001", "source_ref": "a", "unit_price": 80},
+                {"family_id": "F002", "source_ref": "b", "unit_price": 140},
+                {"family_id": "F004", "source_ref": "c", "unit_price": 20},
+            ],
+            columns=query_estimate_llm.EVIDENCE_ITEM_COLUMNS,
         )
-        self.assertEqual(values["需求理解"], "用户原始需求：维修")
-        self.assertEqual(values["方案数量"], 1)
-        self.assertIn("默认估价方案", values["推荐方案概览"])
-        self.assertIn("建议清单包括：核心做法（3mm SBS）", values["建议方案概览"])
-        self.assertIn("替代做法（4mm SBS）", values["建议方案概览"])
-        self.assertIn("核心做法", values["计入金额项目"])
-        self.assertNotIn("替代做法", values["计入金额项目"])
+        scenarios = query_estimate_llm.parse_scenario_generation_result(
+            {
+                "scenarios": [
+                    {
+                        "scenario_id": "S001",
+                        "scenario_order": 1,
+                        "scenario_name": "卷材方案",
+                        "scenario_summary": "采用卷材防水。",
+                        "items": [
+                            {"display_id": "D001", "practice_option_id": "D001-O01", "include": True, "amount": True, "selection_reason": "匹配", "quantity": {"type": "exact", "value": 10}},
+                            {"display_id": "D002", "practice_option_id": "D002-O01", "include": True, "amount": False, "selection_reason": "展示", "quantity": {"type": "unknown"}},
+                        ],
+                    },
+                    {
+                        "scenario_id": "S002",
+                        "scenario_order": 2,
+                        "scenario_name": "涂膜方案",
+                        "scenario_summary": "采用涂膜防水。",
+                        "items": [
+                            {"display_id": "D001", "practice_option_id": "D001-O02", "include": True, "amount": True, "selection_reason": "替代", "quantity": {"type": "range", "min": 5, "max": 15}}
+                        ],
+                    },
+                ]
+            },
+            selected,
+        )
 
-    def test_build_parse_info_includes_llm_metrics(self):
+        estimate_scenarios = query_estimate_llm.build_scenario_outputs(scenarios, selected, families, evidence_items)
+        suggested_bill = query_estimate_llm.build_final_suggested_bill(estimate_scenarios)
+        summary = query_estimate_llm.build_estimate_summary(query_estimate_llm.QueryRewrite("屋面", "屋面", "屋面", [], True), suggested_bill, estimate_scenarios)
+
+        first = estimate_scenarios.iloc[0]
+        self.assertEqual(first["综合单价最低值"], 80.0)
+        self.assertEqual(first["综合单价最高值"], 140.0)
+        self.assertEqual(first["合价最低值"], 800.0)
+        self.assertEqual(first["合价中位数"], 1100.0)
+        self.assertEqual(first["合价最高值"], 1400.0)
+        self.assertEqual(estimate_scenarios.iloc[1]["合价最低值"], "")
+        range_row = estimate_scenarios[estimate_scenarios["方案ID"] == "S002"].iloc[0]
+        self.assertEqual(range_row["工程量"], "5～15")
+        self.assertEqual(range_row["合价最低值"], 250.0)
+        self.assertEqual(range_row["合价中位数"], 600.0)
+        self.assertEqual(range_row["合价最高值"], 1050.0)
+        self.assertEqual(suggested_bill["清单名称"].tolist(), ["屋面防水", "防水层拆除"])
+        self.assertNotIn("selected_family_id", suggested_bill.columns)
+        self.assertNotIn("建议工程量中位数", suggested_bill.columns)
+        self.assertEqual(summary["方案ID"].tolist(), ["S001", "S002"])
+        self.assertEqual(summary.loc[0, "计价项目数"], 1)
+        self.assertEqual(summary.loc[0, "估算金额最低值"], 800.0)
+
+    def test_build_parse_info_includes_scenario_metrics(self):
         rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], True)
 
         parse_info = query_estimate_llm.build_parse_info(
@@ -1955,87 +1522,47 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             display_family_selection_error="",
             display_family_selection_meta={
                 "selected_display_ids": ["D001"],
-                "default_practice_option_ids": ["D001-O01"],
-                "default_representative_family_ids": ["F001"],
                 "practice_option_count": 2,
                 "families_grouped_count": 4,
                 "option_count_by_display": {"D001": 2},
                 "max_options_per_display": 2,
             },
-            quantity_decision_input_count=2,
-            quantity_relation_count=3,
-            quantity_decision_trace={"prompt_chars": 200, "estimated_tokens": 100, "completion_tokens": ""},
-            quantity_decision_fallback=True,
-            quantity_decision_error="down",
-            quantity_decision_meta={"invalid_display_ids": [], "duplicate_display_ids": [], "invalid_quantity_sources": ["bad"], "invalid_quantity_ranges": ["D001"]},
             scenario_count=2,
-            scenario_selection_trace={"prompt_chars": 120, "prompt_tokens": 50, "completion_tokens": 10},
-            scenario_selection_fallback=False,
-            scenario_selection_error="",
+            scenario_item_count=3,
+            scenario_included_item_count=2,
+            scenario_amount_item_count=1,
+            scenario_exact_quantity_count=1,
+            scenario_range_quantity_count=1,
+            scenario_unknown_quantity_count=1,
+            scenario_generation_trace={"prompt_chars": 120, "prompt_tokens": 50, "completion_tokens": 10},
+            scenario_generation_fallback=False,
+            scenario_generation_error="",
             output_path=None,
             started_at=query_estimate_llm.datetime.now(),
             index_dir=Path("query_index"),
             include_debug_text=False,
             display_selection_prompt="display prompt",
             display_family_selection_prompt="display family prompt",
-            quantity_decision_prompt="quantity prompt",
-            scenario_selection_prompt="scenario prompt",
+            scenario_generation_prompt="scenario prompt",
             warnings=[],
         )
         values = dict(parse_info.values.tolist())
 
-        self.assertEqual(values["retrieved_evidence_item_row_count"], 50)
-        self.assertEqual(values["evidence_item_row_count"], 50)
-        self.assertEqual(values["candidate_family_count"], 12)
-        self.assertEqual(values["candidate_display_group_count"], 7)
-        self.assertEqual(values["package_weight_temperature"], 0.1)
-        self.assertEqual(values["evidence_package_universe_count"], 5)
-        self.assertEqual(values["package_evidence_weight_count"], 5)
-        self.assertEqual(values["package_evidence_weight_sum"], "1.000000000000")
-        self.assertEqual(values["display_selection_prompt_tokens"], 40)
-        self.assertEqual(values["display_selection_candidate_ids"], '["D001", "D002"]')
-        self.assertEqual(values["display_selection_selected_ids"], '["D001"]')
-        self.assertEqual(values["display_selection_exploration_count"], 1)
         self.assertEqual(values["display_family_selection_selected_display_ids"], '["D001"]')
-        self.assertEqual(values["display_family_selection_default_practice_option_ids"], '["D001-O01"]')
-        self.assertEqual(values["display_family_selection_default_representative_family_ids"], '["F001"]')
-        self.assertEqual(values["display_family_selection_practice_option_count"], 2)
-        self.assertEqual(values["display_family_selection_families_grouped_count"], 4)
-        self.assertEqual(values["display_family_selection_option_count_by_display"], '{"D001": 2}')
-        self.assertEqual(values["display_family_selection_max_options_per_display"], 2)
-        self.assertEqual(values["quantity_decision_prompt_tokens"], 100)
+        self.assertNotIn("display_family_selection_default_practice_option_ids", values)
         self.assertEqual(values["scenario_count"], 2)
-        self.assertEqual(values["scenario_selection_prompt_tokens"], 50)
+        self.assertEqual(values["scenario_item_count"], 3)
+        self.assertEqual(values["scenario_generation_status"], "success")
+        self.assertEqual(values["scenario_generation_prompt_tokens"], 50)
         self.assertEqual(values["invalid_display_ids"], "BAD")
-        self.assertEqual(values["invalid_quantity_sources"], "bad")
-        self.assertEqual(values["是否 quantity_decision fallback"], "是")
-        self.assertFalse(any("dedup" in cell_text for cell_text in values))
-        self.assertNotIn("Parsed" + "Query", values)
-        self.assertNotIn("query_" + "catalog", values)
-        self.assertNotIn("query_" + "catalog_classification 是否成功", values)
+        self.assertFalse(any("quantity_decision" in cell_text for cell_text in values))
 
     def test_write_query_result_workbook_has_expected_sheets(self):
         rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], True)
         result = query_estimate_llm.QueryResult(
             rewrite=rewrite,
-            estimate_summary=pd.DataFrame([{"字段": "原始需求", "值": "屋面"}]),
-            suggested_bill=pd.DataFrame(
-                [
-                    {
-                        "序号": 1,
-                        "display_id": "D001",
-                        "清单名称": "屋面卷材防水",
-                        "单位": "m²",
-                        "默认参考做法": "3mm SBS",
-                        "selected_family_id": "F001",
-                        "工程量来源": "用户明确给定",
-                        "建议工程量中位数": 500,
-                        "工程量依据": "按用户明确面积作为工程量",
-                        "来源样本": "batch-a::2::2-1",
-                    }
-                ],
-                columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS,
-            ),
+            estimate_summary=pd.DataFrame(columns=query_estimate_llm.ESTIMATE_SUMMARY_COLUMNS),
+            suggested_bill=pd.DataFrame(columns=query_estimate_llm.SUGGESTED_BILL_COLUMNS),
             estimate_scenarios=pd.DataFrame(columns=query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS),
             matched_project_packages=pd.DataFrame(columns=query_estimate_llm.MATCHED_PROJECT_PACKAGE_COLUMNS),
             candidate_families=pd.DataFrame(columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS),
@@ -2066,11 +1593,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             parse_info=pd.DataFrame([{"字段": "project_package_query_text", "值": "屋面工程"}]),
             llm_trace=pd.DataFrame(
                 [
-                    {"step": "query_rewrite_for_embedding"},
-                    {"step": "display_selection"},
-                    {"step": "display_family_selection"},
-                    {"step": "quantity_decision"},
-                    {"step": "scenario_selection"},
+                    {"stage": "query_rewrite_for_embedding"},
+                    {"stage": "display_selection"},
+                    {"stage": "display_family_selection"},
+                    {"stage": "scenario_generation"},
                 ],
                 columns=query_estimate_llm.LLM_TRACE_COLUMNS,
             ),
@@ -2097,34 +1623,19 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "llm_trace",
                 ],
             )
-            matched_headers = [
-                workbook["matched_project_packages"].cell(row=1, column=column).value
-                for column in range(1, workbook["matched_project_packages"].max_column + 1)
-            ]
-            display_headers = [
-                workbook["candidate_display_groups"].cell(row=1, column=column).value
-                for column in range(1, workbook["candidate_display_groups"].max_column + 1)
-            ]
-            trace_steps = [
+            trace_stages = [
                 workbook["llm_trace"].cell(row=row, column=1).value
                 for row in range(2, workbook["llm_trace"].max_row + 1)
             ]
             workbook.close()
 
-        self.assertIn("cost_item_names_summary", matched_headers)
-        self.assertNotIn("分类摘要", matched_headers)
-        self.assertIn("本次召回工程包支持比例", display_headers)
-        self.assertIn("本次召回支持度排序", display_headers)
-        self.assertIn("本次召回清单行数", display_headers)
-        self.assertIn("本次召回工程包数", display_headers)
         self.assertEqual(
-            trace_steps,
+            trace_stages,
             [
                 "query_rewrite_for_embedding",
                 "display_selection",
                 "display_family_selection",
-                "quantity_decision",
-                "scenario_selection",
+                "scenario_generation",
             ],
         )
 
