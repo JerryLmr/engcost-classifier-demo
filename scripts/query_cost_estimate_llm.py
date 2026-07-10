@@ -145,7 +145,6 @@ SUGGESTED_BILL_COLUMNS = [
     "估算金额中包含机械费中位数",
     "估算金额中包含机械费最高值",
     "金额计算口径",
-    "推荐依据",
     "来源样本",
 ]
 
@@ -200,22 +199,24 @@ DISPLAY_SELECTION_TRACE_COLUMNS = [
 DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS = [
     "display_id",
     "display_name",
+    "practice_option_id",
+    "is_current_default_option",
+    "representative_family_id",
+    "practice_description",
     "family_id",
-    "fine_signature",
+    "family_role",
     "representative_cost_item_name",
     "representative_project_description",
-    "display_project_description",
+    "unit",
     "本次召回样本数",
     "本次召回工程包数",
     "item_query_similarity最大值",
     "unit_price_min",
     "unit_price_median",
     "unit_price_max",
-    "is_selected_family",
-    "is_other_practice",
-    "other_practice_difference",
-    "relation_to_selected",
-    "included_in_price_scope",
+    "relation_to_current_default",
+    "included_in_current_price_scope",
+    "group_reason",
     "selection_reason",
 ]
 
@@ -257,7 +258,6 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "估算金额中包含机械费中位数",
     "估算金额中包含机械费最高值",
     "金额计算口径",
-    "推荐依据",
     "来源样本",
     "方案说明",
     "方案总金额最低值",
@@ -1721,12 +1721,16 @@ def build_display_family_selection_prompt(
         display = display_map.get(display_id)
         if display is None:
             continue
+        candidate_families_payload = family_selection_payload_for_display(display_id, display_group_families, candidate_families)
+        candidate_family_ids = [cell_text(family.get("family_id")) for family in candidate_families_payload if cell_text(family.get("family_id"))]
         records.append(
             {
                 "display_id": display_id,
                 "display_name": truncate_text(display.get("display_name"), 40),
                 "selection_reason": cell_text(selected.get("selection_reason")),
-                "candidate_families": family_selection_payload_for_display(display_id, display_group_families, candidate_families),
+                "candidate_family_ids": candidate_family_ids,
+                "candidate_family_count": len(candidate_family_ids),
+                "candidate_families": candidate_families_payload,
             }
         )
     payload = {
@@ -1736,24 +1740,42 @@ def build_display_family_selection_prompt(
         "selected_displays": records,
     }
     prompt = f"""
-你是物业维修工程参考做法选择器。
+你是物业维修工程参考做法整理器。
 
 【任务】
 
-对于每个 selected display，从其内部 candidate_families 中：
+candidate_families 已经属于同一个 selected display。
 
-1. 选择一个 selected_family_id，作为默认参考做法；
-2. 对该 display 内其余每个 family 给出 relation；
-3. 概括默认做法；
-4. 说明其他 family 与默认做法的主要差异。
+本步骤不重新创建、拆分或选择 display，也不判断这些 family 是否应属于其他 display。
 
-【默认参考 family 选择原则】
+对于每个 selected display：
+
+1. 将其内部全部 candidate_families 完整划分为一个或多个 practice_options；
+2. 每个 practice_option 表示一种可以共同作为价格证据范围的明确参考做法；
+3. 为每个 option 选择一个 representative_family_id；
+4. 根据用户原始需求，从所有 options 中选择一个当前默认做法，使用 default_representative_family_id 表示；
+5. 每个 candidate family 必须且只能属于一个 option。
+6. 每个 selected display 输入中的 candidate_family_ids 是必须完整覆盖的 family_id 清单。
+
+【practice option 分组原则】
+
+1. 同一 option 内 family 的主要材料或设备类型、关键规格、主要施工或维修方法、施工对象、主要部位和核心工作内容应基本一致。
+2. 如果 family 之间仅在 OCR、标点、文字表达，或基层清理、垃圾清运、现场保洁、运距、结算口径等附属范围存在差异，且这些差异不改变主要施工内容和价格口径，可以归入同一 option。
+3. 如果材料种类、设备类型、关键规格、厚度、层数、主要施工或维修工艺、施工对象、主要部位或核心工作内容明显不同，应拆成不同 option。
+4. 不要仅因为 cost_item_name 相同就放入同一 option。必须比较具体项目特征、材料或设备、规格、施工方法、施工对象、主要部位和核心工作内容。
+5. 不要因为来源工程主目录与查询目录不一致而拆分，主要依据具体清单名称、项目特征和施工内容判断。
+6. 每个 candidate family 必须且只能属于一个 option，不得遗漏、重复、修改或新增 family_id。
+7. 即使某个 family 与当前默认做法不同，也必须放入某个其他 option；不得通过省略 family_id 表示排除。
+
+【当前默认参考做法选择原则】
 
 1. 优先匹配用户明确提出的材料、规格、部位和工艺。
-2. 优先选择描述清晰、没有明显 OCR 歧义的 family。
-3. 优先选择施工边界适合作为默认参考口径的 family。
-4. 本次召回样本数和本次召回工程包数越充分越优先。
-5. 样本数最多是重要依据，但不能覆盖材料、规格或施工边界不匹配。
+2. 优先选择描述清晰、没有明显 OCR 歧义的 option。
+3. 优先选择施工边界适合作为当前参考口径的 option。
+4. 本次召回样本数和工程包数充分的 option 优先。
+5. 样本数量不能覆盖材料、规格或施工边界不匹配。
+6. default_representative_family_id 必须等于某个 practice_option 的 representative_family_id。
+7. 当前默认 option 只用于现有后续链路继续运行，不表示其他 option 无效，也不限制后续 scenario 选择。
 
 【需求与检索文本使用规则】
 
@@ -1761,20 +1783,25 @@ def build_display_family_selection_prompt(
 2. project_package_query_text 和 item_query_text 只用于理解本次召回来源和追溯检索语义。
 3. 不得把检索文本当作用户新增需求，不得据此覆盖用户原始需求。
 
-【family relation】
+【覆盖校验】
 
-relation 只能取：
-- same_scope_variant：主要材料类型、主要施工方法、厚度或层数、施工对象和主要部位均基本一致，仅在是否包含基层清理、垃圾清运、现场保洁、运距、结算口径等附属范围存在差异，可共同作为同一清单项的价格证据。
-- different_method：虽然清单名称相同，但材料种类、厚度、层数或主要施工工艺明显不同，应作为替代做法，不应混入默认价格范围。
-- exclude：描述与当前 display 明显不匹配，单位异常，数据字段异常，或不适合作为当前清单项证据。
+对每个 selected display，必须满足：
 
-要求：
-1. 对 selected_family_id 之外的每个 candidate family 都输出一次 relation。
-2. difference 只概括主要差异，不复制整段项目特征。
-3. 只能引用该 display 内存在的 family_id，同一 family_id 只能出现一次。
-4. 不要因为来源工程主目录与查询目录不一致就直接 exclude，主要依据具体清单名称、项目特征和施工内容判断。
-5. 以下任一情况通常必须标为 different_method：防水材料类型不同、涂膜体系不同、卷材种类不同、厚度差异明显、层数不同、刚性防水与柔性防水不同、单一材料与组合防水体系不同、屋面大面与檐沟/立面/设备平台等施工对象明显不同。
-6. 不要仅因为 cost_item_name 相同就标为 same_scope_variant，必须比较具体材料、厚度、层数、施工方法、施工对象和部位。
+1. flatten(practice_options[*].family_ids) 与输入的 candidate_family_ids 完全一致。
+2. candidate_family_ids 中的每个 family_id 都必须出现且只能出现一次。
+3. 不得输出 candidate_family_ids 之外的 family_id。
+4. representative_family_id 也必须同时出现在自己 option 的 family_ids 中。
+5. 不输出 exclude，不允许通过省略 family_id 表达排除或不采用。
+6. 输出 JSON 前必须按 candidate_family_ids 顺序逐个检查：每个 family_id 已出现一次，且没有任何 family_id 出现两次。
+7. 如果某个 family_id 在分组判断中发生调整，只输出最终归属；不得在 group_reason 中写“修正”“重新分组”“应归入”等自我修改过程。
+8. group_reason 只说明最终分组理由，保持简短，不讨论未采用的分组方案。
+9. family_assignments 必须按 candidate_family_ids 原顺序逐个列出每个 family_id 的最终 option 序号，用于自检覆盖完整性。
+
+【输出文字限制】
+
+1. practice_description 用一句短语描述该 option。
+2. group_reason 只写最终理由，不超过 80 个汉字。
+3. 不输出推理过程、检查过程、草稿、纠错说明或 Markdown。
 
 【输出 JSON】
 
@@ -1782,14 +1809,26 @@ relation 只能取：
   "display_results": [
     {{
       "display_id": "D001",
-      "selected_family_id": "F004",
-      "default_practice": "与用户需求匹配的默认参考做法",
+      "default_representative_family_id": "F004",
       "selection_reason": "与用户明确要求一致，描述清晰，本次召回样本可追溯",
-      "family_relations": [
+      "family_assignments": [
+        {{"family_id": "F004", "practice_option_index": 1}},
+        {{"family_id": "F007", "practice_option_index": 1}},
+        {{"family_id": "F010", "practice_option_index": 2}},
+        {{"family_id": "F012", "practice_option_index": 2}}
+      ],
+      "practice_options": [
         {{
-          "family_id": "F007",
-          "relation": "same_scope_variant",
-          "difference": "仅施工边界与默认做法不同"
+          "representative_family_id": "F004",
+          "practice_description": "与用户需求匹配的参考做法",
+          "family_ids": ["F004", "F007"],
+          "group_reason": "主要材料、规格、施工方法和施工对象一致，仅附属施工范围存在差异"
+        }},
+        {{
+          "representative_family_id": "F010",
+          "practice_description": "另一种可选参考做法",
+          "family_ids": ["F010", "F012"],
+          "group_reason": "主要材料和施工方法一致，但与默认工艺不同"
         }}
       ]
     }}
@@ -1803,12 +1842,20 @@ relation 只能取：
     return prompt, records
 
 
-def fallback_family_for_display(display_id: str, display_group_families: pd.DataFrame) -> str:
-    rows = display_group_families[display_group_families["display_id"].map(cell_text).eq(display_id)].copy()
-    if rows.empty:
-        return ""
-    rows = rows.sort_values(["item_query_similarity最大值", "本次召回样本数", "本次召回工程包数"], ascending=[False, False, False])
-    return cell_text(rows.iloc[0].get("family_id"))
+def display_family_unit(row: pd.Series) -> str:
+    return cell_text(row.get("unit_normalized")) or normalized_unit(row.get("unit"))
+
+
+def empty_display_family_selection_meta() -> dict[str, Any]:
+    return {
+        "selected_display_ids": [],
+        "default_practice_option_ids": [],
+        "default_representative_family_ids": [],
+        "practice_option_count": 0,
+        "families_grouped_count": 0,
+        "option_count_by_display": {},
+        "max_options_per_display": 0,
+    }
 
 
 def parse_display_family_selection_result(
@@ -1844,79 +1891,124 @@ def parse_display_family_selection_result(
         for _index, row in display_group_families.iterrows()
     }
     result_by_display: dict[str, dict[str, Any]] = {}
-    meta = {
-        "invalid_display_ids": [],
-        "invalid_family_ids": [],
-        "duplicate_display_ids": [],
-        "selected_family_ids": [],
-        "other_family_ids": [],
-        "other_family_count": 0,
-    }
+    meta = empty_display_family_selection_meta()
 
     for item in raw_rows:
         if not isinstance(item, dict):
-            continue
+            raise ValueError("display_family_selection display_result 必须为 object")
         display_id = cell_text(item.get("display_id"))
         if display_id not in allowed_by_display:
-            meta["invalid_display_ids"].append(display_id)
-            append_warning(warnings, "invalid_display_family_display_ids")
-            continue
+            raise ValueError(f"display_family_selection 返回未选中的 display: {display_id}")
         if display_id in result_by_display:
-            meta["duplicate_display_ids"].append(display_id)
-            append_warning(warnings, "duplicate_display_family_display_ids")
-            continue
+            raise ValueError(f"display_family_selection 重复返回 display: {display_id}")
         allowed_family_ids = allowed_by_display[display_id]
-        selected_family_id = cell_text(item.get("selected_family_id"))
-        if selected_family_id not in allowed_family_ids:
-            raise ValueError(f"selected_family_id 不属于 display: {display_id}/{selected_family_id}")
-        raw_relations = item.get("family_relations", [])
-        if not isinstance(raw_relations, list):
-            raise ValueError(f"family_relations 必须为 list: {display_id}")
-        relation_by_family: dict[str, dict[str, str]] = {}
-        for relation_item in raw_relations:
-            if not isinstance(relation_item, dict):
-                continue
-            family_id = cell_text(relation_item.get("family_id"))
-            if family_id not in allowed_family_ids:
-                meta["invalid_family_ids"].append(family_id)
-                append_warning(warnings, "invalid_display_family_relation_ids")
-                continue
-            if family_id == selected_family_id:
-                append_warning(warnings, "selected_family_in_family_relations")
-                continue
-            if family_id in relation_by_family:
-                append_warning(warnings, "duplicate_display_family_relation_ids")
-                continue
-            relation = cell_text(relation_item.get("relation"))
-            if relation not in ALLOWED_FAMILY_RELATIONS:
-                relation = "exclude"
-                append_warning(warnings, "unknown_family_relations")
-            if relation == "same_scope_variant":
-                selected_family = family_row_map.get((display_id, selected_family_id), pd.Series(dtype=object))
-                candidate_family = family_row_map.get((display_id, family_id), pd.Series(dtype=object))
-                selected_unit = normalized_unit(selected_family.get("unit"))
-                candidate_unit = normalized_unit(candidate_family.get("unit"))
-                current_display_name = normalize_display_name(display_map.get(display_id, pd.Series(dtype=object)).get("display_name"))
-                candidate_display_name = normalize_display_name(candidate_family.get("representative_cost_item_name"))
-                if selected_unit and candidate_unit and candidate_unit != selected_unit:
-                    relation = "different_method"
-                    append_warning(warnings, "same_scope_variant_unit_mismatch")
-                elif current_display_name and candidate_display_name and candidate_display_name != current_display_name:
-                    relation = "different_method"
-                    append_warning(warnings, "same_scope_variant_display_mismatch")
-            relation_by_family[family_id] = {
-                "family_id": family_id,
-                "relation": relation,
-                "difference": cell_text(relation_item.get("difference")),
-            }
-        family_relations = [
-            relation_by_family.get(
-                family_id,
-                {"family_id": family_id, "relation": "exclude", "difference": ""},
+        if not allowed_family_ids:
+            raise ValueError(f"display 缺少 candidate families: {display_id}")
+        default_representative_family_id = cell_text(item.get("default_representative_family_id"))
+        raw_options = item.get("practice_options")
+        if not isinstance(raw_options, list) or not raw_options:
+            raise ValueError(f"practice_options 必须为非空 list: {display_id}")
+
+        practice_options: list[dict[str, Any]] = []
+        seen_family_ids: set[str] = set()
+        representative_family_ids: set[str] = set()
+        default_practice_option_id = ""
+        default_practice = ""
+        family_relations: list[dict[str, str]] = []
+        for option_index, raw_option in enumerate(raw_options, start=1):
+            if not isinstance(raw_option, dict):
+                raise ValueError(f"practice_option 必须为 object: {display_id}/O{option_index:02d}")
+            representative_family_id = cell_text(raw_option.get("representative_family_id"))
+            practice_description = truncate_text(normalize_display_description(raw_option.get("practice_description")), 120)
+            group_reason = cell_text(raw_option.get("group_reason"))
+            raw_family_ids = raw_option.get("family_ids")
+            if not representative_family_id:
+                raise ValueError(f"practice_option 缺少 representative_family_id: {display_id}/O{option_index:02d}")
+            if not practice_description:
+                raise ValueError(f"practice_description 不得为空: {display_id}/{representative_family_id}")
+            if not group_reason:
+                raise ValueError(f"group_reason 不得为空: {display_id}/{representative_family_id}")
+            if not isinstance(raw_family_ids, list) or not raw_family_ids:
+                raise ValueError(f"family_ids 必须为非空 list: {display_id}/{representative_family_id}")
+            family_ids = [cell_text(family_id) for family_id in raw_family_ids]
+            if any(not family_id for family_id in family_ids):
+                raise ValueError(f"family_ids 不得为空: {display_id}/{representative_family_id}")
+            duplicate_in_option = [family_id for family_id in family_ids if family_ids.count(family_id) > 1]
+            if duplicate_in_option:
+                raise ValueError(f"同一 practice_option 内 family 重复: {display_id}/{join_non_empty(duplicate_in_option)}")
+            unknown_family_ids = [family_id for family_id in family_ids if family_id not in allowed_family_ids]
+            if unknown_family_ids:
+                raise ValueError(f"practice_option 包含不属于当前 display 的 family: {display_id}/{join_non_empty(unknown_family_ids)}")
+            duplicate_across_options = [family_id for family_id in family_ids if family_id in seen_family_ids]
+            if duplicate_across_options:
+                raise ValueError(f"family 不得出现在多个 practice_options: {display_id}/{join_non_empty(duplicate_across_options)}")
+            if representative_family_id not in family_ids:
+                raise ValueError(f"representative_family_id 必须位于自己的 family_ids 中: {display_id}/{representative_family_id}")
+            if representative_family_id in representative_family_ids:
+                raise ValueError(f"不同 option 的 representative family 不得重复: {display_id}/{representative_family_id}")
+            option_units = [
+                display_family_unit(family_row_map.get((display_id, family_id), pd.Series(dtype=object)))
+                for family_id in family_ids
+            ]
+            if len(set(option_units)) > 1:
+                raise ValueError(f"同一 practice_option 中 family 单位必须一致: {display_id}/{representative_family_id}")
+
+            representative_family_ids.add(representative_family_id)
+            seen_family_ids.update(family_ids)
+            practice_option_id = f"{display_id}-O{option_index:02d}"
+            is_default_option = representative_family_id == default_representative_family_id
+            if is_default_option:
+                default_practice_option_id = practice_option_id
+                default_practice = practice_description
+            practice_options.append(
+                {
+                    "practice_option_id": practice_option_id,
+                    "representative_family_id": representative_family_id,
+                    "practice_description": practice_description,
+                    "family_ids": family_ids,
+                    "group_reason": group_reason,
+                }
             )
-            for family_id in allowed_order_by_display[display_id]
-            if family_id != selected_family_id
-        ]
+            for family_id in family_ids:
+                if family_id == default_representative_family_id:
+                    continue
+                family_relations.append(
+                    {
+                        "family_id": family_id,
+                        "relation": "same_scope_variant" if is_default_option else "different_method",
+                        "difference": "与当前默认参考做法属于同一 practice option" if is_default_option else practice_description or group_reason,
+                    }
+                )
+
+        missing_family_ids = [family_id for family_id in allowed_order_by_display[display_id] if family_id not in seen_family_ids]
+        if missing_family_ids:
+            raise ValueError(f"practice_options 遗漏 candidate family: {display_id}/{join_non_empty(missing_family_ids)}")
+        extra_family_ids = [family_id for family_id in seen_family_ids if family_id not in allowed_family_ids]
+        if extra_family_ids:
+            raise ValueError(f"practice_options 新增非法 family: {display_id}/{join_non_empty(extra_family_ids)}")
+        if default_representative_family_id not in representative_family_ids:
+            raise ValueError(f"default_representative_family_id 必须等于某个 option representative: {display_id}/{default_representative_family_id}")
+        raw_assignments = item.get("family_assignments")
+        if isinstance(raw_assignments, list):
+            assignment_ids: list[str] = []
+            option_by_family = {
+                family_id: index
+                for index, option in enumerate(practice_options, start=1)
+                for family_id in option.get("family_ids", [])
+            }
+            for assignment in raw_assignments:
+                if not isinstance(assignment, dict):
+                    raise ValueError(f"family_assignments 中每项必须为 object: {display_id}")
+                family_id = cell_text(assignment.get("family_id"))
+                assignment_ids.append(family_id)
+                option_index = int(numeric_or_none(assignment.get("practice_option_index")) or 0)
+                if family_id not in allowed_family_ids:
+                    raise ValueError(f"family_assignments 包含不属于当前 display 的 family: {display_id}/{family_id}")
+                if option_by_family.get(family_id) != option_index:
+                    raise ValueError(f"family_assignments 与 practice_options 不一致: {display_id}/{family_id}")
+            if assignment_ids != allowed_order_by_display[display_id]:
+                raise ValueError(f"family_assignments 必须按 candidate_family_ids 完整列出: {display_id}")
+
         selected_row = selected_by_display[display_id]
         display_row = display_map.get(display_id, pd.Series(dtype=object))
         result_by_display[display_id] = {
@@ -1925,74 +2017,26 @@ def parse_display_family_selection_result(
             "unit": cell_text(display_row.get("unit")),
             "family_count": display_row.get("family_count", ""),
             "selection_reason": cell_text(selected_row.get("selection_reason")),
-            "selected_family_id": selected_family_id,
-            "default_practice": truncate_text(normalize_display_description(item.get("default_practice")), 120),
+            "default_practice_option_id": default_practice_option_id,
+            "default_representative_family_id": default_representative_family_id,
+            "selected_family_id": default_representative_family_id,
+            "default_practice": default_practice,
             "family_selection_reason": cell_text(item.get("selection_reason")),
+            "practice_options": practice_options,
             "family_relations": family_relations,
         }
-        meta["selected_family_ids"].append(selected_family_id)
-        meta["other_family_ids"].extend(
-            relation["family_id"]
-            for relation in family_relations
-            if relation["relation"] == "different_method"
-        )
+        meta["selected_display_ids"].append(display_id)
+        meta["default_practice_option_ids"].append(default_practice_option_id)
+        meta["default_representative_family_ids"].append(default_representative_family_id)
+        meta["practice_option_count"] += len(practice_options)
+        meta["families_grouped_count"] += len(seen_family_ids)
+        meta["option_count_by_display"][display_id] = len(practice_options)
+        meta["max_options_per_display"] = max(meta["max_options_per_display"], len(practice_options))
 
     missing = [display_id for display_id in display_ids if display_id not in result_by_display]
     if missing:
-        raise ValueError(f"每个 selected_display 必须有 selected_family_id: {join_non_empty(missing)}")
-    meta["other_family_count"] = len(meta["other_family_ids"])
+        raise ValueError(f"每个 selected_display 必须返回 practice_options: {join_non_empty(missing)}")
     return pd.DataFrame([result_by_display[display_id] for display_id in display_ids]), meta
-
-
-def fallback_display_family_selection(
-    selected_displays: pd.DataFrame,
-    candidate_display_groups: pd.DataFrame,
-    display_group_families: pd.DataFrame,
-) -> tuple[pd.DataFrame, dict[str, Any]]:
-    display_map = {cell_text(row.get("display_id")): row for _index, row in candidate_display_groups.iterrows()}
-    family_map = {cell_text(row.get("family_id")): row for _index, row in display_group_families.iterrows()}
-    rows: list[dict[str, Any]] = []
-    selected_family_ids: list[str] = []
-    for _index, selected in selected_displays.iterrows():
-        display_id = cell_text(selected.get("display_id"))
-        selected_family_id = fallback_family_for_display(display_id, display_group_families)
-        if not selected_family_id:
-            continue
-        family = family_map.get(selected_family_id, pd.Series(dtype=object))
-        display = display_map.get(display_id, pd.Series(dtype=object))
-        selected_family_ids.append(selected_family_id)
-        rows.append(
-            {
-                "display_id": display_id,
-                "display_name": cell_text(display.get("display_name")),
-                "unit": cell_text(display.get("unit")),
-                "family_count": display.get("family_count", ""),
-                "selection_reason": cell_text(selected.get("selection_reason")),
-                "selected_family_id": selected_family_id,
-                "default_practice": truncate_text(normalize_display_description(family.get("representative_project_description")), 120),
-                "family_selection_reason": "按组内 item_query_similarity、样本数和本次召回工程包数确定默认参考做法",
-                "family_relations": [
-                    {
-                        "family_id": cell_text(candidate.get("family_id")),
-                        "relation": "exclude",
-                        "difference": "",
-                    }
-                    for _candidate_index, candidate in display_group_families[
-                        display_group_families["display_id"].map(cell_text).eq(display_id)
-                    ].iterrows()
-                    if cell_text(candidate.get("family_id")) != selected_family_id
-                ],
-            }
-        )
-    meta = {
-        "invalid_display_ids": [],
-        "invalid_family_ids": [],
-        "duplicate_display_ids": [],
-        "selected_family_ids": selected_family_ids,
-        "other_family_ids": [],
-        "other_family_count": 0,
-    }
-    return pd.DataFrame(rows), meta
 
 
 def build_display_family_selection_trace_frame(
@@ -2001,55 +2045,70 @@ def build_display_family_selection_trace_frame(
     candidate_families: pd.DataFrame,
 ) -> pd.DataFrame:
     family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
+    display_family_map = {
+        (cell_text(row.get("display_id")), cell_text(row.get("family_id"))): row
+        for _index, row in display_group_families.iterrows()
+    }
     selected_map = {cell_text(row.get("display_id")): row for _index, row in selected_display_practices.iterrows()}
     rows: list[dict[str, Any]] = []
-    selected_display_ids = set(selected_map)
-    for _index, row in display_group_families[display_group_families["display_id"].map(cell_text).isin(selected_display_ids)].iterrows():
-        display_id = cell_text(row.get("display_id"))
-        family_id = cell_text(row.get("family_id"))
-        selected = selected_map.get(display_id, pd.Series(dtype=object))
-        candidate = family_map.get(family_id, pd.Series(dtype=object))
-        family_relations = selected.get("family_relations") if isinstance(selected.get("family_relations"), list) else []
-        relation_map = {
-            cell_text(item.get("family_id")): item
-            for item in family_relations
-            if isinstance(item, dict)
-        }
+    for display_id, selected in selected_map.items():
         selected_family_id = cell_text(selected.get("selected_family_id"))
-        relation_item = relation_map.get(family_id, {})
-        relation = "selected" if family_id == selected_family_id else cell_text(relation_item.get("relation")) or "exclude"
-        selected_candidate = family_map.get(selected_family_id, pd.Series(dtype=object))
-        selected_unit = cell_text(selected_candidate.get("unit_normalized")) or normalized_unit(selected_candidate.get("unit"))
-        candidate_unit = cell_text(candidate.get("unit_normalized")) or normalized_unit(candidate.get("unit"))
-        included_in_price = relation == "selected" or (
-            relation == "same_scope_variant"
-            and bool(selected_unit)
-            and candidate_unit == selected_unit
-        )
-        rows.append(
-            {
-                "display_id": display_id,
-                "display_name": cell_text(row.get("display_name")),
-                "family_id": family_id,
-                "fine_signature": cell_text(row.get("fine_signature")),
-                "representative_cost_item_name": cell_text(row.get("representative_cost_item_name")),
-                "representative_project_description": cell_text(row.get("representative_project_description")),
-                "display_project_description": normalize_display_description(row.get("representative_project_description")),
-                "本次召回样本数": row.get("本次召回样本数", ""),
-                "本次召回工程包数": row.get("本次召回工程包数", ""),
-                "item_query_similarity最大值": row.get("item_query_similarity最大值", ""),
-                "unit_price_min": candidate.get("本次召回综合单价最低值", ""),
-                "unit_price_median": candidate.get("本次召回综合单价中位数", ""),
-                "unit_price_max": candidate.get("本次召回综合单价最高值", ""),
-                "is_selected_family": "是" if family_id == selected_family_id else "否",
-                "is_other_practice": "是" if relation == "different_method" else "否",
-                "other_practice_difference": cell_text(relation_item.get("difference")),
-                "relation_to_selected": relation,
-                "included_in_price_scope": "是" if included_in_price else "否",
-                "selection_reason": cell_text(selected.get("family_selection_reason")) if family_id == selected_family_id else "",
-            }
-        )
-    return pd.DataFrame(rows, columns=DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS)
+        default_practice_option_id = cell_text(selected.get("default_practice_option_id"))
+        practice_options = selected.get("practice_options") if isinstance(selected.get("practice_options"), list) else []
+        for option in practice_options:
+            if not isinstance(option, dict):
+                continue
+            practice_option_id = cell_text(option.get("practice_option_id"))
+            representative_family_id = cell_text(option.get("representative_family_id"))
+            practice_description = cell_text(option.get("practice_description"))
+            group_reason = cell_text(option.get("group_reason"))
+            family_ids = option.get("family_ids") if isinstance(option.get("family_ids"), list) else []
+            is_default_option = practice_option_id == default_practice_option_id
+            for family_id_value in family_ids:
+                family_id = cell_text(family_id_value)
+                row = display_family_map.get((display_id, family_id), pd.Series(dtype=object))
+                candidate = family_map.get(family_id, pd.Series(dtype=object))
+                if family_id == selected_family_id:
+                    relation = "selected"
+                elif is_default_option:
+                    relation = "same_scope_variant"
+                else:
+                    relation = "different_method"
+                rows.append(
+                    {
+                        "display_id": display_id,
+                        "display_name": cell_text(row.get("display_name")) or cell_text(selected.get("display_name")),
+                        "practice_option_id": practice_option_id,
+                        "is_current_default_option": "是" if is_default_option else "否",
+                        "representative_family_id": representative_family_id,
+                        "practice_description": practice_description,
+                        "family_id": family_id,
+                        "family_role": "representative" if family_id == representative_family_id else "member",
+                        "representative_cost_item_name": cell_text(row.get("representative_cost_item_name")),
+                        "representative_project_description": cell_text(row.get("representative_project_description")),
+                        "unit": cell_text(candidate.get("unit_normalized")) or cell_text(row.get("unit")) or cell_text(candidate.get("unit")),
+                        "本次召回样本数": row.get("本次召回样本数", ""),
+                        "本次召回工程包数": row.get("本次召回工程包数", ""),
+                        "item_query_similarity最大值": row.get("item_query_similarity最大值", ""),
+                        "unit_price_min": candidate.get("本次召回综合单价最低值", ""),
+                        "unit_price_median": candidate.get("本次召回综合单价中位数", ""),
+                        "unit_price_max": candidate.get("本次召回综合单价最高值", ""),
+                        "relation_to_current_default": relation,
+                        "included_in_current_price_scope": "是" if is_default_option else "否",
+                        "group_reason": group_reason,
+                        "selection_reason": cell_text(selected.get("family_selection_reason")) if is_default_option and family_id == selected_family_id else "",
+                    }
+                )
+    frame = pd.DataFrame(rows, columns=DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS)
+    if frame.empty:
+        return frame
+    frame["_family_role_sort"] = frame["family_role"].map(lambda value: 0 if cell_text(value) == "representative" else 1)
+    frame["_item_similarity_sort"] = pd.to_numeric(frame["item_query_similarity最大值"], errors="coerce").fillna(-1)
+    frame = frame.sort_values(
+        ["display_id", "practice_option_id", "_family_role_sort", "_item_similarity_sort"],
+        ascending=[True, True, True, False],
+    ).drop(columns=["_family_role_sort", "_item_similarity_sort"])
+    return frame[DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS]
 
 
 def generate_display_family_selection(
@@ -2067,75 +2126,49 @@ def generate_display_family_selection(
         display_group_families,
         candidate_families,
     )
-    max_tokens = 3072
+    family_count = sum(len(item.get("candidate_families") or []) for item in records)
+    max_tokens = min(8192, max(3072, 3072 + family_count * 160 + len(records) * 256))
     if selected_displays.empty:
         trace = trace_row(
             "display_family_selection",
-            "为已选 display 选择默认 family 和其他参考做法",
+            "将已选 display 内的 family 整理为 practice options，并选择当前默认参考做法",
             True,
             prompt=prompt,
             max_tokens=max_tokens,
-            input_summary=json_text({"display_count": 0, "family_count": 0, "selected_family_ids": [], "other_family_ids": []}),
+            input_summary=json_text({"display_count": 0, "family_count": 0, "default_practice_option_ids": []}),
         )
-        return pd.DataFrame(), True, False, "", prompt, trace, {
-            "selected_family_ids": [],
-            "other_family_ids": [],
-            "other_family_count": 0,
-        }, pd.DataFrame(columns=DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS)
-    try:
-        response = request_llm_json_with_usage(
-            prompt,
-            max_tokens=max_tokens,
-            system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
-        )
-        selected, meta = parse_display_family_selection_result(
-            response.content,
-            selected_displays,
-            candidate_display_groups,
-            display_group_families,
-            warnings,
-        )
-        trace_frame = build_display_family_selection_trace_frame(selected, display_group_families, candidate_families)
-        family_count = sum(len(item.get("candidate_families") or []) for item in records)
-        trace = trace_row(
-            "display_family_selection",
-            "为已选 display 选择默认 family 和其他参考做法",
-            True,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text(
-                {
-                    "display_count": len(records),
-                    "family_count": family_count,
-                    "selected_family_ids": trace_id_summary(meta.get("selected_family_ids") or []),
-                    "other_family_ids": trace_id_summary(meta.get("other_family_ids") or []),
-                }
-            ),
-            usage=response.usage,
-        )
-        return selected, True, False, "", prompt, trace, meta, trace_frame
-    except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-        append_warning(warnings, "display_family_selection_failed")
-        fallback, meta = fallback_display_family_selection(selected_displays, candidate_display_groups, display_group_families)
-        trace_frame = build_display_family_selection_trace_frame(fallback, display_group_families, candidate_families)
-        family_count = sum(len(item.get("candidate_families") or []) for item in records)
-        trace = trace_row(
-            "display_family_selection",
-            "为已选 display 选择默认 family 和其他参考做法",
-            False,
-            error=str(exc),
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text(
-                {
-                    "display_count": len(records),
-                    "family_count": family_count,
-                    "selected_family_ids": trace_id_summary(meta.get("selected_family_ids") or []),
-                    "other_family_ids": trace_id_summary(meta.get("other_family_ids") or []),
-                }
-            ),
-        )
-        return fallback, False, True, str(exc), prompt, trace, meta, trace_frame
+        return pd.DataFrame(), True, False, "", prompt, trace, empty_display_family_selection_meta(), pd.DataFrame(columns=DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS)
+    response = request_llm_json_with_usage(
+        prompt,
+        max_tokens=max_tokens,
+        system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
+    )
+    selected, meta = parse_display_family_selection_result(
+        response.content,
+        selected_displays,
+        candidate_display_groups,
+        display_group_families,
+        warnings,
+    )
+    trace_frame = build_display_family_selection_trace_frame(selected, display_group_families, candidate_families)
+    trace = trace_row(
+        "display_family_selection",
+        "将已选 display 内的 family 整理为 practice options，并选择当前默认参考做法",
+        True,
+        prompt=prompt,
+        max_tokens=max_tokens,
+        input_summary=json_text(
+            {
+                "display_count": len(records),
+                "family_count": family_count,
+                "default_practice_option_ids": trace_id_summary(meta.get("default_practice_option_ids") or []),
+                "default_representative_family_ids": trace_id_summary(meta.get("default_representative_family_ids") or []),
+                "practice_option_count": meta.get("practice_option_count", 0),
+            }
+        ),
+        usage=response.usage,
+    )
+    return selected, True, False, "", prompt, trace, meta, trace_frame
 
 
 def normalized_unit(value: Any) -> str:
@@ -2854,7 +2887,6 @@ def build_final_suggested_bill(
             "其中包含机械费单价最低值": price_stats["machinery_unit_price_min"],
             "其中包含机械费单价中位数": price_stats["machinery_unit_price_median"],
             "其中包含机械费单价最高值": price_stats["machinery_unit_price_max"],
-            "推荐依据": join_non_empty([selected.get("selection_reason"), selected.get("family_selection_reason")]),
             "来源样本": price_stats["source_refs"] or ", ".join(split_refs(family.get("source_refs"), 10)),
         }
         amount_pairs = [
@@ -3201,7 +3233,6 @@ def build_scenario_outputs(
                 "估算金额中包含机械费中位数": source.get("估算金额中包含机械费中位数", "") if include_amount else "",
                 "估算金额中包含机械费最高值": source.get("估算金额中包含机械费最高值", "") if include_amount else "",
                 "金额计算口径": source.get("金额计算口径", ""),
-                "推荐依据": source.get("推荐依据", ""),
                 "来源样本": source.get("来源样本", ""),
                 "方案说明": scenario.reason,
             }
@@ -3512,9 +3543,13 @@ def build_parse_info(
         ("display_selection_prompt_tokens", display_selection_trace.get("prompt_tokens") or display_selection_trace.get("estimated_tokens", "")),
         ("display_selection_completion_tokens", display_selection_trace.get("completion_tokens", "")),
         ("display_family_selection_display_count", display_family_selection_display_count),
-        ("display_family_selection_selected_family_ids", json_text(display_family_selection_meta.get("selected_family_ids") or [])),
-        ("display_family_selection_other_family_count", display_family_selection_meta.get("other_family_count", "")),
-        ("display_family_selection_other_family_ids", json_text(display_family_selection_meta.get("other_family_ids") or [])),
+        ("display_family_selection_selected_display_ids", json_text(display_family_selection_meta.get("selected_display_ids") or [])),
+        ("display_family_selection_default_practice_option_ids", json_text(display_family_selection_meta.get("default_practice_option_ids") or [])),
+        ("display_family_selection_default_representative_family_ids", json_text(display_family_selection_meta.get("default_representative_family_ids") or [])),
+        ("display_family_selection_practice_option_count", display_family_selection_meta.get("practice_option_count", "")),
+        ("display_family_selection_families_grouped_count", display_family_selection_meta.get("families_grouped_count", "")),
+        ("display_family_selection_option_count_by_display", json_text(display_family_selection_meta.get("option_count_by_display") or {})),
+        ("display_family_selection_max_options_per_display", display_family_selection_meta.get("max_options_per_display", "")),
         ("display_family_selection_prompt_chars", display_family_selection_trace.get("prompt_chars", "")),
         ("display_family_selection_prompt_tokens", display_family_selection_trace.get("prompt_tokens") or display_family_selection_trace.get("estimated_tokens", "")),
         ("display_family_selection_completion_tokens", display_family_selection_trace.get("completion_tokens", "")),
@@ -3527,9 +3562,8 @@ def build_parse_info(
         ("scenario_selection_prompt_chars", scenario_selection_trace.get("prompt_chars", "")),
         ("scenario_selection_prompt_tokens", scenario_selection_trace.get("prompt_tokens") or scenario_selection_trace.get("estimated_tokens", "")),
         ("scenario_selection_completion_tokens", scenario_selection_trace.get("completion_tokens", "")),
-        ("invalid_display_ids", join_non_empty([*(display_selection_meta.get("invalid_display_ids") or []), *(display_family_selection_meta.get("invalid_display_ids") or []), *(quantity_decision_meta.get("invalid_display_ids") or [])])),
+        ("invalid_display_ids", join_non_empty([*(display_selection_meta.get("invalid_display_ids") or []), *(quantity_decision_meta.get("invalid_display_ids") or [])])),
         ("duplicate_display_ids", join_non_empty([*(display_selection_meta.get("duplicate_display_ids") or []), *(quantity_decision_meta.get("duplicate_display_ids") or [])])),
-        ("invalid_family_ids", join_non_empty(display_family_selection_meta.get("invalid_family_ids") or [])),
         ("invalid_quantity_sources", join_non_empty(quantity_decision_meta.get("invalid_quantity_sources") or [])),
         ("invalid_quantity_ranges", join_non_empty(quantity_decision_meta.get("invalid_quantity_ranges") or [])),
         ("是否 display_selection fallback", "是" if display_selection_fallback else "否"),
