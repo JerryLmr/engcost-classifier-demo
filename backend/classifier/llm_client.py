@@ -25,6 +25,7 @@ class LLMServiceError(RuntimeError):
 class LLMJsonResponse:
     content: Dict[str, Any]
     usage: Dict[str, Any]
+    raw_content: str = ""
 
 
 @dataclass(frozen=True)
@@ -206,6 +207,7 @@ def _request_lmstudio_json_with_usage(
     return LLMJsonResponse(
         content=_extract_json_object(content),
         usage=usage if isinstance(usage, dict) else {},
+        raw_content=content,
     )
 
 

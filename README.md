@@ -258,10 +258,10 @@ display_selection 默认最多发送 50 个 display。候选过多时，主排�
 → 按 cost_item_name + unit 形成 display groups
 → 按 display 重新计算 retrieval_package_support_ratio
 → LLM 选择最小完整施工链中的 display
-→ 对已选 display 选择默认 family 和其他参考做法
-→ display 级重复/包含关系处理
-→ 工程量与金额处理
-→ suggested_bill
+→ display_family_selection 形成每个 display 下的完整 practice_options
+→ scenario generation 生成一个或多个估价方案
+→ 程序按 scenario 选用的 practice option 回填单价并计算合价
+→ estimate_summary / estimate_scenarios / suggested_bill
 ```
 
 召回数据层次：
@@ -278,8 +278,9 @@ candidate_display_groups
 
 输出 xlsx 固定包含：
 
-- `estimate_summary`：面向用户/领导的估价摘要，展示需求理解、建议方案概览、方案数量、推荐方案概览和计入金额项目。
-- `suggested_bill`：估价主表，一行一个最终保留的 display。清单名称来自 display，默认参考做法和价格来源来自 `selected_family_id`；同组其他 family 只作为“其他参考做法”展示，不单独生成金额行。
+- `estimate_summary`：面向用户/领导的估价摘要，一行一个 scenario，展示方案顺序、方案说明、项目数量和汇总金额区间。
+- `estimate_scenarios`：scenario 明细表，一行一个 scenario item，展示项目名称、选用工艺、其他可选工艺、工程量、是否纳入、是否计价、单价、合价和选用说明。
+- `suggested_bill`：从排序最前的 scenario 生成的建议清单视图，保留当前主表展示用途。
 - `matched_project_packages`：工程包级召回结果，包括 `package_query_similarity`、`project_package_id`、工程名称、`project_name_text`、`cost_item_names_summary`、`consultation_time`、`location`、`cache_subject` 和 `item_count`。
 - `direct_item_hits`：清单行级直接召回结果，参与生成 `retrieved_evidence_items`，不单独输出为 sheet。
 - `retrieved_evidence_items`：工程包召回与清单行召回合并后的逐行结果；输出时体现为回填 `family_id` 后的 `evidence_items`。
@@ -288,10 +289,10 @@ candidate_display_groups
 - `candidate_display_groups`：按 normalized `cost_item_name + unit` 组织出来的客户展示候选。display 只用于减少同名清单项重复展示，不合并同组 family 的价格样本；`retrieval_package_support_ratio` 表示本次召回工程包证据对该 display 的加权支持比例。
 - `display_group_families`：display 到内部 family 的映射表，用于从 display 回查 `fine_signature`、默认 family 和 evidence。
 - `display_selection_trace`：记录实际发送给 display_selection LLM 的 display、`selection_rank`、`retrieval_package_support_ratio`、`candidate_source`、是否被选中和选择原因。
-- `display_family_selection_trace`：记录每个已选 display 内部的 family、默认 family、其他参考做法及差异说明。
+- `display_family_selection_trace`：记录每个已选 display 内部的 practice options 及其覆盖的 family，用于追溯 option 分组。
 - `evidence_items`：来源样本明细，保存本次查询进入候选池的历史清单行。`source_ref = project_key + "::" + item_row_id`，`family_id` 和 `fine_signature` 可用于从历史样本回查所属 family。
 - `parse_info`：本次查询解析结果和检索参数，包括原始需求、ParsedQuery、retrieved evidence 行数、family 数、display 数、LLM 输入/输出规模、token、fallback、错误、dedup 抑制摘要和 warnings。
-- `llm_trace`：记录 query rewrite、display selection、display family selection、dedup selection、quantity decision、scenario selection 是否成功、prompt 长度、真实 token（服务返回时）或估算 token、输入摘要和错误。
+- `llm_trace`：记录 query rewrite、display selection、display family selection、scenario generation 的 prompt、原始响应、解析状态、token、输入摘要和错误。
 
 `fine_signature` 会对已确认的等价表达做受控归一化，例如：
 
@@ -305,9 +306,9 @@ candidate_display_groups
 LLM 职责边界：
 
 - display_selection：只从输入的 `candidate_displays` 中选择真实存在的 `display_id`；主证据是 `retrieval_package_support_ratio` 和简短参考做法示例，但不能只按比例机械选择。
-- display_family_selection：只在已选 display 内选择一个 `selected_family_id` 作为默认做法和价格来源，并选择 0～3 个同组其他参考做法。
-- quantity_decision：只为已选 display 判断工程量低/中/高区间、工程量来源和是否计入参考金额。
-- LLM 不生成单价、来源、清单名称、单位或金额。综合单价必须来自 `selected_family_id` 对应的同一 `fine_signature` 本次召回样本统计。
+- display_family_selection：只把已选 display 内的全部 family 完整整理为 practice_options，不决定最终 option。
+- scenario generation：接收完整 practice_options，决定 scenario、每个 item 的 practice_option、quantity、include、amount，并生成 scenario summary 和 item selection reason。
+- LLM 不生成单价、来源、清单名称、单位或合价。综合单价和合价由程序根据 scenario 选用的 practice option 回填和计算。
 
 来源样本统一使用：
 
