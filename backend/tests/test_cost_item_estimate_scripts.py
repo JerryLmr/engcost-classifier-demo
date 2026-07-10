@@ -583,19 +583,16 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         llm_result = {
             "project_package_query_text": "屋面漏水维修工程 屋面卷材防水",
             "item_query_text": "",
-            "parsed_quantities": [{"raw_text": "500平", "value": 500, "unit": "m²"}],
-            "materials_or_specs": ["3mm SBS"],
-            "repair_object": "屋面防水层",
-            "uncertainties": ["是否拆除旧防水层未知"],
+            "extra_analysis": [{"raw_text": "500平", "value": 500, "unit": "m²"}],
+            "extra_specs": ["3mm SBS"],
             "likely_catalog": {"SHOULD": "IGNORE"},
         }
         with patch.object(query_estimate_llm, "request_llm_json", return_value=llm_result):
             rewrite, trace = query_estimate_llm.query_rewrite_for_embedding("屋面漏水")
 
         self.assertTrue(rewrite.success)
+        self.assertEqual(rewrite.project_package_query_text, "屋面漏水维修工程 屋面卷材防水")
         self.assertEqual(rewrite.item_query_text, "屋面漏水维修工程 屋面卷材防水")
-        self.assertEqual(rewrite.parsed_quantities[0]["value"], 500)
-        self.assertEqual(rewrite.materials_or_specs, ["3mm SBS"])
         self.assertIn("item_query_text 为空", rewrite.notes[0])
         self.assertEqual(trace["step"], "query_rewrite_for_embedding")
 
@@ -605,7 +602,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertFalse(fallback.success)
         self.assertEqual(fallback.project_package_query_text, "屋面漏水")
         self.assertEqual(fallback.item_query_text, "屋面漏水")
-        self.assertEqual(fallback.parsed_quantities, [])
         self.assertEqual(trace["success"], "否")
 
     def test_package_evidence_weights_use_continuous_softmax(self):
@@ -925,7 +921,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             columns=query_estimate_llm.CANDIDATE_DISPLAY_GROUP_COLUMNS,
         )
         selected = query_estimate_llm.select_displays_for_llm(displays, display_selection_limit=50, exploration_limit=5)
-        rewrite = query_estimate_llm.QueryRewrite("屋面漏水", "屋面漏水", "屋面防水", [], [], "屋面", [], [], True)
+        rewrite = query_estimate_llm.QueryRewrite("屋面漏水", "屋面漏水", "屋面防水", [], True)
         prompt, records = query_estimate_llm.build_display_selection_prompt(rewrite, selected)
         parsed, meta = query_estimate_llm.parse_display_selection_result(
             {"selected_displays": [{"display_id": "D001", "selection_reason": "直接对应"}]},
@@ -1609,10 +1605,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             raw_query="维修",
             project_package_query_text="维修",
             item_query_text="维修",
-            parsed_quantities=[],
-            materials_or_specs=[],
-            repair_object="屋面",
-            uncertainties=[],
             notes=[],
             success=True,
         )
@@ -1669,6 +1661,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             summary["字段"].tolist(),
             ["需求理解", "建议方案概览", "方案数量", "推荐方案概览", "计入金额项目"],
         )
+        self.assertEqual(values["需求理解"], "用户原始需求：维修")
         self.assertEqual(values["方案数量"], 1)
         self.assertIn("默认估价方案", values["推荐方案概览"])
         self.assertIn("建议清单包括：核心做法（3mm SBS）", values["建议方案概览"])
@@ -1677,7 +1670,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertNotIn("替代做法", values["计入金额项目"])
 
     def test_build_parse_info_includes_llm_metrics(self):
-        rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], [], "", [], [], True)
+        rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], True)
 
         parse_info = query_estimate_llm.build_parse_info(
             rewrite=rewrite,
@@ -1780,11 +1773,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(values["invalid_display_ids"], "BAD")
         self.assertEqual(values["invalid_quantity_sources"], "bad")
         self.assertEqual(values["是否 quantity_decision fallback"], "是")
+        self.assertNotIn("Parsed" + "Query", values)
         self.assertNotIn("query_" + "catalog", values)
         self.assertNotIn("query_" + "catalog_classification 是否成功", values)
 
     def test_write_query_result_workbook_has_expected_sheets(self):
-        rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], [], "", [], [], True)
+        rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], True)
         result = query_estimate_llm.QueryResult(
             rewrite=rewrite,
             estimate_summary=pd.DataFrame([{"字段": "原始需求", "值": "屋面"}]),

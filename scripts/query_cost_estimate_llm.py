@@ -302,10 +302,6 @@ class QueryRewrite:
     raw_query: str
     project_package_query_text: str
     item_query_text: str
-    parsed_quantities: list[dict[str, Any]]
-    materials_or_specs: list[str]
-    repair_object: str
-    uncertainties: list[str]
     notes: list[str]
     success: bool
 
@@ -579,19 +575,7 @@ def build_query_rewrite_prompt(query: str) -> str:
 输出格式：
 {{
   "project_package_query_text": "",
-  "item_query_text": "",
-  "parsed_quantities": [
-    {{
-      "raw_text": "500平",
-      "value": 500,
-      "unit": "m²",
-      "meaning": "维修面积",
-      "confidence": 0.95
-    }}
-  ],
-  "materials_or_specs": ["材料或规格"],
-  "repair_object": "维修对象",
-  "uncertainties": ["现场条件未知"]
+  "item_query_text": ""
 }}
 
 当前 embedding 结构：
@@ -600,18 +584,18 @@ def build_query_rewrite_prompt(query: str) -> str:
 2. item_retrieval_text 由“cost_item_name、project_description、unit_normalized”组成。
    item_query_text 用于匹配相似清单行，应贴近用户明确表达的维修对象、材料规格和做法，不要扩展未明确发生的清单项。
 3. item_query_text 必须非空。如果用户问得很粗，也输出宽泛 item query，不要留空。
-4. parsed_quantities 只解析用户原文明确或强烈暗示的工程量、面积、长度、数量等，不要为了估价编造工程量。
-5. repair_object、materials_or_specs、uncertainties 用于后续估价 LLM 判断口径，不要输出价格，不要预设 suggested_bill、前置项、措施项或替代工艺。
+4. 不扩展用户未明确提出的清单项。
+5. 不输出数量分析、材料列表、不确定性、方案建议、价格或施工清单。
 
 示例：
 用户：屋面漏水，想做3mm SBS防水，面积大概500平
-输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修 3mm SBS防水","item_query_text":"屋面防水 3.0mm SBS防水卷材","parsed_quantities":[{{"raw_text":"500平","value":500,"unit":"m²","meaning":"屋面防水面积","confidence":0.95}}],"materials_or_specs":["3mm SBS"],"repair_object":"屋面防水层","uncertainties":["现场做法未知","基层状况未知"]}}
+输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修 3mm SBS防水","item_query_text":"屋面卷材防水 3mm SBS防水卷材"}}
 
 用户：屋面漏水帮我估价
-输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修","item_query_text":"屋面防水 防水层维修","parsed_quantities":[],"materials_or_specs":[],"repair_object":"屋面防水层","uncertainties":["维修面积未知","现场做法未知","基层状况未知"]}}
+输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修","item_query_text":"屋面防水 防水层维修"}}
 
 用户：地下室渗水维修
-输出：{{"project_package_query_text":"地下室渗水维修工程 地下室防水维修 防水层维修 墙面修复 地面修复","item_query_text":"地下室防水 渗水维修 防水层维修","parsed_quantities":[],"materials_or_specs":[],"repair_object":"地下室防水层","uncertainties":["渗水范围未知","基层状况未知"]}}
+输出：{{"project_package_query_text":"地下室渗水维修工程 地下室防水维修","item_query_text":"地下室防水 渗水维修 防水层维修"}}
 
 用户需求：{query}
 """.strip()
@@ -622,10 +606,6 @@ def fallback_query_rewrite(query: str, note: str) -> QueryRewrite:
         raw_query=query,
         project_package_query_text=query,
         item_query_text=query,
-        parsed_quantities=[],
-        materials_or_specs=[],
-        repair_object="",
-        uncertainties=[],
         notes=[note],
         success=False,
     )
@@ -665,10 +645,6 @@ def query_rewrite_for_embedding(query: str) -> tuple[QueryRewrite, dict[str, Any
         raw_query=query,
         project_package_query_text=package_text,
         item_query_text=item_text,
-        parsed_quantities=[item for item in as_list(result.get("parsed_quantities")) if isinstance(item, dict)],
-        materials_or_specs=[cell_text(item) for item in as_list(result.get("materials_or_specs")) if cell_text(item)],
-        repair_object=cell_text(result.get("repair_object")),
-        uncertainties=[cell_text(item) for item in as_list(result.get("uncertainties")) if cell_text(item)],
         notes=notes,
         success=True,
     )
@@ -1389,7 +1365,8 @@ def build_display_selection_prompt(
     records = display_selection_records(candidate_displays)
     payload = {
         "raw_query": rewrite.raw_query,
-        "parsed_query": parsed_query_dict(rewrite),
+        "project_package_query_text": rewrite.project_package_query_text,
+        "item_query_text": rewrite.item_query_text,
         "candidate_displays": records,
     }
     prompt = f"""
@@ -1451,6 +1428,12 @@ support_rank 只表示相对支持强度，
 
 但本次召回工程包中出现过，也不代表当前工程一定需要。
 只有当候选与本次需求存在清楚、可解释的关系时，才应选择。
+
+【需求与检索文本使用规则】
+
+1. display 业务选择必须优先依据 raw_query。
+2. project_package_query_text 和 item_query_text 只用于理解本次召回来源和追溯检索语义。
+3. 不得把检索文本当作用户新增需求，不得据此扩展用户未明确提出的清单项。
 
 【选择规则】
 
@@ -1748,7 +1731,8 @@ def build_display_family_selection_prompt(
         )
     payload = {
         "raw_query": rewrite.raw_query,
-        "parsed_query": parsed_query_dict(rewrite),
+        "project_package_query_text": rewrite.project_package_query_text,
+        "item_query_text": rewrite.item_query_text,
         "selected_displays": records,
     }
     prompt = f"""
@@ -1770,6 +1754,12 @@ def build_display_family_selection_prompt(
 3. 优先选择施工边界适合作为默认参考口径的 family。
 4. 本次召回样本数和本次召回工程包数越充分越优先。
 5. 样本数最多是重要依据，但不能覆盖材料、规格或施工边界不匹配。
+
+【需求与检索文本使用规则】
+
+1. 默认参考做法选择必须优先依据 raw_query。
+2. project_package_query_text 和 item_query_text 只用于理解本次召回来源和追溯检索语义。
+3. 不得把检索文本当作用户新增需求，不得据此覆盖用户原始需求。
 
 【family relation】
 
@@ -2758,26 +2748,11 @@ def normalized_unit(value: Any) -> str:
     return text.strip()
 
 
-def matched_user_quantity(parsed_quantities: list[dict[str, Any]], unit: Any) -> float | None:
-    target_unit = normalized_unit(unit)
-    if not target_unit:
-        return None
-    for item in parsed_quantities:
-        if not isinstance(item, dict):
-            continue
-        value = numeric_or_none(item.get("value"))
-        if value is None:
-            continue
-        if normalized_unit(item.get("unit")) == target_unit:
-            return value
-    return None
-
-
 def build_retrieval_quantity_context(
     selected_families: pd.DataFrame,
     candidate_families: pd.DataFrame,
     candidates: pd.DataFrame,
-    parsed_query: QueryRewrite,
+    rewrite: QueryRewrite,
     max_relations_per_family: int = 5,
 ) -> list[dict[str, Any]]:
     if selected_families.empty:
@@ -2800,11 +2775,10 @@ def build_retrieval_quantity_context(
         if family is None:
             continue
         unit = cell_text(family.get("unit_normalized")) or cell_text(family.get("unit"))
-        user_quantity = matched_user_quantity(parsed_query.parsed_quantities, unit)
         relations: list[dict[str, Any]] = []
         target_signature = signature_by_family.get(family_id, "")
         target_rows = candidates[candidates["fine_signature"].map(cell_text).eq(target_signature)].copy()
-        if user_quantity is None and not target_rows.empty:
+        if not target_rows.empty:
             for _target_index, target_row in target_rows.sort_values("item_query_similarity", ascending=False).iterrows():
                 project_key = cell_text(target_row.get("project_key")) or cell_text(target_row.get("project_package_id"))
                 if not project_key:
@@ -2859,7 +2833,6 @@ def build_retrieval_quantity_context(
                 "cost_item_name": cell_text(family.get("representative_cost_item_name")),
                 "project_description": cell_text(family.get("representative_project_description")),
                 "unit": unit,
-                "user_quantity_match": user_quantity,
                 "retrieval_relations": compact_relations,
             }
         )
@@ -2872,7 +2845,6 @@ def build_quantity_decision_prompt(
 ) -> str:
     payload = {
         "raw_query": rewrite.raw_query,
-        "parsed_quantities": rewrite.parsed_quantities,
         "selected_families": selected_families_with_retrieval_context,
     }
     return f"""
@@ -2886,7 +2858,7 @@ quantity_source 只能取：
 - 需现场确认
 
 规则：
-1. 用户数量能直接对应施工项单位时，使用“用户明确给定”。
+1. 直接阅读 raw_query；只有用户原文明确给出数量，且该数量能对应施工项单位时，才使用“用户明确给定”。
 2. 本次召回相似工程存在稳定、可解释的规模关系时，可使用“本次召回样本估算”。
 3. 不得机械复制单条本次召回数量；本次召回关系不稳定或现场条件影响较大时，使用“需现场确认”，数量填 null。
 4. suggested_quantity_low、suggested_quantity_mid、suggested_quantity_high 分别表示最低、最可能、最高估计；用户明确数量时三者相同。
@@ -3056,7 +3028,7 @@ def build_display_retrieval_quantity_context(
     selected_displays: pd.DataFrame,
     candidate_families: pd.DataFrame,
     candidates: pd.DataFrame,
-    parsed_query: QueryRewrite,
+    rewrite: QueryRewrite,
     max_relations_per_display: int = 5,
 ) -> list[dict[str, Any]]:
     if selected_displays.empty:
@@ -3077,11 +3049,10 @@ def build_display_retrieval_quantity_context(
         if family is None:
             continue
         unit = cell_text(family.get("unit_normalized")) or cell_text(family.get("unit"))
-        user_quantity = matched_user_quantity(parsed_query.parsed_quantities, unit)
         relations: list[dict[str, Any]] = []
         target_signature = signature_by_family.get(family_id, "")
         target_rows = candidates[candidates["fine_signature"].map(cell_text).eq(target_signature)].copy()
-        if user_quantity is None and not target_rows.empty:
+        if not target_rows.empty:
             for _target_index, target_row in target_rows.sort_values("item_query_similarity", ascending=False).iterrows():
                 project_key = cell_text(target_row.get("project_key")) or cell_text(target_row.get("project_package_id"))
                 if not project_key:
@@ -3138,7 +3109,6 @@ def build_display_retrieval_quantity_context(
                 "selected_family_id": family_id,
                 "default_practice": cell_text(selected.get("default_practice")),
                 "unit": unit,
-                "user_quantity_match": user_quantity,
                 "retrieval_relations": compact_relations,
             }
         )
@@ -3151,7 +3121,6 @@ def build_display_quantity_decision_prompt(
 ) -> str:
     payload = {
         "raw_query": rewrite.raw_query,
-        "parsed_quantities": rewrite.parsed_quantities,
         "selected_displays": selected_displays_with_retrieval_context,
     }
     return f"""
@@ -3166,7 +3135,7 @@ quantity_source 只能取：
 - 需现场确认
 
 规则：
-1. 用户数量能直接对应施工项单位时，使用“用户明确给定”。
+1. 直接阅读 raw_query；只有用户原文明确给出数量，且该数量能对应 display 单位时，才使用“用户明确给定”。
 2. 本次召回相似工程存在稳定、可解释的规模关系时，可使用“本次召回样本估算”。
 3. 不得机械复制单条本次召回数量；本次召回关系不稳定或现场条件影响较大时，使用“需现场确认”，数量填 null。
 4. suggested_quantity_low、suggested_quantity_mid、suggested_quantity_high 分别表示最低、最可能、最高估计；用户明确数量时三者相同。
@@ -3981,17 +3950,6 @@ def excel_min_column_width(column: Any) -> float | None:
     return None
 
 
-def parsed_query_dict(rewrite: QueryRewrite) -> dict[str, Any]:
-    return {
-        "project_package_query_text": rewrite.project_package_query_text,
-        "item_query_text": rewrite.item_query_text,
-        "parsed_quantities": rewrite.parsed_quantities,
-        "materials_or_specs": rewrite.materials_or_specs,
-        "repair_object": rewrite.repair_object,
-        "uncertainties": rewrite.uncertainties,
-    }
-
-
 def join_non_empty(values: list[Any], limit: int | None = None) -> str:
     texts: list[str] = []
     for value in values:
@@ -4030,33 +3988,7 @@ def build_estimate_summary(
     suggested_bill: pd.DataFrame,
     estimate_scenarios: pd.DataFrame,
 ) -> pd.DataFrame:
-    quantity_texts: list[str] = []
-    for item in rewrite.parsed_quantities:
-        if not isinstance(item, dict):
-            continue
-        raw_text = cell_text(item.get("raw_text"))
-        meaning = cell_text(item.get("meaning"))
-        value = numeric_or_none(item.get("value"))
-        unit = cell_text(item.get("unit"))
-        if value is not None:
-            value_text = f"{value:g}{unit}"
-        else:
-            value_text = raw_text
-        if not value_text:
-            continue
-        if meaning:
-            quantity_texts.append(f"{meaning}约 {value_text}")
-        else:
-            quantity_texts.append(f"工程量约 {value_text}")
-
-    demand_parts = [f"用户需求为“{rewrite.raw_query}”"]
-    if rewrite.repair_object:
-        demand_parts.append(f"维修对象为{rewrite.repair_object}")
-    if rewrite.materials_or_specs:
-        demand_parts.append(f"涉及{join_non_empty(rewrite.materials_or_specs)}")
-    if quantity_texts:
-        demand_parts.append(f"明确{join_non_empty(quantity_texts)}")
-    demand_understanding = "，".join(demand_parts) + "。"
+    demand_understanding = f"用户原始需求：{rewrite.raw_query}"
 
     if "清单名称" in suggested_bill.columns or "清单项名称" in suggested_bill.columns:
         overview = join_non_empty([display_item_label(row) for _index, row in suggested_bill.iterrows()], limit=10)
@@ -4160,7 +4092,6 @@ def build_parse_info(
         ("原始用户需求", rewrite.raw_query),
         ("project_package_query_text", rewrite.project_package_query_text),
         ("item_query_text", rewrite.item_query_text),
-        ("ParsedQuery", json_text(parsed_query_dict(rewrite))),
         ("item_retrieval_text_fields", "cost_item_name + project_description + unit_normalized"),
         ("package_retrieval_text_fields", "工程名称 + project_name_text + cost_item_names_summary"),
         ("top_packages", top_packages),
