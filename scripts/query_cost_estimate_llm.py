@@ -2138,608 +2138,6 @@ def generate_display_family_selection(
         return fallback, False, True, str(exc), prompt, trace, meta, trace_frame
 
 
-def normalize_dedup_text(value: Any) -> str:
-    text = cell_text(value).lower()
-    text = text.replace("㎡", "m²").replace("平方米", "m²").replace("平方", "m²")
-    text = re.sub(r"m\s*2|m\^2|m\^\{2\}", "m²", text)
-    text = re.sub(r"\s+", "", text)
-    text = text.replace("（", "(").replace("）", ")")
-    text = text.replace("，", ",").replace("；", ";").replace("：", ":")
-    return text.strip()
-
-
-def display_strength(row: pd.Series) -> tuple[int, int, float]:
-    return (
-        int(row.get("family_count") or 0),
-        int(row.get("默认family本次召回样本数") or 0),
-        float(row.get("retrieval_package_support_ratio") or 0.0),
-    )
-
-
-def apply_display_dedup_suppression(selected_displays: pd.DataFrame, suppressed_by: dict[str, str]) -> pd.DataFrame:
-    if selected_displays.empty or not suppressed_by:
-        return selected_displays.reset_index(drop=True)
-    suppressed_ids = set(suppressed_by)
-    output = selected_displays[~selected_displays["display_id"].map(cell_text).isin(suppressed_ids)].copy()
-    return output.reset_index(drop=True)
-
-
-def deterministic_display_dedup_selection(selected_displays: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
-    if selected_displays.empty:
-        return selected_displays.copy(), {}
-    groups: dict[tuple[str, ...], list[str]] = {}
-    row_map = {cell_text(row.get("display_id")): row for _index, row in selected_displays.iterrows()}
-    for _index, row in selected_displays.iterrows():
-        display_id = cell_text(row.get("display_id"))
-        exact_key = (
-            "fields",
-            normalize_dedup_text(row.get("display_name")),
-            normalize_dedup_text(row.get("default_practice")),
-            normalize_dedup_text(row.get("unit")),
-        )
-        groups.setdefault(exact_key, []).append(display_id)
-
-    suppressed_by: dict[str, str] = {}
-    for display_ids in groups.values():
-        active_ids = [display_id for display_id in display_ids if display_id not in suppressed_by]
-        if len(active_ids) <= 1:
-            continue
-        representative_id = max(active_ids, key=lambda display_id: display_strength(row_map.get(display_id, pd.Series(dtype=object))))
-        for display_id in active_ids:
-            if display_id != representative_id:
-                suppressed_by[display_id] = representative_id
-    return apply_display_dedup_suppression(selected_displays, suppressed_by), suppressed_by
-
-
-def selected_display_payload(selected_displays: pd.DataFrame, display_ids: list[str]) -> list[dict[str, str]]:
-    display_map = {cell_text(row.get("display_id")): row for _index, row in selected_displays.iterrows()}
-    records: list[dict[str, str]] = []
-    for display_id in display_ids:
-        row = display_map.get(display_id)
-        if row is None:
-            continue
-        records.append(
-            {
-                "id": display_id,
-                "display_name": truncate_text(row.get("display_name"), 80),
-                "selected_family_id": cell_text(row.get("selected_family_id")),
-                "default_practice": truncate_text(row.get("default_practice"), 140),
-                "unit": cell_text(row.get("unit")),
-            }
-        )
-    return records
-
-
-def suspicious_dedup_display_ids(selected_displays: pd.DataFrame) -> list[str]:
-    selected_rows = [(cell_text(row.get("display_id")), row) for _index, row in selected_displays.iterrows()]
-    if len(selected_rows) <= 6:
-        return [display_id for display_id, _row in selected_rows]
-    suspicious: set[str] = set()
-    for index, (left_id, left) in enumerate(selected_rows):
-        left_unit = normalize_dedup_text(left.get("unit"))
-        for right_id, right in selected_rows[index + 1 :]:
-            right_unit = normalize_dedup_text(right.get("unit"))
-            if left_unit != right_unit:
-                continue
-            name_overlap = dedup_text_overlap(left.get("display_name"), right.get("display_name"))
-            practice_overlap = dedup_text_overlap(left.get("default_practice"), right.get("default_practice"))
-            if name_overlap or practice_overlap:
-                suspicious.update([left_id, right_id])
-    return [display_id for display_id, _row in selected_rows if display_id in suspicious]
-
-
-def build_display_dedup_selection_prompt(raw_query: str, selected_records: list[dict[str, str]]) -> str:
-    payload = {"query": raw_query, "selected": selected_records}
-    return f"""
-你是物业维修工程建议清单的重复展示抑制器。
-
-只判断输入 selected 中是否存在会让用户误以为需要重复施工的实质重复项。
-你不能新增、改名或合并 display，只能在输入 display_id 中选择保留或抑制展示。
-
-判断时同时比较 display 工作内容和默认参考做法。
-如果一个 display 的 selected family 已包含另一个 display 的全部施工内容，可以抑制被包含项。
-
-【疑似重叠拆除项】
-- 对名称不同但都表示既有层、老化层、原有层拆除或铲除的 display，只有默认参考做法明确证明它们属于不同构造层、部位或施工范围时，才允许同时保留。
-- 不得仅根据“老化层”“防水层”“基层”等名称差异，推断为两个独立施工项。
-- 证据不足时，优先保留施工对象更明确、做法更具体、本次召回支持更充分的 display。
-- 如果同时保留两个疑似重叠项，keep_reasons 必须明确说明它们分别对应什么不同施工对象或施工范围。
-- 不得只写“属于不同基层处理”“可能是不同施工层”等推测性理由。
-
-【不得抑制】
-- 不同施工目标。
-- 拆除与新做工作内容。
-- 拆除与垃圾运输在独立计价时。
-- 一个 display 额外包含会显著影响价格或施工边界的内容。
-
-只输出一个 JSON object，不得输出解释、Markdown 或思考过程。
-
-【输出 JSON】
-{{
-  "keep": ["D001", "D003"],
-  "suppress": [
-    {{
-      "display_id": "D002",
-      "representative_id": "D001",
-      "reason": "D001的默认做法已覆盖D002的施工内容"
-    }}
-  ],
-  "keep_reasons": [
-    {{
-      "display_id": "D001",
-      "reason": "与其他 display 不是重复施工"
-    }}
-  ]
-}}
-
-【输入数据】
-{json_text(payload)}
-""".strip()
-
-
-def parse_display_dedup_selection_result(
-    result: dict[str, Any],
-    allowed_display_ids: set[str],
-) -> tuple[set[str], dict[str, str], list[dict[str, str]], list[dict[str, str]]]:
-    keep_raw = result.get("keep")
-    suppress_raw = result.get("suppress")
-    keep_reasons_raw = result.get("keep_reasons", [])
-    if not isinstance(keep_raw, list) or not isinstance(suppress_raw, list):
-        raise ValueError("dedup_selection 输出缺少 keep/suppress list")
-    if not isinstance(keep_reasons_raw, list):
-        raise ValueError("dedup_selection keep_reasons 必须为 list")
-
-    keep_ids = {cell_text(item) for item in keep_raw if cell_text(item)}
-    if not keep_ids.issubset(allowed_display_ids):
-        raise ValueError("dedup_selection keep 包含非法 display_id")
-
-    suppress_map: dict[str, str] = {}
-    suppress_detail: list[dict[str, str]] = []
-    for item in suppress_raw:
-        if not isinstance(item, dict):
-            raise ValueError("dedup_selection suppress 项必须为 object")
-        suppressed_id = cell_text(item.get("display_id"))
-        representative_id = cell_text(item.get("representative_id"))
-        reason = cell_text(item.get("reason"))
-        if suppressed_id not in allowed_display_ids or representative_id not in allowed_display_ids:
-            raise ValueError("dedup_selection suppress 包含非法 display_id")
-        if not reason:
-            raise ValueError("dedup_selection suppress 缺少 reason")
-        if suppressed_id == representative_id:
-            raise ValueError("dedup_selection suppress 不能自引用")
-        if suppressed_id in suppress_map and suppress_map[suppressed_id] != representative_id:
-            raise ValueError("dedup_selection suppress 存在冲突")
-        suppress_map[suppressed_id] = representative_id
-        suppress_detail.append({"display_id": suppressed_id, "representative_id": representative_id, "reason": reason})
-
-    keep_reasons: list[dict[str, str]] = []
-    for item in keep_reasons_raw:
-        if not isinstance(item, dict):
-            raise ValueError("dedup_selection keep_reasons 项必须为 object")
-        display_id = cell_text(item.get("display_id"))
-        if display_id not in allowed_display_ids:
-            raise ValueError("dedup_selection keep_reasons 包含非法 display_id")
-        keep_reasons.append({"display_id": display_id, "reason": cell_text(item.get("reason"))})
-
-    if keep_ids & set(suppress_map):
-        raise ValueError("dedup_selection display 不能同时 keep 和 suppress")
-    if has_suppression_cycle(suppress_map):
-        raise ValueError("dedup_selection suppress 形成环")
-    return keep_ids, suppress_map, suppress_detail, keep_reasons
-
-
-def generate_display_dedup_selection(
-    rewrite: QueryRewrite,
-    selected_displays: pd.DataFrame,
-    warnings: list[str] | None = None,
-) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any], dict[str, Any]]:
-    auto_selected, auto_suppressed = deterministic_display_dedup_selection(selected_displays)
-    display_ids = suspicious_dedup_display_ids(auto_selected)
-    records = selected_display_payload(auto_selected, display_ids)
-    input_ids = [record["id"] for record in records]
-    auto_keep_ids = [cell_text(row.get("display_id")) for _index, row in auto_selected.iterrows() if cell_text(row.get("display_id"))]
-    meta: dict[str, Any] = {
-        "auto_suppressed": [f"{left}->{right}" for left, right in auto_suppressed.items()],
-        "llm_suppressed": [],
-        "input_ids": input_ids,
-        "keep_ids": auto_keep_ids,
-        "suppress_detail": [],
-        "keep_reasons": [],
-        "invalid": [],
-    }
-    if len(records) <= 1:
-        trace = trace_row(
-            "dedup_selection",
-            "抑制已选 display 中的重复或包含展示项",
-            True,
-            prompt="",
-            max_tokens=0,
-            input_summary=json_text(
-                {
-                    "selected_before_dedup": len(selected_displays),
-                    "input_ids": trace_id_summary(input_ids),
-                    "kept_ids": trace_id_summary(auto_keep_ids),
-                    "suppressed_ids": trace_id_summary(list(auto_suppressed)),
-                }
-            ),
-        )
-        return auto_selected, True, False, "", "", trace, meta
-
-    prompt = build_display_dedup_selection_prompt(rewrite.raw_query, records)
-    allowed_display_ids = {record["id"] for record in records}
-    max_tokens = 512
-    try:
-        response = request_llm_json_with_usage(
-            prompt,
-            max_tokens=max_tokens,
-            system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
-        )
-        keep_ids, llm_suppressed, suppress_detail, keep_reasons = parse_display_dedup_selection_result(response.content, allowed_display_ids)
-        deduped = apply_display_dedup_suppression(auto_selected, llm_suppressed)
-        kept_ids = [cell_text(row.get("display_id")) for _index, row in deduped.iterrows() if cell_text(row.get("display_id"))]
-        meta["llm_suppressed"] = [f"{left}->{right}" for left, right in llm_suppressed.items()]
-        meta["keep_ids"] = kept_ids
-        meta["suppress_detail"] = suppress_detail
-        meta["keep_reasons"] = keep_reasons
-        meta["llm_keep_ids"] = sorted(keep_ids)
-        trace = trace_row(
-            "dedup_selection",
-            "抑制已选 display 中的重复或包含展示项",
-            True,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text(
-                {
-                    "selected_before_dedup": len(selected_displays),
-                    "input_ids": trace_id_summary(input_ids),
-                    "kept_ids": trace_id_summary(kept_ids),
-                    "suppressed_ids": trace_id_summary(list(llm_suppressed)),
-                }
-            ),
-            usage=response.usage,
-        )
-        return deduped, True, False, "", prompt, trace, meta
-    except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-        append_warning(warnings, "dedup_selection_failed")
-        meta["invalid"] = [str(exc)]
-        trace = trace_row(
-            "dedup_selection",
-            "抑制已选 display 中的重复或包含展示项",
-            False,
-            error=str(exc),
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text(
-                {
-                    "selected_before_dedup": len(selected_displays),
-                    "input_ids": trace_id_summary(input_ids),
-                    "kept_ids": trace_id_summary(auto_keep_ids),
-                    "suppressed_ids": trace_id_summary(list(auto_suppressed)),
-                }
-            ),
-        )
-        return auto_selected, False, True, str(exc), prompt, trace, meta
-
-
-def family_strength(row: pd.Series) -> tuple[int, int, float]:
-    return (
-        int(row.get("本次召回样本数") or 0),
-        int(row.get("本次召回工程包数") or 0),
-        float(row.get("item_query_similarity最大值") or 0.0),
-    )
-
-
-def apply_dedup_suppression(selected_families: pd.DataFrame, suppressed_by: dict[str, str]) -> pd.DataFrame:
-    if selected_families.empty or not suppressed_by:
-        return selected_families.reset_index(drop=True)
-    suppressed_ids = set(suppressed_by)
-    output = selected_families[~selected_families["family_id"].map(cell_text).isin(suppressed_ids)].copy()
-    return output.reset_index(drop=True)
-
-
-def deterministic_dedup_selection(
-    selected_families: pd.DataFrame,
-    candidate_families: pd.DataFrame,
-) -> tuple[pd.DataFrame, dict[str, str]]:
-    if selected_families.empty:
-        return selected_families.copy(), {}
-    family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
-    groups: dict[tuple[str, ...], list[str]] = {}
-    for _index, selected in selected_families.iterrows():
-        family_id = cell_text(selected.get("family_id"))
-        family = family_map.get(family_id)
-        if family is None:
-            continue
-        signature_key = ("signature", cell_text(family.get("fine_signature")))
-        exact_key = (
-            "fields",
-            normalize_dedup_text(family.get("representative_cost_item_name")),
-            normalize_dedup_text(family.get("representative_project_description")),
-            normalize_dedup_text(family.get("unit_normalized")) or normalize_dedup_text(family.get("unit")),
-        )
-        if signature_key[1]:
-            groups.setdefault(signature_key, []).append(family_id)
-        groups.setdefault(exact_key, []).append(family_id)
-
-    suppressed_by: dict[str, str] = {}
-    for family_ids in groups.values():
-        active_ids = [family_id for family_id in family_ids if family_id not in suppressed_by]
-        if len(active_ids) <= 1:
-            continue
-        representative_id = max(active_ids, key=lambda family_id: family_strength(family_map.get(family_id, pd.Series(dtype=object))))
-        for family_id in active_ids:
-            if family_id != representative_id:
-                suppressed_by[family_id] = representative_id
-
-    return apply_dedup_suppression(selected_families, suppressed_by), suppressed_by
-
-
-def selected_family_payload(selected_families: pd.DataFrame, candidate_families: pd.DataFrame, family_ids: list[str]) -> list[dict[str, str]]:
-    family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
-    records: list[dict[str, str]] = []
-    for family_id in family_ids:
-        family = family_map.get(family_id)
-        if family is None:
-            continue
-        records.append(
-            {
-                "id": family_id,
-                "name": truncate_text(family.get("representative_cost_item_name"), 80),
-                "spec": truncate_text(family.get("representative_project_description"), 140),
-                "unit": cell_text(family.get("unit_normalized")) or cell_text(family.get("unit")),
-            }
-        )
-    return records
-
-
-def dedup_text_overlap(left: str, right: str) -> bool:
-    left = normalize_dedup_text(left)
-    right = normalize_dedup_text(right)
-    if not left or not right:
-        return False
-    if left in right or right in left:
-        return True
-    left_pairs = {left[index : index + 2] for index in range(max(len(left) - 1, 0))}
-    right_pairs = {right[index : index + 2] for index in range(max(len(right) - 1, 0))}
-    return bool(left_pairs and right_pairs and len(left_pairs & right_pairs) >= 4)
-
-
-def suspicious_dedup_family_ids(selected_families: pd.DataFrame, candidate_families: pd.DataFrame) -> list[str]:
-    if len(selected_families) <= 6:
-        return [cell_text(row.get("family_id")) for _index, row in selected_families.iterrows()]
-    family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
-    selected_rows = [(cell_text(row.get("family_id")), row) for _index, row in selected_families.iterrows()]
-    suspicious: set[str] = set()
-    for index, (left_id, left_selected) in enumerate(selected_rows):
-        left_family = family_map.get(left_id)
-        if left_family is None:
-            continue
-        left_unit = normalize_dedup_text(left_family.get("unit_normalized")) or normalize_dedup_text(left_family.get("unit"))
-        for right_id, right_selected in selected_rows[index + 1 :]:
-            right_family = family_map.get(right_id)
-            if right_family is None:
-                continue
-            right_unit = normalize_dedup_text(right_family.get("unit_normalized")) or normalize_dedup_text(right_family.get("unit"))
-            if left_unit != right_unit:
-                continue
-            name_overlap = dedup_text_overlap(left_family.get("representative_cost_item_name"), right_family.get("representative_cost_item_name"))
-            spec_overlap = dedup_text_overlap(left_family.get("representative_project_description"), right_family.get("representative_project_description"))
-            if name_overlap or spec_overlap:
-                suspicious.update([left_id, right_id])
-    return [family_id for family_id, _row in selected_rows if family_id in suspicious]
-
-
-def build_dedup_selection_prompt(raw_query: str, selected_records: list[dict[str, str]]) -> str:
-    payload = {"query": raw_query, "selected": selected_records}
-    return f"""
-你是物业维修工程建议清单的重复展示抑制器。
-
-只判断输入 selected 中是否存在会让用户误以为需要重复施工的实质重复项。
-你不能新增、改名或合并 family，只能在输入 id 中选择保留或抑制展示。
-
-【只抑制】
-- 施工目标相同。
-- 材料、厚度、工艺、部位和主要施工边界基本相同。
-- 一个 family 的内容已基本覆盖另一个。
-
-【不得抑制】
-- 不同材料、厚度、工艺、层数、部位或单位。
-- 拆除与后续处理。
-- 拆除与垃圾运输在独立计价时。
-- 同一系统中不同功能部件。
-- 一个 family 额外包含会显著影响价格的施工内容。
-
-只输出一个 JSON object，不得输出解释、Markdown 或思考过程。
-
-【输出 JSON】
-{{
-  "keep": ["F065", "F013"],
-  "suppress": [
-    {{
-      "family_id": "F001",
-      "representative_id": "F065",
-      "reason": "F065已覆盖同一施工边界，保留样本更充分的项目"
-    }}
-  ],
-  "keep_reasons": [
-    {{
-      "family_id": "F065",
-      "reason": "主要施工项，与其他独立工作内容不是重复施工"
-    }}
-  ]
-}}
-
-【输入数据】
-{json_text(payload)}
-""".strip()
-
-
-def has_suppression_cycle(suppress_map: dict[str, str]) -> bool:
-    for family_id in suppress_map:
-        seen: set[str] = set()
-        current = family_id
-        while current in suppress_map:
-            if current in seen:
-                return True
-            seen.add(current)
-            current = suppress_map[current]
-    return False
-
-
-def parse_dedup_selection_result(
-    result: dict[str, Any],
-    allowed_family_ids: set[str],
-) -> tuple[set[str], dict[str, str], list[dict[str, str]], list[dict[str, str]]]:
-    keep_raw = result.get("keep")
-    suppress_raw = result.get("suppress")
-    keep_reasons_raw = result.get("keep_reasons", [])
-    if not isinstance(keep_raw, list) or not isinstance(suppress_raw, list):
-        raise ValueError("dedup_selection 输出缺少 keep/suppress list")
-    if not isinstance(keep_reasons_raw, list):
-        raise ValueError("dedup_selection keep_reasons 必须为 list")
-
-    keep_ids = {cell_text(item) for item in keep_raw if cell_text(item)}
-    if not keep_ids.issubset(allowed_family_ids):
-        raise ValueError("dedup_selection keep 包含非法 family_id")
-
-    suppress_map: dict[str, str] = {}
-    suppress_detail: list[dict[str, str]] = []
-    for item in suppress_raw:
-        if not isinstance(item, dict):
-            raise ValueError("dedup_selection suppress 项必须为 object")
-        suppressed_id = cell_text(item.get("family_id"))
-        representative_id = cell_text(item.get("representative_id"))
-        reason = cell_text(item.get("reason"))
-        if suppressed_id not in allowed_family_ids or representative_id not in allowed_family_ids:
-            raise ValueError("dedup_selection suppress 包含非法 family_id")
-        if not reason:
-            raise ValueError("dedup_selection suppress 缺少 reason")
-        if suppressed_id == representative_id:
-            raise ValueError("dedup_selection suppress 不能自引用")
-        if suppressed_id in suppress_map and suppress_map[suppressed_id] != representative_id:
-            raise ValueError("dedup_selection suppress 存在冲突")
-        suppress_map[suppressed_id] = representative_id
-        suppress_detail.append(
-            {
-                "family_id": suppressed_id,
-                "representative_id": representative_id,
-                "reason": reason,
-            }
-        )
-
-    keep_reasons: list[dict[str, str]] = []
-    for item in keep_reasons_raw:
-        if not isinstance(item, dict):
-            raise ValueError("dedup_selection keep_reasons 项必须为 object")
-        family_id = cell_text(item.get("family_id"))
-        if family_id not in allowed_family_ids:
-            raise ValueError("dedup_selection keep_reasons 包含非法 family_id")
-        keep_reasons.append({"family_id": family_id, "reason": cell_text(item.get("reason"))})
-
-    if keep_ids & set(suppress_map):
-        raise ValueError("dedup_selection family 不能同时 keep 和 suppress")
-    if has_suppression_cycle(suppress_map):
-        raise ValueError("dedup_selection suppress 形成环")
-
-    return keep_ids, suppress_map, suppress_detail, keep_reasons
-
-
-def generate_dedup_selection(
-    rewrite: QueryRewrite,
-    selected_families: pd.DataFrame,
-    candidate_families: pd.DataFrame,
-    warnings: list[str] | None = None,
-) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any], dict[str, Any]]:
-    auto_selected, auto_suppressed = deterministic_dedup_selection(selected_families, candidate_families)
-    family_ids = suspicious_dedup_family_ids(auto_selected, candidate_families)
-    records = selected_family_payload(auto_selected, candidate_families, family_ids)
-    selected_before_ids = [cell_text(row.get("family_id")) for _index, row in selected_families.iterrows() if cell_text(row.get("family_id"))]
-    input_ids = [record["id"] for record in records]
-    auto_keep_ids = [cell_text(row.get("family_id")) for _index, row in auto_selected.iterrows() if cell_text(row.get("family_id"))]
-    meta: dict[str, Any] = {
-        "auto_suppressed": [f"{left}->{right}" for left, right in auto_suppressed.items()],
-        "llm_suppressed": [],
-        "input_ids": input_ids,
-        "keep_ids": auto_keep_ids,
-        "suppress_detail": [],
-        "keep_reasons": [],
-        "invalid": [],
-    }
-
-    if len(records) <= 1:
-        trace = trace_row(
-            "dedup_selection",
-            "抑制已选 family 中的重复展示项",
-            True,
-            prompt="",
-            max_tokens=0,
-            input_summary=json_text(
-                {
-                    "selected_before_dedup": len(selected_families),
-                    "input_ids": trace_id_summary(input_ids),
-                    "kept_ids": trace_id_summary(auto_keep_ids),
-                    "suppressed_ids": trace_id_summary(list(auto_suppressed)),
-                }
-            ),
-        )
-        return auto_selected, True, False, "", "", trace, meta
-
-    prompt = build_dedup_selection_prompt(rewrite.raw_query, records)
-    allowed_family_ids = {record["id"] for record in records}
-    max_tokens = 512
-    try:
-        response = request_llm_json_with_usage(
-            prompt,
-            max_tokens=max_tokens,
-            system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
-        )
-        keep_ids, llm_suppressed, suppress_detail, keep_reasons = parse_dedup_selection_result(response.content, allowed_family_ids)
-        deduped = apply_dedup_suppression(auto_selected, llm_suppressed)
-        kept_ids = [cell_text(row.get("family_id")) for _index, row in deduped.iterrows() if cell_text(row.get("family_id"))]
-        meta["llm_suppressed"] = [f"{left}->{right}" for left, right in llm_suppressed.items()]
-        meta["keep_ids"] = kept_ids
-        meta["suppress_detail"] = suppress_detail
-        meta["keep_reasons"] = keep_reasons
-        meta["llm_keep_ids"] = sorted(keep_ids)
-        trace = trace_row(
-            "dedup_selection",
-            "抑制已选 family 中的重复展示项",
-            True,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text(
-                {
-                    "selected_before_dedup": len(selected_families),
-                    "input_ids": trace_id_summary(input_ids),
-                    "kept_ids": trace_id_summary(kept_ids),
-                    "suppressed_ids": trace_id_summary(list(llm_suppressed)),
-                }
-            ),
-            usage=response.usage,
-        )
-        return deduped, True, False, "", prompt, trace, meta
-    except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-        append_warning(warnings, "dedup_selection_failed")
-        meta["invalid"] = [str(exc)]
-        trace = trace_row(
-            "dedup_selection",
-            "抑制已选 family 中的重复展示项",
-            False,
-            error=str(exc),
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text(
-                {
-                    "selected_before_dedup": len(selected_families),
-                    "input_ids": trace_id_summary(input_ids),
-                    "kept_ids": trace_id_summary(auto_keep_ids),
-                    "suppressed_ids": trace_id_summary(list(auto_suppressed)),
-                }
-            ),
-        )
-        return auto_selected, False, True, str(exc), prompt, trace, meta
-
-
 def normalized_unit(value: Any) -> str:
     text = cell_text(value).lower()
     text = text.replace("㎡", "m²").replace("平方米", "m²").replace("平方", "m²")
@@ -4061,12 +3459,6 @@ def build_parse_info(
     display_family_selection_fallback: bool,
     display_family_selection_error: str,
     display_family_selection_meta: dict[str, Any],
-    dedup_selection_input_count: int,
-    dedup_selection_output_count: int,
-    dedup_selection_trace: dict[str, Any],
-    dedup_selection_fallback: bool,
-    dedup_selection_error: str,
-    dedup_selection_meta: dict[str, Any],
     quantity_decision_input_count: int,
     quantity_relation_count: int,
     quantity_decision_trace: dict[str, Any],
@@ -4083,7 +3475,6 @@ def build_parse_info(
     include_debug_text: bool,
     display_selection_prompt: str,
     display_family_selection_prompt: str,
-    dedup_selection_prompt: str,
     quantity_decision_prompt: str,
     scenario_selection_prompt: str,
     warnings: list[str] | None = None,
@@ -4127,15 +3518,6 @@ def build_parse_info(
         ("display_family_selection_prompt_chars", display_family_selection_trace.get("prompt_chars", "")),
         ("display_family_selection_prompt_tokens", display_family_selection_trace.get("prompt_tokens") or display_family_selection_trace.get("estimated_tokens", "")),
         ("display_family_selection_completion_tokens", display_family_selection_trace.get("completion_tokens", "")),
-        ("dedup_selection_input_count", dedup_selection_input_count),
-        ("dedup_selection_output_count", dedup_selection_output_count),
-        ("dedup_input_ids", json_text(dedup_selection_meta.get("input_ids") or [])),
-        ("dedup_keep_ids", json_text(dedup_selection_meta.get("keep_ids") or [])),
-        ("dedup_suppress_detail", json_text(dedup_selection_meta.get("suppress_detail") or [])),
-        ("dedup_keep_reasons", json_text(dedup_selection_meta.get("keep_reasons") or [])),
-        ("dedup_selection_prompt_chars", dedup_selection_trace.get("prompt_chars", "")),
-        ("dedup_selection_prompt_tokens", dedup_selection_trace.get("prompt_tokens") or dedup_selection_trace.get("estimated_tokens", "")),
-        ("dedup_selection_completion_tokens", dedup_selection_trace.get("completion_tokens", "")),
         ("quantity_decision_input_count", quantity_decision_input_count),
         ("quantity_relation_count", quantity_relation_count),
         ("quantity_decision_prompt_chars", quantity_decision_trace.get("prompt_chars", "")),
@@ -4150,16 +3532,12 @@ def build_parse_info(
         ("invalid_family_ids", join_non_empty(display_family_selection_meta.get("invalid_family_ids") or [])),
         ("invalid_quantity_sources", join_non_empty(quantity_decision_meta.get("invalid_quantity_sources") or [])),
         ("invalid_quantity_ranges", join_non_empty(quantity_decision_meta.get("invalid_quantity_ranges") or [])),
-        ("dedup_auto_suppressed", join_non_empty(dedup_selection_meta.get("auto_suppressed") or [])),
-        ("dedup_llm_suppressed", join_non_empty(dedup_selection_meta.get("llm_suppressed") or [])),
         ("是否 display_selection fallback", "是" if display_selection_fallback else "否"),
         ("是否 display_family_selection fallback", "是" if display_family_selection_fallback else "否"),
-        ("是否 dedup_selection fallback", "是" if dedup_selection_fallback else "否"),
         ("是否 quantity_decision fallback", "是" if quantity_decision_fallback else "否"),
         ("是否 scenario_selection fallback", "是" if scenario_selection_fallback else "否"),
         ("display_selection LLM error", display_selection_error),
         ("display_family_selection LLM error", display_family_selection_error),
-        ("dedup_selection LLM error", dedup_selection_error),
         ("quantity_decision LLM error", quantity_decision_error),
         ("scenario_selection LLM error", scenario_selection_error),
         ("output_path", str(output_path or "")),
@@ -4172,7 +3550,6 @@ def build_parse_info(
     if include_debug_text:
         rows.append(("display_selection_prompt_preview", display_selection_prompt[:3000]))
         rows.append(("display_family_selection_prompt_preview", display_family_selection_prompt[:3000]))
-        rows.append(("dedup_selection_prompt_preview", dedup_selection_prompt[:3000]))
         rows.append(("quantity_decision_prompt_preview", quantity_decision_prompt[:3000]))
         rows.append(("scenario_selection_prompt_preview", scenario_selection_prompt[:3000]))
     return pd.DataFrame(rows, columns=["字段", "值"])
@@ -4374,19 +3751,6 @@ def run_query(
         warnings=warnings,
     )
     (
-        deduped_displays,
-        dedup_selection_success,
-        dedup_selection_fallback,
-        dedup_selection_error,
-        dedup_selection_prompt,
-        dedup_selection_trace,
-        dedup_selection_meta,
-    ) = generate_display_dedup_selection(
-        rewrite,
-        selected_display_practices,
-        warnings=warnings,
-    )
-    (
         quantity_decisions,
         quantity_decision_success,
         quantity_decision_fallback,
@@ -4397,13 +3761,13 @@ def run_query(
         quantity_relation_count,
     ) = generate_display_quantity_decisions(
         rewrite,
-        deduped_displays,
+        selected_display_practices,
         candidate_families,
         retrieved_evidence_items,
         warnings=warnings,
     )
     suggested_bill = build_final_suggested_bill(
-        deduped_displays,
+        selected_display_practices,
         quantity_decisions,
         candidate_families,
         evidence_items,
@@ -4417,7 +3781,7 @@ def run_query(
         scenario_selection_trace,
     ) = select_estimate_scenarios(
         raw_text,
-        deduped_displays,
+        selected_display_practices,
         suggested_bill,
         warnings=warnings,
     )
@@ -4426,7 +3790,6 @@ def run_query(
     if warnings:
         append_trace_warnings(display_selection_trace, warnings)
         append_trace_warnings(display_family_selection_trace, warnings)
-        append_trace_warnings(dedup_selection_trace, warnings)
         append_trace_warnings(quantity_decision_trace, warnings)
         append_trace_warnings(scenario_selection_trace, warnings)
     displays_for_llm_count = len(display_selection_meta.get("candidate_ids") or [])
@@ -4457,13 +3820,7 @@ def run_query(
         display_family_selection_fallback=display_family_selection_fallback,
         display_family_selection_error=display_family_selection_error,
         display_family_selection_meta=display_family_selection_meta,
-        dedup_selection_input_count=len(selected_display_practices),
-        dedup_selection_output_count=len(deduped_displays),
-        dedup_selection_trace=dedup_selection_trace,
-        dedup_selection_fallback=dedup_selection_fallback,
-        dedup_selection_error=dedup_selection_error,
-        dedup_selection_meta=dedup_selection_meta,
-        quantity_decision_input_count=len(deduped_displays),
+        quantity_decision_input_count=len(selected_display_practices),
         quantity_relation_count=quantity_relation_count,
         quantity_decision_trace=quantity_decision_trace,
         quantity_decision_fallback=quantity_decision_fallback,
@@ -4479,7 +3836,6 @@ def run_query(
         include_debug_text=include_debug_text,
         display_selection_prompt=display_selection_prompt,
         display_family_selection_prompt=display_family_selection_prompt,
-        dedup_selection_prompt=dedup_selection_prompt,
         quantity_decision_prompt=quantity_decision_prompt,
         scenario_selection_prompt=scenario_selection_prompt,
         warnings=warnings,
@@ -4489,7 +3845,6 @@ def run_query(
             rewrite_trace,
             display_selection_trace,
             display_family_selection_trace,
-            dedup_selection_trace,
             quantity_decision_trace,
             scenario_selection_trace,
         ],

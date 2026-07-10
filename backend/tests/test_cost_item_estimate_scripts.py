@@ -1442,35 +1442,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         self.assertEqual(scenarios[0].amount_included_display_ids, ["D035"])
 
-    def test_dedup_selection_validation_rejects_cycles_and_invalid_ids(self):
-        with self.assertRaisesRegex(ValueError, "形成环"):
-            query_estimate_llm.parse_display_dedup_selection_result(
-                {
-                    "keep": [],
-                    "suppress": [
-                        {"display_id": "D001", "representative_id": "D002", "reason": "重复"},
-                        {"display_id": "D002", "representative_id": "D001", "reason": "重复"},
-                    ],
-                },
-                {"D001", "D002"},
-            )
-        with self.assertRaisesRegex(ValueError, "非法 display_id"):
-            query_estimate_llm.parse_display_dedup_selection_result({"keep": ["BAD"], "suppress": []}, {"D001"})
-
-        keep_ids, suppress_map, suppress_detail, keep_reasons = query_estimate_llm.parse_display_dedup_selection_result(
-            {
-                "keep": ["D002"],
-                "suppress": [{"display_id": "D001", "representative_id": "D002", "reason": "D002覆盖范围更完整"}],
-                "keep_reasons": [{"display_id": "D002", "reason": "保留代表项"}],
-            },
-            {"D001", "D002"},
-        )
-
-        self.assertEqual(keep_ids, {"D002"})
-        self.assertEqual(suppress_map, {"D001": "D002"})
-        self.assertEqual(suppress_detail, [{"display_id": "D001", "representative_id": "D002", "reason": "D002覆盖范围更完整"}])
-        self.assertEqual(keep_reasons, [{"display_id": "D002", "reason": "保留代表项"}])
-
     def test_quantity_decision_validation_and_missing_defaults(self):
         selected = pd.DataFrame(
             [
@@ -1713,19 +1684,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "invalid_family_ids": [],
                 "invalid_display_ids": [],
             },
-            dedup_selection_input_count=2,
-            dedup_selection_output_count=1,
-            dedup_selection_trace={"prompt_chars": 50, "estimated_tokens": 20, "completion_tokens": 4},
-            dedup_selection_fallback=False,
-            dedup_selection_error="",
-            dedup_selection_meta={
-                "auto_suppressed": ["D001->D002"],
-                "llm_suppressed": [],
-                "input_ids": ["D001", "D002"],
-                "keep_ids": ["D002"],
-                "suppress_detail": [{"display_id": "D001", "representative_id": "D002", "reason": "重复"}],
-                "keep_reasons": [{"display_id": "D002", "reason": "代表项"}],
-            },
             quantity_decision_input_count=2,
             quantity_relation_count=3,
             quantity_decision_trace={"prompt_chars": 200, "estimated_tokens": 100, "completion_tokens": ""},
@@ -1742,7 +1700,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             include_debug_text=False,
             display_selection_prompt="display prompt",
             display_family_selection_prompt="display family prompt",
-            dedup_selection_prompt="dedup prompt",
             quantity_decision_prompt="quantity prompt",
             scenario_selection_prompt="scenario prompt",
             warnings=[],
@@ -1763,16 +1720,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(values["display_selection_exploration_count"], 1)
         self.assertEqual(values["display_family_selection_selected_family_ids"], '["F001"]')
         self.assertEqual(values["display_family_selection_other_family_count"], 1)
-        self.assertEqual(values["dedup_selection_prompt_tokens"], 20)
-        self.assertEqual(values["dedup_input_ids"], '["D001", "D002"]')
-        self.assertEqual(values["dedup_keep_ids"], '["D002"]')
-        self.assertEqual(values["dedup_auto_suppressed"], "D001->D002")
         self.assertEqual(values["quantity_decision_prompt_tokens"], 100)
         self.assertEqual(values["scenario_count"], 2)
         self.assertEqual(values["scenario_selection_prompt_tokens"], 50)
         self.assertEqual(values["invalid_display_ids"], "BAD")
         self.assertEqual(values["invalid_quantity_sources"], "bad")
         self.assertEqual(values["是否 quantity_decision fallback"], "是")
+        self.assertFalse(any("dedup" in cell_text for cell_text in values))
         self.assertNotIn("Parsed" + "Query", values)
         self.assertNotIn("query_" + "catalog", values)
         self.assertNotIn("query_" + "catalog_classification 是否成功", values)
@@ -1832,7 +1786,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     {"step": "query_rewrite_for_embedding"},
                     {"step": "display_selection"},
                     {"step": "display_family_selection"},
-                    {"step": "dedup_selection"},
                     {"step": "quantity_decision"},
                     {"step": "scenario_selection"},
                 ],
@@ -1887,7 +1840,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "query_rewrite_for_embedding",
                 "display_selection",
                 "display_family_selection",
-                "dedup_selection",
                 "quantity_decision",
                 "scenario_selection",
             ],

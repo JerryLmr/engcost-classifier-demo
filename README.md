@@ -306,8 +306,7 @@ LLM 职责边界：
 
 - display_selection：只从输入的 `candidate_displays` 中选择真实存在的 `display_id`；主证据是 `retrieval_package_support_ratio` 和简短参考做法示例，但不能只按比例机械选择。
 - display_family_selection：只在已选 display 内选择一个 `selected_family_id` 作为默认做法和价格来源，并选择 0～3 个同组其他参考做法。
-- dedup_selection：只对已选 display 做重复或包含关系抑制，不创建新 display，不合并价格样本、来源、工程量或单价区间。
-- quantity_decision：只为 dedup 后保留的 display 判断工程量低/中/高区间、工程量来源和是否计入参考金额。
+- quantity_decision：只为已选 display 判断工程量低/中/高区间、工程量来源和是否计入参考金额。
 - LLM 不生成单价、来源、清单名称、单位或金额。综合单价必须来自 `selected_family_id` 对应的同一 `fine_signature` 本次召回样本统计。
 
 来源样本统一使用：
