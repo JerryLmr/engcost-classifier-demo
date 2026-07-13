@@ -17,7 +17,7 @@
 - 自然语言造价查询的召回证据层次统一为 `matched_project_packages` / `direct_item_hits` → `retrieved_evidence_items` → `candidate_families` → `candidate_display_groups`。
 - 删除 display 预筛选 LLM；`display_option_grouping` 全量处理 candidate displays，单 family 由程序生成 option，多 family 合并为一次 LLM 调用。
 - 估价方案生成重构为 `historical_plan_determination` 与 `final_explanation` 两阶段：程序只生成 `S001`，清单、工艺、工程量和价格在说明生成前锁定。
-- 两个方案 LLM 阶段改为数组顺序协议；工程包、清单及来源真实 ID 仅在程序侧恢复，`final_explanation` 不再读取被删除清单。
+- `historical_plan_determination` 使用稀疏位置协议，只返回所选工程及保留项的 0-based 数组位置；真实 ID 仅在程序侧恢复，`final_explanation` 不读取被删除清单。
 
 ## Decisions
 - 当前阶段不引入数据库、Milvus 或 LangChain；样本合并后重建本地 parquet + npy 索引。

@@ -2097,17 +2097,16 @@ def build_historical_plan_determination_prompt(
 - 不得选择该 display 候选之外的工艺，不得跨 display；工艺变化不得改变维修对象、层级、范围或动作；
 - 为每个保留项给出 exact 或 range quantity 和非空 quantity_reason，优先采用用户明确工程量，避免照搬明显不适合的历史数量。
 
-输出必须依赖输入数组原顺序。project_selections 与三个工程逐项对应且只能一个 true；selected_items 必须覆盖所选工程全部 items 并逐项对应。删除项固定输出空 practice_option_id、null quantity 和空 quantity_reason。不得生成价格、金额、方案名称、说明或其他字段。只输出：
+只输出最终保留项，不得输出删除项。selected_project_position 是 historical_projects 的 0-based 位置；item_position 是所选工程 items 数组中的 0-based 位置，必须引用该工程现有 item，不得从其他工程补项。item_position 的含义始终对应原 items 数组位置，kept_items 按 item_position 升序输出。不得生成价格、金额、方案名称、说明或其他字段。只输出：
 {{
-  "project_selections": [false, true, false],
-  "selected_items": [
+  "selected_project_position": 0,
+  "kept_items": [
     {{
-      "keep": true,
+      "item_position": 12,
       "practice_option_id": "原工艺或同一display候选中的已有ID",
       "quantity": {{"type": "exact", "value": 500}},
       "quantity_reason": "工程量确定依据"
-    }},
-    {{"keep": false, "practice_option_id": "", "quantity": null, "quantity_reason": ""}}
+    }}
   ]
 }}
 
@@ -2124,52 +2123,105 @@ def parse_historical_plan_determination_result(
     displays_with_options: pd.DataFrame,
     sample_lookup: dict[str, dict[str, Any]],
 ) -> HistoricalPlan:
-    if not isinstance(result, dict) or set(result) != {"project_selections", "selected_items"}:
-        raise ValueError("historical_plan_determination 顶层只允许 project_selections 和 selected_items")
-    raw_project_selections = result.get("project_selections")
-    if (
-        not isinstance(raw_project_selections, list)
-        or len(raw_project_selections) != len(historical_projects)
-        or any(not isinstance(selected, bool) for selected in raw_project_selections)
-    ):
-        raise ValueError("project_selections 必须与输入工程数量一致且仅包含 boolean")
-    selected_project_positions = [
-        position for position, selected in enumerate(raw_project_selections) if selected
-    ]
-    if len(selected_project_positions) != 1:
-        raise ValueError("必须且只能选中一个历史工程")
-    selected_project = historical_projects[selected_project_positions[0]]
+    expected_top_fields = {"selected_project_position", "kept_items"}
+    if not isinstance(result, dict):
+        raise ValueError(
+            f"historical_plan_determination 顶层必须为 object: expected={sorted(expected_top_fields)}, "
+            f"actual_type={type(result).__name__}"
+        )
+    if set(result) != expected_top_fields:
+        raise ValueError(
+            f"historical_plan_determination 顶层字段非法: expected={sorted(expected_top_fields)}, "
+            f"actual={sorted(result)}"
+        )
+    selected_project_position = result.get("selected_project_position")
+    project_position_max = len(historical_projects) - 1
+    if not isinstance(selected_project_position, int) or isinstance(selected_project_position, bool):
+        raise ValueError(
+            "selected_project_position 类型非法: "
+            f"expected=integer in [0, {project_position_max}], "
+            f"actual={selected_project_position!r} ({type(selected_project_position).__name__})"
+        )
+    if not 0 <= selected_project_position < len(historical_projects):
+        raise ValueError(
+            "selected_project_position 越界: "
+            f"expected=integer in [0, {project_position_max}], actual={selected_project_position}"
+        )
+    selected_project = historical_projects[selected_project_position]
     project_package_id = cell_text(selected_project.get("project_package_id"))
     historical_items = selected_project.get("items") if isinstance(selected_project.get("items"), list) else []
-    raw_items = result.get("selected_items")
-    if not isinstance(raw_items, list) or len(raw_items) != len(historical_items):
-        raise ValueError("selected_items 数量必须等于所选工程输入 items 数量")
+    raw_items = result.get("kept_items")
+    if not isinstance(raw_items, list):
+        raise ValueError(
+            f"kept_items 类型非法: expected=list with at least 1 item, actual_type={type(raw_items).__name__}"
+        )
+    if not raw_items:
+        raise ValueError("kept_items 不得为空: expected_count>=1, actual_count=0")
+
+    expected_item_fields = {"item_position", "practice_option_id", "quantity", "quantity_reason"}
+    item_position_max = len(historical_items) - 1
+    seen_item_positions: dict[int, int] = {}
+    positioned_items: list[tuple[int, dict[str, Any]]] = []
+    for kept_index, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, dict):
+            raise ValueError(
+                f"kept_item 必须为 object: kept_index={kept_index}, expected=object, "
+                f"actual_type={type(raw_item).__name__}"
+            )
+        if set(raw_item) != expected_item_fields:
+            raise ValueError(
+                f"kept_item 字段非法: kept_index={kept_index}, expected={sorted(expected_item_fields)}, "
+                f"actual={sorted(raw_item)}"
+            )
+        item_position = raw_item.get("item_position")
+        if not isinstance(item_position, int) or isinstance(item_position, bool):
+            raise ValueError(
+                f"item_position 类型非法: kept_index={kept_index}, "
+                f"expected=integer in [0, {item_position_max}], "
+                f"actual={item_position!r} ({type(item_position).__name__})"
+            )
+        if not 0 <= item_position < len(historical_items):
+            raise ValueError(
+                f"item_position 越界: kept_index={kept_index}, "
+                f"expected=integer in [0, {item_position_max}], actual={item_position}"
+            )
+        if item_position in seen_item_positions:
+            raise ValueError(
+                f"item_position 重复: expected=unique, actual={item_position}, "
+                f"first_kept_index={seen_item_positions[item_position]}, duplicate_kept_index={kept_index}"
+            )
+        seen_item_positions[item_position] = kept_index
+        positioned_items.append((item_position, raw_item))
+
     _display_map, full_option_map = display_option_maps(displays_with_options)
     items: list[ScenarioItem] = []
-    for item_position, (raw_item, historical_item) in enumerate(zip(raw_items, historical_items)):
-        if not isinstance(raw_item, dict):
-            raise ValueError("selected_item 必须为 object")
-        if set(raw_item) != {"keep", "practice_option_id", "quantity", "quantity_reason"}:
-            raise ValueError("selected_item 只允许 keep、practice_option_id、quantity、quantity_reason")
-        if not isinstance(raw_item.get("keep"), bool):
-            raise ValueError(f"keep 必须为 boolean: position={item_position}")
-        if not raw_item["keep"]:
-            if cell_text(raw_item.get("practice_option_id")) or raw_item.get("quantity") is not None or cell_text(raw_item.get("quantity_reason")):
-                raise ValueError(f"删除项必须使用空工艺、null quantity 和空 quantity_reason: position={item_position}")
-            continue
+    for item_position, raw_item in sorted(positioned_items, key=lambda entry: entry[0]):
+        historical_item = historical_items[item_position]
         stable_sample_id = cell_text(historical_item.get("stable_sample_id"))
         sample = sample_lookup.get(stable_sample_id)
         if sample is None:
-            raise ValueError(f"所选工程 item 无法按位置回查: position={item_position}")
+            raise ValueError(
+                f"所选工程 item 无法按位置回查: item_position={item_position}, "
+                f"expected_stable_sample_id={stable_sample_id!r}, actual_sample=None"
+            )
         if cell_text(sample.get("project_package_id")) != project_package_id:
-            raise ValueError(f"所选工程 item 内部映射不一致: position={item_position}")
+            raise ValueError(
+                f"所选工程 item 内部映射不一致: item_position={item_position}, "
+                f"expected_project_package_id={project_package_id!r}, "
+                f"actual_project_package_id={cell_text(sample.get('project_package_id'))!r}"
+            )
         display_id = cell_text(sample.get("display_id"))
         original_practice_option_id = cell_text(sample.get("practice_option_id"))
         if (
             cell_text(historical_item.get("display_id")) != display_id
             or cell_text(historical_item.get("practice_option_id")) != original_practice_option_id
         ):
-            raise ValueError(f"historical item 与 sample_lookup 不一致: {stable_sample_id}")
+            raise ValueError(
+                f"historical item 与 sample_lookup 不一致: item_position={item_position}, "
+                f"stable_sample_id={stable_sample_id}, "
+                f"expected_display_option={(cell_text(historical_item.get('display_id')), cell_text(historical_item.get('practice_option_id')))!r}, "
+                f"actual_display_option={(display_id, original_practice_option_id)!r}"
+            )
         practice_option_id = cell_text(raw_item.get("practice_option_id"))
         if display_id in display_options:
             allowed_practice_option_ids = {
@@ -2184,11 +2236,22 @@ def parse_historical_plan_determination_result(
             or (display_id, practice_option_id) not in full_option_map
         ):
             raise ValueError(
-                f"practice_option_id 不属于该位置的 display_options: position={item_position}/{display_id}/{practice_option_id}"
+                "practice_option_id 不属于该位置的 display_options: "
+                f"item_position={item_position}, display_id={display_id}, "
+                f"expected={sorted(allowed_practice_option_ids)}, actual={practice_option_id!r}"
             )
         quantity_reason = cell_text(raw_item.get("quantity_reason"))
         if not quantity_reason:
-            raise ValueError("quantity_reason 不得为空")
+            raise ValueError(
+                f"quantity_reason 不得为空: item_position={item_position}, expected=non-empty string, "
+                f"actual={raw_item.get('quantity_reason')!r}"
+            )
+        try:
+            quantity = validate_quantity(raw_item.get("quantity"))
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                f"quantity 非法: item_position={item_position}, actual={raw_item.get('quantity')!r}, error={exc}"
+            ) from exc
         items.append(
             ScenarioItem(
                 project_package_id=project_package_id,
@@ -2197,12 +2260,12 @@ def parse_historical_plan_determination_result(
                 display_id=display_id,
                 practice_option_id=practice_option_id,
                 selection_reason="",
-                quantity=validate_quantity(raw_item.get("quantity")),
+                quantity=quantity,
                 quantity_reason=quantity_reason,
             )
         )
     if not items:
-        raise ValueError("所选历史工程至少必须保留一条清单")
+        raise ValueError("kept_items 不得为空: expected_count>=1, actual_count=0")
     return HistoricalPlan(project_package_id=project_package_id, items=items)
 
 

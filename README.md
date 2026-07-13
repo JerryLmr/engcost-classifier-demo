@@ -255,7 +255,7 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 → 从完整 samples 展开排名前 3 的历史工程清单
 → historical_plan_determination 比较三个完整真实工程，选择一个骨架并保守裁剪原有清单
 → 按 historical items 的 display_id 统一提供有限 practice options，确定最终工艺和工程量
-→ 程序按工程与清单输入数组原顺序恢复内部真实 ID
+→ LLM 仅返回保留项的 0-based 工程/清单位置，程序按位置恢复内部真实 ID
 → 程序按选用的 practice option 回填单价并计算合价
 → final_explanation 仅补充单方案名称、整体说明和逐项说明
 → estimate_summary / estimate_scenarios
@@ -310,7 +310,7 @@ LLM 只使用现有 `practice_option_id` 选择同一 display 下的最终工艺
 LLM 职责边界：
 
 - display_option_grouping：把全部候选 display 内的 family 按具体工艺和价格统计口径完整整理为 practice_options，不选择默认 option。
-- historical_plan_determination：比较前三个相似历史工程，优先匹配直接维修对象、对象层级、维修范围和维修动作，再考虑工程纯度与施工链完整性；只能保守保留或删除所选工程已有清单。LLM 不读取工程包或清单真实 ID，按输入数组顺序返回完整决策，并通过统一的有限 `display_options` 选择现有 `practice_option_id`。
+- historical_plan_determination：比较前三个相似历史工程，优先匹配直接维修对象、对象层级、维修范围和维修动作，再考虑工程纯度与施工链完整性；只返回所选工程位置及稀疏保留项的 0-based `item_position`，不输出删除项。程序按位置恢复真实 ID、按原历史顺序构造方案，并通过统一的有限 `display_options` 校验现有 `practice_option_id`。
 - final_explanation：只读取最终保留的清单及其已锁定工艺、工程量和价格，按最终 items 原顺序生成单方案名称、整体说明和逐项说明，不读取被删除清单或内部真实 ID。
 - LLM 不生成单价、来源、清单名称、单位或合价。综合单价和合价由程序根据 scenario 选用的 practice option 回填和计算。
 

@@ -1395,16 +1395,16 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "sid-not-in-input": {"project_package_id": "PKG-1", "source_ref": "ref-hidden", "family_id": "F001", "display_id": "D001", "practice_option_id": "D001-O01"},
         }
         valid = {
-            "project_selections": [True, False, False],
-            "selected_items": [
+            "selected_project_position": 0,
+            "kept_items": [
                 {
-                    "keep": True,
+                    "item_position": 0,
                     "practice_option_id": "D001-O01",
                     "quantity": {"type": "exact", "value": 500},
                     "quantity_reason": "用户明确屋面维修面积约500㎡并指定3mm SBS",
                 },
                 {
-                    "keep": True,
+                    "item_position": 1,
                     "practice_option_id": "D002-O01",
                     "quantity": {"type": "range", "min": 0, "max": 500},
                     "quantity_reason": "拆除范围需现场确认，不机械复制主体工程量",
@@ -1524,6 +1524,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "displays_with_options", "package_query_similarity", "unit_price", "total_price", "sample_count",
             "option_group_id", "original_practice_option_id", "is_current", "G01",
             "project_no", "item_no", "option_no",
+            "project_selections", "selected_items", '"keep"',
             "单价", "合价", "相似度数值", "样本统计",
         ]:
             self.assertNotIn(forbidden_field, prompt)
@@ -1536,6 +1537,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "用户没有逐项提到某个施工层，不构成删除理由",
             "无法确认是否相关时优先保留",
             "不得为缩短输出压缩清单",
+            "只输出最终保留项，不得输出删除项",
+            "item_position 是所选工程 items 数组中的 0-based 位置",
+            "不得从其他工程补项",
+            "kept_items 按 item_position 升序输出",
         ]:
             self.assertIn(required_rule, prompt)
         prompt_instructions = prompt.split("输入：", 1)[0]
@@ -1635,9 +1640,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             for index, description in [(101, "内部部件维修"), (102, "完整设备更换"), (103, "附属构件维修")]
         ])
         llm_result = {
-            "project_selections": [False, True, False],
-            "selected_items": [{
-                "keep": True,
+            "selected_project_position": 1,
+            "kept_items": [{
+                "item_position": 0,
                 "practice_option_id": "D102-O01",
                 "quantity": {"type": "exact", "value": 1},
                 "quantity_reason": "完整对象和更换动作直接匹配",
@@ -1680,22 +1685,27 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
     def test_historical_plan_result_schema_contains_only_selection_practice_and_quantity_fields(self):
         _displays, _examples, _lookup, valid = self.historical_plan_fixtures()
 
-        self.assertEqual(set(valid), {"project_selections", "selected_items"})
-        self.assertEqual(valid["project_selections"], [True, False, False])
-        self.assertTrue(valid["selected_items"])
-        for item in valid["selected_items"]:
-            self.assertEqual(set(item), {"keep", "practice_option_id", "quantity", "quantity_reason"})
+        self.assertEqual(set(valid), {"selected_project_position", "kept_items"})
+        self.assertEqual(valid["selected_project_position"], 0)
+        self.assertTrue(valid["kept_items"])
+        for item in valid["kept_items"]:
+            self.assertEqual(
+                set(item), {"item_position", "practice_option_id", "quantity", "quantity_reason"}
+            )
         serialized = json.dumps(valid, ensure_ascii=False)
-        for forbidden in ["project_package_id", "stable_sample_id", "source_ref", "family_id", "display_id"]:
+        for forbidden in [
+            "project_package_id", "stable_sample_id", "source_ref", "family_id", "display_id",
+            "project_selections", "selected_items", '"keep"',
+        ]:
             self.assertNotIn(forbidden, serialized)
 
     def test_historical_plan_generation_uses_original_first_option_when_unspecified(self):
         displays, examples, lookup, valid = self.historical_plan_fixtures()
         unspecified_result = {
             **valid,
-            "selected_items": [
-                {**valid["selected_items"][0], "practice_option_id": "D001-O02"},
-                valid["selected_items"][1],
+            "kept_items": [
+                {**valid["kept_items"][0], "practice_option_id": "D001-O02"},
+                valid["kept_items"][1],
             ],
         }
         response = types.SimpleNamespace(
@@ -1725,28 +1735,35 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         _prompt, projects, display_options = self.historical_plan_context(
             "屋面维修", examples, displays, lookup
         )
-        first = valid["selected_items"][0]
-        second = valid["selected_items"][1]
+        first = valid["kept_items"][0]
+        second = valid["kept_items"][1]
         cases = [
-            ({**valid, "extra": True}, "顶层只允许"),
-            ({**valid, "project_selections": [True, False]}, "工程数量一致"),
-            ({**valid, "project_selections": [1, False, False]}, "仅包含 boolean"),
-            ({**valid, "project_selections": [False, False, False]}, "只能选中一个"),
-            ({**valid, "project_selections": [True, True, False]}, "只能选中一个"),
-            ({**valid, "selected_items": []}, "数量必须等于"),
-            ({**valid, "selected_items": [first, second, first]}, "数量必须等于"),
-            ({**valid, "selected_items": [{**first, "keep": "yes"}, second]}, "keep 必须为 boolean"),
-            ({**valid, "selected_items": [{**first, "practice_option_id": "D002-O01"}, second]}, "不属于该位置"),
-            ({**valid, "selected_items": [{**first, "practice_option_id": "D001-NOT-SENT"}, second]}, "不属于该位置"),
-            ({**valid, "selected_items": [{**first, "quantity_reason": ""}, second]}, "quantity_reason"),
-            ({**valid, "selected_items": [{**first, "extra": True}, second]}, "只允许"),
-            ({**valid, "selected_items": [{**first, "quantity": {"type": "exact", "value": -1}}, second]}, "非负"),
-            ({**valid, "selected_items": [{"keep": False, "practice_option_id": "D001-O01", "quantity": None, "quantity_reason": ""}, second]}, "删除项必须"),
-            ({**valid, "selected_items": [
-                {"keep": False, "practice_option_id": "", "quantity": None, "quantity_reason": ""},
-                {"keep": False, "practice_option_id": "", "quantity": None, "quantity_reason": ""},
-            ]}, "至少必须保留"),
-            ({**valid, "selected_items": [second, first]}, "不属于该位置"),
+            ([], "顶层必须为 object.*expected=.*actual_type=list"),
+            ({**valid, "extra": True}, "顶层字段非法.*expected=.*actual="),
+            ({**valid, "selected_project_position": "1"}, "类型非法.*expected=.*actual='1'"),
+            ({**valid, "selected_project_position": 1.0}, "类型非法.*expected=.*actual=1.0"),
+            ({**valid, "selected_project_position": True}, "类型非法.*actual=True.*bool"),
+            ({**valid, "selected_project_position": -1}, "越界.*expected=.*actual=-1"),
+            ({**valid, "selected_project_position": 3}, "越界.*expected=.*actual=3"),
+            ({**valid, "kept_items": "bad"}, "kept_items 类型非法.*expected=.*actual_type=str"),
+            ({**valid, "kept_items": []}, "expected_count>=1.*actual_count=0"),
+            ({**valid, "kept_items": ["bad"]}, "kept_index=0.*expected=object.*actual_type=str"),
+            ({**valid, "kept_items": [{**first, "extra": True}]}, "字段非法.*kept_index=0.*expected=.*actual="),
+            ({**valid, "kept_items": [{key: value for key, value in first.items() if key != "item_position"}]}, "字段非法.*kept_index=0.*expected=.*actual="),
+            ({**valid, "kept_items": [{**first, "item_position": "0"}]}, "item_position 类型非法.*expected=.*actual='0'"),
+            ({**valid, "kept_items": [{**first, "item_position": 0.0}]}, "item_position 类型非法.*actual=0.0"),
+            ({**valid, "kept_items": [{**first, "item_position": False}]}, "item_position 类型非法.*actual=False.*bool"),
+            ({**valid, "kept_items": [{**first, "item_position": -1}]}, "item_position 越界.*expected=.*actual=-1"),
+            ({**valid, "kept_items": [{**first, "item_position": 2}]}, "item_position 越界.*expected=.*actual=2"),
+            ({**valid, "kept_items": [first, first]}, "item_position 重复.*actual=0.*first_kept_index=0.*duplicate_kept_index=1"),
+            ({**valid, "kept_items": [{**first, "practice_option_id": "D002-O01"}]}, "item_position=0.*expected=.*actual='D002-O01'"),
+            ({**valid, "kept_items": [{**first, "practice_option_id": "D001-NOT-SENT"}]}, "item_position=0.*expected=.*actual='D001-NOT-SENT'"),
+            ({**valid, "kept_items": [{**first, "quantity_reason": ""}]}, "quantity_reason.*item_position=0.*expected=.*actual=''"),
+            ({**valid, "kept_items": [{**first, "quantity": {"type": "exact", "value": -1}}]}, "quantity 非法.*item_position=0.*actual=.*error=.*非负"),
+            ({
+                "project_selections": [True, False, False],
+                "selected_items": [],
+            }, "顶层字段非法.*expected=.*actual="),
         ]
         for result, message in cases:
             with self.subTest(message=message):
@@ -1762,9 +1779,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"practice_option_id": "D002-O01", "practice_description": "错误跨 display 候选"},
             ],
         }
-        with self.assertRaisesRegex(ValueError, "不属于该位置"):
+        with self.assertRaisesRegex(ValueError, "item_position=0.*expected=.*actual='D002-O01'"):
             query_estimate_llm.parse_historical_plan_determination_result(
-                {**valid, "selected_items": [{**first, "practice_option_id": "D002-O01"}, second]},
+                {**valid, "kept_items": [{**first, "practice_option_id": "D002-O01"}]},
                 projects,
                 tampered_display_options,
                 displays,
@@ -1776,9 +1793,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             *displays.iloc[0]["practice_options"],
             {"practice_option_id": "D001-O99", "practice_description": "存在但未传入 prompt 的工艺"},
         ]
-        with self.assertRaisesRegex(ValueError, "不属于该位置"):
+        with self.assertRaisesRegex(ValueError, "item_position=0.*expected=.*actual='D001-O99'"):
             query_estimate_llm.parse_historical_plan_determination_result(
-                {**valid, "selected_items": [{**first, "practice_option_id": "D001-O99"}, second]},
+                {**valid, "kept_items": [{**first, "practice_option_id": "D001-O99"}]},
                 projects,
                 display_options,
                 displays_with_unsent_option,
@@ -1786,10 +1803,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             )
 
         second_project_result = {
-            "project_selections": [False, True, False],
-            "selected_items": [
+            "selected_project_position": 1,
+            "kept_items": [
                 {
-                    "keep": True,
+                    "item_position": 0,
                     "practice_option_id": "D001-O01",
                     "quantity": {"type": "exact", "value": 1},
                     "quantity_reason": "按输入数组第二个工程及其第一条清单回查",
@@ -1801,6 +1818,60 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
         self.assertEqual(second_project_plan.project_package_id, "PKG-2")
         self.assertEqual(second_project_plan.items[0].stable_sample_id, "sid-other")
+
+    def test_historical_plan_sparse_positions_are_recovered_and_sorted(self):
+        historical_items = [
+            {
+                "stable_sample_id": f"sid-{position}",
+                "display_id": f"D{position:03d}",
+                "practice_option_id": f"D{position:03d}-O01",
+            }
+            for position in range(13)
+        ]
+        historical_projects = [
+            {"project_package_id": "P-SPARSE", "project_name": "稀疏工程", "items": historical_items},
+            {"project_package_id": "P-OTHER-1", "project_name": "其他一", "items": []},
+            {"project_package_id": "P-OTHER-2", "project_name": "其他二", "items": []},
+        ]
+        lookup = {
+            f"sid-{position}": {
+                "project_package_id": "P-SPARSE",
+                "source_ref": f"ref-{position}",
+                "family_id": f"F{position:03d}",
+                "display_id": f"D{position:03d}",
+                "practice_option_id": f"D{position:03d}-O01",
+            }
+            for position in range(13)
+        }
+        displays = pd.DataFrame([
+            {
+                "display_id": f"D{position:03d}",
+                "practice_options": [{
+                    "practice_option_id": f"D{position:03d}-O01",
+                    "practice_description": f"工艺-{position}",
+                }],
+            }
+            for position in range(13)
+        ])
+        result = {
+            "selected_project_position": 0,
+            "kept_items": [
+                {
+                    "item_position": position,
+                    "practice_option_id": f"D{position:03d}-O01",
+                    "quantity": {"type": "exact", "value": position + 1},
+                    "quantity_reason": f"保留位置 {position}",
+                }
+                for position in [12, 0, 5]
+            ],
+        }
+
+        plan = query_estimate_llm.parse_historical_plan_determination_result(
+            result, historical_projects, {}, displays, lookup
+        )
+
+        self.assertEqual([item.stable_sample_id for item in plan.items], ["sid-0", "sid-5", "sid-12"])
+        self.assertEqual([item.source_ref for item in plan.items], ["ref-0", "ref-5", "ref-12"])
 
     def test_historical_plan_conservative_selection_preserves_same_object_chain(self):
         item_names = ["防水层拆除", "屋面卷材防水", "屋面涂膜防水", "垂直运输", "措施费", "外墙修补"]
@@ -1834,22 +1905,15 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             for index in range(1, 7)
         }
         result = {
-            "project_selections": [True, False, False],
-            "selected_items": [
+            "selected_project_position": 0,
+            "kept_items": [
                 {
-                    "keep": True,
+                    "item_position": index - 1,
                     "practice_option_id": f"D{index:03d}-O01",
                     "quantity": {"type": "exact", "value": 1},
                     "quantity_reason": "同一屋面维修对象的完整施工链",
                 }
                 for index in range(1, 6)
-            ] + [
-                {
-                    "keep": False,
-                    "practice_option_id": "",
-                    "quantity": None,
-                    "quantity_reason": "",
-                }
             ],
         }
         displays = pd.DataFrame(
@@ -1985,10 +2049,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
         selected_result = {
             **valid,
-            "selected_items": [
-                valid["selected_items"][0],
-                {"keep": False, "practice_option_id": "", "quantity": None, "quantity_reason": ""},
-            ],
+            "kept_items": [valid["kept_items"][0]],
         }
         plan = query_estimate_llm.parse_historical_plan_determination_result(
             selected_result, projects, display_options, displays, lookup
