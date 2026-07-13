@@ -934,7 +934,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "display_id": "D001",
                     "family_id": "F001",
                     "representative_cost_item_name": "屋面卷材防水",
-                    "representative_project_description": "3mm SBS",
+                    "representative_project_description": "A" * 130,
                     "unit": "m²",
                     "本次召回样本数": 1,
                     "本次召回工程包数": 1,
@@ -964,11 +964,16 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             display_groups, display_families, candidate_families
         )
 
-        self.assertEqual(records[0]["candidate_family_ids"], ["F002", "F001"])
-        self.assertEqual(records[0]["candidate_family_count"], 2)
-        self.assertEqual(set(records[0]), {"display_id", "display_name", "candidate_family_ids", "candidate_family_count", "candidate_families"})
-        self.assertIn("unit", records[0]["candidate_families"][0])
-        self.assertIn("candidate_family_ids", prompt)
+        self.assertEqual(set(records[0]), {"display_id", "display_name", "candidate_families"})
+        self.assertEqual(
+            set(records[0]["candidate_families"][0]),
+            {"family_id", "name", "spec", "unit"},
+        )
+        self.assertEqual(records[0]["candidate_families"][1]["spec"], "A" * 120)
+        self.assertNotIn("candidate_family_ids", prompt)
+        self.assertNotIn("candidate_family_count", prompt)
+        for removed_field in ["samples", "packages", "item_query_similarity", "unit_price_min", "unit_price_median", "unit_price_max"]:
+            self.assertNotIn(f'"{removed_field}"', prompt)
         self.assertIn("仅存在 OCR、标点、文字顺序、同义表达", prompt)
         self.assertIn("关键规格、厚度", prompt)
         for removed_text in ["raw_query", "project_package_query_text", "item_query_text", "selection_reason", "default_representative_family_id", "family_assignments", "group_reason"]:

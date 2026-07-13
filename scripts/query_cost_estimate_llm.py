@@ -1312,14 +1312,8 @@ def option_grouping_payload_for_display(
             {
                 "family_id": family_id,
                 "name": truncate_text(row.get("representative_cost_item_name"), 40),
-                "spec": truncate_text(normalize_display_description(row.get("representative_project_description")), 80),
+                "spec": truncate_text(normalize_display_description(row.get("representative_project_description")), 120),
                 "unit": cell_text(family.get("unit_normalized")) or cell_text(row.get("unit")) or cell_text(family.get("unit")),
-                "samples": int(row.get("本次召回样本数") or 0),
-                "packages": int(row.get("本次召回工程包数") or 0),
-                "item_query_similarity": round(float(row.get("item_query_similarity最大值") or 0.0), 4),
-                "unit_price_min": family.get("本次召回综合单价最低值"),
-                "unit_price_median": family.get("本次召回综合单价中位数"),
-                "unit_price_max": family.get("本次召回综合单价最高值"),
             }
         )
     return payload
@@ -1334,13 +1328,10 @@ def build_display_option_grouping_prompt(
     for _index, display in candidate_display_groups.iterrows():
         display_id = cell_text(display.get("display_id"))
         candidate_families_payload = option_grouping_payload_for_display(display_id, display_group_families, candidate_families)
-        candidate_family_ids = [cell_text(family.get("family_id")) for family in candidate_families_payload if cell_text(family.get("family_id"))]
         records.append(
             {
                 "display_id": display_id,
                 "display_name": truncate_text(display.get("display_name"), 40),
-                "candidate_family_ids": candidate_family_ids,
-                "candidate_family_count": len(candidate_family_ids),
                 "candidate_families": candidate_families_payload,
             }
         )
