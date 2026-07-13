@@ -1902,7 +1902,7 @@ def build_stable_sample_lookup(
     return lookup
 
 
-def historical_project_prompt_records(
+def historical_project_records(
     examples: list[dict[str, Any]],
     sample_lookup: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1923,6 +1923,8 @@ def historical_project_prompt_records(
             item_records.append(
                 {
                     "stable_sample_id": stable_sample_id,
+                    "source_ref": cell_text(sample.get("source_ref")),
+                    "family_id": cell_text(sample.get("family_id")),
                     "display_id": cell_text(sample.get("display_id")),
                     "practice_option_id": cell_text(sample.get("practice_option_id")),
                     "cost_item_name": cell_text(item.get("cost_item_name")),
@@ -1939,6 +1941,29 @@ def historical_project_prompt_records(
             }
         )
     return records
+
+
+def historical_project_prompt_records(
+    historical_projects: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "project_name": cell_text(project.get("project_name")),
+            "items": [
+                {
+                    "display_id": cell_text(item.get("display_id")),
+                    "practice_option_id": cell_text(item.get("practice_option_id")),
+                    "cost_item_name": cell_text(item.get("cost_item_name")),
+                    "project_description": cell_text(item.get("project_description")),
+                    "unit": cell_text(item.get("unit")),
+                    "quantity": item.get("quantity"),
+                }
+                for item in (project.get("items") if isinstance(project.get("items"), list) else [])
+                if isinstance(item, dict)
+            ],
+        }
+        for project in historical_projects
+    ]
 
 
 def historical_display_options(
@@ -2025,7 +2050,7 @@ def historical_display_options(
         }
 
     output: dict[str, list[dict[str, str]]] = {}
-    alternative_limit = max(0, int(max_alternatives))
+    alternative_limit = min(5, max(1, int(max_alternatives)))
     for display_id in display_ids:
         if display_id not in options_by_display:
             continue
@@ -2048,54 +2073,46 @@ def build_historical_plan_determination_prompt(
     model: Any,
     item_query_embedding: np.ndarray,
 ) -> tuple[str, list[dict[str, Any]], dict[str, list[dict[str, str]]]]:
-    projects = historical_project_prompt_records(matched_project_examples, sample_lookup)
+    projects = historical_project_records(matched_project_examples, sample_lookup)
+    prompt_projects = historical_project_prompt_records(projects)
     display_options = historical_display_options(
         projects, displays_with_options, model, item_query_embedding
     )
     prompt = f"""
-你需要从三个完整历史工程中选择一个最适合作为当前维修估价骨架的真实工程。
+比较三个完整真实历史工程，选择一个作为当前方案骨架，不能固定选择第一项。
 
-必须比较三个完整历史工程，不能固定选择 rank 最靠前的工程。选择时综合考虑维修对象匹配程度、同一维修对象施工链完整性、无关清单数量、需要删除的无关项数量，以及工程整体与当前需求的接近程度。优先选择维修对象更纯粹、无关项更少、同一维修对象施工链更完整且需要删除项更少的真实工程。
+选择优先级：
+1. 直接维修对象匹配优先于工程整体纯度；
+2. 再比较对象层级、维修范围和维修动作。不得用下一级部件替代完整对象，不得用单个设备替代整体系统，不得用附属构件替代主体项目，不得用局部维修替代整体更换，也不得混淆新增、更换、维修或拆除；
+3. 只有对象、层级、范围和动作基本匹配时，才比较工程整体纯度、无关清单数量、施工链完整性和需要删除的无关项数量。文字相似不能覆盖上述层级不一致。
 
-只能选择输入中已有的 project_package_id 和该工程已有的 stable_sample_id。所选历史工程中的清单默认保留，仅允许在以下情况删除：
-- 清单明确属于其他维修对象或另一个独立维修范围，例如用户问屋面时，清单明确属于外墙、地下室或消防；
-- 清单与用户明确要求冲突；
-- 清单是明显互相替代的重复做法，并且用户已经明确选择其中一种。
-
-保守删除规则：
+所选工程的清单默认保留。仅当清单明确属于其他维修对象、另一个独立范围、与用户要求冲突、属于用户已明确选择之外的互斥做法，或是无关的独立附加项目时删除。
 - 用户没有逐项提到某个施工层，不构成删除理由；
-- 同一维修对象下真实历史工程已有的完整施工链应优先保留；
-- 拆除、基层处理、防水层、保护层、运输、脚手架和措施费等，只要属于同一维修对象，不得仅因用户没有逐项说明就删除；
-- 无法确定某项是否相关时保留，不得为了缩短结果而主动压缩清单数量；
-- 历史工程中卷材防水和涂膜防水同时存在时，默认视为完整施工链中的不同施工层并全部保留；
-- 只有用户明确要求只使用某一种做法，或两项明显属于互斥替代方案时，才删除其中一项；
-- 不得从另外两个历史工程补项，不得生成新清单。
+- 同一对象下已有的拆除、基层处理、主体施工层、保护层、运输、脚手架及措施项目等施工链应整体保留；
+- 同一工程同时存在的多个施工层默认属于完整施工链；无法确认是否相关时优先保留；
+- 不得为缩短输出压缩清单，不得从其他工程补项或创建新清单。
 
-对每个保留项：
-- historical item 中的 practice_option_id 是该历史清单原工艺；
-- 用户明确指定材料、厚度、型号或施工工艺时，从该 item 的 display_id 对应 display_options 中选择匹配的 practice_option_id；
-- 用户未明确具体工艺，或候选中没有明确匹配项时，沿用 historical item 原 practice_option_id；
-- display_options 未包含该 display_id 时，该 display 只有原工艺，必须沿用 historical item 原 practice_option_id；
-- 不得选择对应 display_options 之外的 option，不得跨 display 选择 practice_option_id；
-- 估计 exact 或 range quantity，用户明确工程量优先；
-- 同一施工范围的相关项可结合用户工程量，台、套、项、系统类可参考历史数量；
-- 不得机械照搬明显不适合当前范围的历史数量。
+工艺与工程量：
+- historical item 的 practice_option_id 是原工艺；用户明确材料、厚度、型号或工艺且同一 display 的 display_options 有匹配项时才改选；未明确或无匹配项时沿用原工艺；
+- 不得选择该 display 候选之外的工艺，不得跨 display；工艺变化不得改变维修对象、层级、范围或动作；
+- 为每个保留项给出 exact 或 range quantity 和非空 quantity_reason，优先采用用户明确工程量，避免照搬明显不适合的历史数量。
 
-不得输出价格、方案名称、方案说明或未要求字段。只输出以下 JSON：
+输出必须依赖输入数组原顺序。project_selections 与三个工程逐项对应且只能一个 true；selected_items 必须覆盖所选工程全部 items 并逐项对应。删除项固定输出空 practice_option_id、null quantity 和空 quantity_reason。不得生成价格、金额、方案名称、说明或其他字段。只输出：
 {{
-  "project_package_id": "输入中已有的真实ID",
+  "project_selections": [false, true, false],
   "selected_items": [
     {{
-      "stable_sample_id": "所选工程中的已有ID",
-      "practice_option_id": "historical item原工艺或其display_id对应display_options中的已有ID",
+      "keep": true,
+      "practice_option_id": "原工艺或同一display候选中的已有ID",
       "quantity": {{"type": "exact", "value": 500}},
       "quantity_reason": "工程量确定依据"
-    }}
+    }},
+    {{"keep": false, "practice_option_id": "", "quantity": null, "quantity_reason": ""}}
   ]
 }}
 
 输入：
-{json_text({"user_query": raw_text, "historical_projects": projects, "display_options": display_options})}
+{json_text({"user_query": raw_text, "historical_projects": prompt_projects, "display_options": display_options})}
 """.strip()
     return prompt, projects, display_options
 
@@ -2107,52 +2124,45 @@ def parse_historical_plan_determination_result(
     displays_with_options: pd.DataFrame,
     sample_lookup: dict[str, dict[str, Any]],
 ) -> HistoricalPlan:
-    if not isinstance(result, dict) or set(result) != {"project_package_id", "selected_items"}:
-        raise ValueError("historical_plan_determination 顶层只允许 project_package_id 和 selected_items")
-    project_ids = {
-        cell_text(example.get("project_package_id"))
-        for example in historical_projects
-        if cell_text(example.get("project_package_id"))
-    }
-    project_package_id = cell_text(result.get("project_package_id"))
-    if project_package_id not in project_ids:
-        raise ValueError(f"未知 project_package_id: {project_package_id}")
-    historical_items: dict[str, tuple[str, dict[str, Any]]] = {}
-    for example in historical_projects:
-        example_project_id = cell_text(example.get("project_package_id"))
-        for item in (example.get("items") if isinstance(example.get("items"), list) else []):
-            if not isinstance(item, dict):
-                continue
-            stable_sample_id = cell_text(item.get("stable_sample_id"))
-            if stable_sample_id in historical_items:
-                raise ValueError(f"historical_projects stable_sample_id 重复: {stable_sample_id}")
-            historical_items[stable_sample_id] = (example_project_id, item)
+    if not isinstance(result, dict) or set(result) != {"project_selections", "selected_items"}:
+        raise ValueError("historical_plan_determination 顶层只允许 project_selections 和 selected_items")
+    raw_project_selections = result.get("project_selections")
+    if (
+        not isinstance(raw_project_selections, list)
+        or len(raw_project_selections) != len(historical_projects)
+        or any(not isinstance(selected, bool) for selected in raw_project_selections)
+    ):
+        raise ValueError("project_selections 必须与输入工程数量一致且仅包含 boolean")
+    selected_project_positions = [
+        position for position, selected in enumerate(raw_project_selections) if selected
+    ]
+    if len(selected_project_positions) != 1:
+        raise ValueError("必须且只能选中一个历史工程")
+    selected_project = historical_projects[selected_project_positions[0]]
+    project_package_id = cell_text(selected_project.get("project_package_id"))
+    historical_items = selected_project.get("items") if isinstance(selected_project.get("items"), list) else []
     raw_items = result.get("selected_items")
-    if not isinstance(raw_items, list) or not raw_items:
-        raise ValueError("selected_items 必须为非空 list")
+    if not isinstance(raw_items, list) or len(raw_items) != len(historical_items):
+        raise ValueError("selected_items 数量必须等于所选工程输入 items 数量")
     _display_map, full_option_map = display_option_maps(displays_with_options)
-    seen_stable_ids: set[str] = set()
     items: list[ScenarioItem] = []
-    for raw_item in raw_items:
+    for item_position, (raw_item, historical_item) in enumerate(zip(raw_items, historical_items)):
         if not isinstance(raw_item, dict):
             raise ValueError("selected_item 必须为 object")
-        if set(raw_item) != {"stable_sample_id", "practice_option_id", "quantity", "quantity_reason"}:
-            raise ValueError("selected_item 只允许 stable_sample_id、practice_option_id、quantity、quantity_reason")
-        stable_sample_id = cell_text(raw_item.get("stable_sample_id"))
-        if stable_sample_id in seen_stable_ids:
-            raise ValueError(f"stable_sample_id 重复: {stable_sample_id}")
-        seen_stable_ids.add(stable_sample_id)
+        if set(raw_item) != {"keep", "practice_option_id", "quantity", "quantity_reason"}:
+            raise ValueError("selected_item 只允许 keep、practice_option_id、quantity、quantity_reason")
+        if not isinstance(raw_item.get("keep"), bool):
+            raise ValueError(f"keep 必须为 boolean: position={item_position}")
+        if not raw_item["keep"]:
+            if cell_text(raw_item.get("practice_option_id")) or raw_item.get("quantity") is not None or cell_text(raw_item.get("quantity_reason")):
+                raise ValueError(f"删除项必须使用空工艺、null quantity 和空 quantity_reason: position={item_position}")
+            continue
+        stable_sample_id = cell_text(historical_item.get("stable_sample_id"))
         sample = sample_lookup.get(stable_sample_id)
         if sample is None:
-            raise ValueError(f"未知 stable_sample_id: {stable_sample_id}")
-        historical_item_entry = historical_items.get(stable_sample_id)
-        if (
-            historical_item_entry is None
-            or historical_item_entry[0] != project_package_id
-            or cell_text(sample.get("project_package_id")) != project_package_id
-        ):
-            raise ValueError(f"stable_sample_id 不属于所选 project: {stable_sample_id}")
-        historical_item = historical_item_entry[1]
+            raise ValueError(f"所选工程 item 无法按位置回查: position={item_position}")
+        if cell_text(sample.get("project_package_id")) != project_package_id:
+            raise ValueError(f"所选工程 item 内部映射不一致: position={item_position}")
         display_id = cell_text(sample.get("display_id"))
         original_practice_option_id = cell_text(sample.get("practice_option_id"))
         if (
@@ -2174,7 +2184,7 @@ def parse_historical_plan_determination_result(
             or (display_id, practice_option_id) not in full_option_map
         ):
             raise ValueError(
-                f"practice_option_id 不属于本次 display_options: {stable_sample_id}/{display_id}/{practice_option_id}"
+                f"practice_option_id 不属于该位置的 display_options: position={item_position}/{display_id}/{practice_option_id}"
             )
         quantity_reason = cell_text(raw_item.get("quantity_reason"))
         if not quantity_reason:
@@ -2191,6 +2201,8 @@ def parse_historical_plan_determination_result(
                 quantity_reason=quantity_reason,
             )
         )
+    if not items:
+        raise ValueError("所选历史工程至少必须保留一条清单")
     return HistoricalPlan(project_package_id=project_package_id, items=items)
 
 
@@ -2230,7 +2242,12 @@ def generate_historical_plan_determination(
         trace = trace_row(
             "historical_plan_determination", "选择真实历史工程骨架、保留项、工艺和工程量", True,
             prompt=prompt, max_tokens=max_tokens,
-            input_summary=json_text({**input_counts, "selected_project_package_id": plan.project_package_id, "selected_item_count": len(plan.items)}),
+            input_summary=json_text({
+                **input_counts,
+                "selected_project_package_id": plan.project_package_id,
+                "selected_stable_sample_ids": [item.stable_sample_id for item in plan.items],
+                "selected_item_count": len(plan.items),
+            }),
             usage=response.usage, raw_response=getattr(response, "raw_content", ""),
             scenario_count=1, scenario_item_count=len(plan.items),
         )
@@ -2256,31 +2273,34 @@ def build_final_explanation_prompt(
     estimate_scenarios: pd.DataFrame,
     matched_project_examples: list[dict[str, Any]],
 ) -> str:
-    selected_project = next(
+    selected_project_name = next(
         (example for example in matched_project_examples if cell_text(example.get("project_package_id")) == scenario.items[0].project_package_id),
         {},
     )
+    selected_project_name = cell_text(selected_project_name.get("project_name")) or cell_text(
+        selected_project_name.get("project_name_text")
+    )
     item_columns = [
-        "stable_sample_id", "source_ref", "display_id", "清单名称", "选用工艺", "单位",
+        "清单名称", "选用工艺", "单位",
         "工程量预估", "工程量依据", "综合单价最低值", "综合单价中位数", "综合单价最高值",
         "合价最低值", "合价中位数", "合价最高值", "价格证据样本数",
     ]
     items = replace_nan_records(estimate_scenarios[item_columns])
     return f"""
-清单、工艺、工程量、价格和金额均已由程序确定。你只能补充一个方案名称、整体说明和逐项说明。
-不得增加、删除或修改任何清单、ID、工艺、工程量或价格，不得输出未要求字段。
+清单、工艺、工程量、价格和金额均已确定。只补充方案名称、整体说明和逐项说明。
+不得增加、删除、重排或修改任何清单、工艺、工程量或价格，不得提及输入中不存在的维修对象。
 
-item_explanations 必须对输入中的每个 stable_sample_id 恰好返回一次：
+item_explanations 必须与 final_items 数量和原顺序完全一致，只输出：
 {{
   "scenario_name": "方案名称",
   "scenario_summary": "方案整体说明",
   "item_explanations": [
-    {{"stable_sample_id": "输入中的ID", "item_explanation": "逐项说明"}}
+    {{"item_explanation": "逐项说明"}}
   ]
 }}
 
 输入：
-{json_text({"user_query": raw_text, "selected_historical_project": selected_project, "final_items": items})}
+{json_text({"user_query": raw_text, "selected_project_name": selected_project_name, "final_items": items})}
 """.strip()
 
 
@@ -2292,24 +2312,16 @@ def parse_final_explanation_result(result: dict[str, Any], scenario: EstimateSce
     if not scenario_name or not scenario_summary:
         raise ValueError("scenario_name 和 scenario_summary 不得为空")
     raw_items = result.get("item_explanations")
-    if not isinstance(raw_items, list):
-        raise ValueError("item_explanations 必须为 list")
-    explanations: dict[str, str] = {}
-    for raw_item in raw_items:
-        if not isinstance(raw_item, dict) or set(raw_item) != {"stable_sample_id", "item_explanation"}:
-            raise ValueError("item_explanation 只允许 stable_sample_id 和 item_explanation")
-        stable_sample_id = cell_text(raw_item.get("stable_sample_id"))
+    if not isinstance(raw_items, list) or len(raw_items) != len(scenario.items):
+        raise ValueError("item_explanations 数量必须等于最终 items 数量")
+    explanations: list[str] = []
+    for position, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, dict) or set(raw_item) != {"item_explanation"}:
+            raise ValueError("item_explanation 只允许 item_explanation")
         explanation = cell_text(raw_item.get("item_explanation"))
-        if stable_sample_id in explanations:
-            raise ValueError(f"final_explanation stable_sample_id 重复: {stable_sample_id}")
         if not explanation:
-            raise ValueError(f"item_explanation 不得为空: {stable_sample_id}")
-        explanations[stable_sample_id] = explanation
-    expected = {item.stable_sample_id for item in scenario.items}
-    if set(explanations) != expected:
-        missing = sorted(expected - set(explanations))
-        extra = sorted(set(explanations) - expected)
-        raise ValueError(f"item_explanations ID 集合不一致: missing={missing}, extra={extra}")
+            raise ValueError(f"item_explanation 不得为空: position={position}")
+        explanations.append(explanation)
     items = [
         ScenarioItem(
             project_package_id=item.project_package_id,
@@ -2317,11 +2329,11 @@ def parse_final_explanation_result(result: dict[str, Any], scenario: EstimateSce
             source_ref=item.source_ref,
             display_id=item.display_id,
             practice_option_id=item.practice_option_id,
-            selection_reason=explanations[item.stable_sample_id],
+            selection_reason=explanations[position],
             quantity=item.quantity,
             quantity_reason=item.quantity_reason,
         )
-        for item in scenario.items
+        for position, item in enumerate(scenario.items)
     ]
     return EstimateScenario("S001", 1, scenario_name, scenario_summary, items)
 
@@ -2344,7 +2356,11 @@ def generate_final_explanation(
         trace = trace_row(
             "final_explanation", "补充唯一估价方案的整体和逐项说明", True,
             prompt=prompt, max_tokens=max_tokens,
-            input_summary=json_text({"selected_project_package_id": scenario.items[0].project_package_id, "item_count": len(scenario.items)}),
+            input_summary=json_text({
+                "selected_project_package_id": scenario.items[0].project_package_id,
+                "selected_stable_sample_ids": [item.stable_sample_id for item in scenario.items],
+                "item_count": len(scenario.items),
+            }),
             usage=response.usage, raw_response=getattr(response, "raw_content", ""),
             scenario_count=1, scenario_item_count=len(scenario.items),
         )
@@ -2354,7 +2370,11 @@ def generate_final_explanation(
         trace = trace_row(
             "final_explanation", "补充唯一估价方案的整体和逐项说明", False,
             error=str(exc), prompt=prompt, max_tokens=max_tokens,
-            input_summary=json_text({"selected_project_package_id": scenario.items[0].project_package_id, "item_count": len(scenario.items)}),
+            input_summary=json_text({
+                "selected_project_package_id": scenario.items[0].project_package_id,
+                "selected_stable_sample_ids": [item.stable_sample_id for item in scenario.items],
+                "item_count": len(scenario.items),
+            }),
             scenario_count=1, scenario_item_count=len(scenario.items),
         )
         return scenario, False, str(exc), prompt, trace

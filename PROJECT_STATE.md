@@ -9,7 +9,7 @@
 - 支持按批次导入 OCR Excel，独立生成 cleaned、removed、classified 和单批次 cost item samples。
 - 支持自动合并 `samples/*/cost_item_samples.xlsx` 为总样本，并使用不含 `project_code` / `batch_id` 的 `stable_sample_id` 去重。
 - 支持从总样本 `samples/cost_item_samples_all.xlsx` 构建 project package / item embedding 索引，保留样本明细、工程包明细、工程包向量、清单行向量和索引元数据。
-- 支持自然语言造价查询：比较前三个完整真实历史工程并选择一个 `project_package_id` 作为唯一方案骨架，按 `stable_sample_id` 保守裁剪清单；通过已有 `display_id` 统一提供有限工艺候选，用户明确规格时选择最终 `practice_option_id`，未明确时沿用历史原工艺；价格和金额从 top 20 工程包与 top 300 直接清单形成的完整证据池回填。
+- 支持自然语言造价查询：比较前三个完整真实历史工程，优先按直接维修对象、对象层级、范围和动作选择唯一方案骨架并保守删除明确无关项；通过已有 `display_id` 统一提供有限工艺候选，价格和金额从 top 20 工程包与 top 300 直接清单形成的完整证据池回填。
 
 ## Recent Changes
 - 新增 `scripts/merge_cost_item_sample_batches.py`，自动合并历史批次样本、追加 `batch_id` / `stable_sample_id`，并输出去重报告。
@@ -17,6 +17,7 @@
 - 自然语言造价查询的召回证据层次统一为 `matched_project_packages` / `direct_item_hits` → `retrieved_evidence_items` → `candidate_families` → `candidate_display_groups`。
 - 删除 display 预筛选 LLM；`display_option_grouping` 全量处理 candidate displays，单 family 由程序生成 option，多 family 合并为一次 LLM 调用。
 - 估价方案生成重构为 `historical_plan_determination` 与 `final_explanation` 两阶段：程序只生成 `S001`，清单、工艺、工程量和价格在说明生成前锁定。
+- 两个方案 LLM 阶段改为数组顺序协议；工程包、清单及来源真实 ID 仅在程序侧恢复，`final_explanation` 不再读取被删除清单。
 
 ## Decisions
 - 当前阶段不引入数据库、Milvus 或 LangChain；样本合并后重建本地 parquet + npy 索引。
@@ -26,7 +27,7 @@
 - 索引构建阶段不再调用 LLM 清洗工程名称，只读取 batch 分类产出的 `project_name_text`；为空时 warning 并回退原始工程名称。
 - 查询阶段 LLM 不生成清单名称、项目特征、单位、单价、来源或金额；价格和金额由程序按同一 `fine_signature` 历史样本确定性回填和计算。
 - 前三个历史工程只用于选择真实方案骨架；最终 option 价格仍使用 top 20 工程包与 top 300 直接清单形成的完整证据池。
-- `stable_sample_id` 是历史清单唯一回查键；`source_ref`、`family_id`、`display_id` 和历史原 `practice_option_id` 由程序回查。相同 display 的候选在 prompt 中统一传递一次，包含三个历史工程实际原工艺及最多 5 个与 `item_query_text` 最相关的替代工艺；允许 `source_ref` 重复。
+- `project_package_id` 与 `stable_sample_id` 不暴露给方案 LLM；程序按输入工程和清单数组位置恢复，再通过原始记录回查 `source_ref`、`family_id`、`display_id` 和原 `practice_option_id`。相同 display 的候选统一传递一次，包含三个工程实际原工艺及最多 5 个与 `item_query_text` 最相关的替代工艺；允许 `source_ref` 重复。
 - dedup_selection 只抑制最终展示项，不创建新 family，不合并 source_refs、本次召回样本、工程量或价格区间。
 
 ## Known Limitations
