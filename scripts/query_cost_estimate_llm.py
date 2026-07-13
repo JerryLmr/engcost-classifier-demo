@@ -1890,28 +1890,6 @@ def build_stable_sample_lookup(
     return lookup
 
 
-def historical_display_records(displays_with_options: pd.DataFrame) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for _index, display in displays_with_options.iterrows():
-        options = display.get("practice_options") if isinstance(display.get("practice_options"), list) else []
-        records.append(
-            {
-                "display_id": cell_text(display.get("display_id")),
-                "display_name": cell_text(display.get("display_name")),
-                "unit": cell_text(display.get("unit")),
-                "practice_options": [
-                    {
-                        "practice_option_id": cell_text(option.get("practice_option_id")),
-                        "practice_description": cell_text(option.get("practice_description")),
-                    }
-                    for option in options
-                    if isinstance(option, dict)
-                ],
-            }
-        )
-    return records
-
-
 def historical_project_prompt_records(examples: list[dict[str, Any]]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for example in examples:
@@ -1920,21 +1898,15 @@ def historical_project_prompt_records(examples: list[dict[str, Any]]) -> list[di
             {
                 "project_package_id": cell_text(example.get("project_package_id")),
                 "project_name": cell_text(example.get("project_name")) or cell_text(example.get("project_name_text")),
-                "package_query_similarity": example.get("package_query_similarity"),
                 "items": [
                     {
-                        "item_order": index,
                         "stable_sample_id": cell_text(item.get("stable_sample_id")),
-                        "source_ref": cell_text(item.get("source_ref")),
-                        "family_id": cell_text(item.get("family_id")),
-                        "display_id": cell_text(item.get("display_id")),
-                        "practice_option_id": cell_text(item.get("practice_option_id")),
                         "cost_item_name": cell_text(item.get("cost_item_name")),
                         "project_description": cell_text(item.get("project_description")),
                         "unit": cell_text(item.get("unit")),
                         "quantity": item.get("quantity"),
                     }
-                    for index, item in enumerate(items, start=1)
+                    for item in items
                     if isinstance(item, dict)
                 ],
             }
@@ -1945,11 +1917,8 @@ def historical_project_prompt_records(examples: list[dict[str, Any]]) -> list[di
 def build_historical_plan_determination_prompt(
     raw_text: str,
     matched_project_examples: list[dict[str, Any]],
-    displays_with_options: pd.DataFrame,
-    core_display_id: str = "",
-) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[str, list[dict[str, Any]]]:
     projects = historical_project_prompt_records(matched_project_examples)
-    displays = historical_display_records(displays_with_options)
     prompt = f"""
 你需要从三个完整历史工程中选择一个最适合作为当前维修估价骨架的真实工程。
 
@@ -1959,40 +1928,32 @@ def build_historical_plan_determination_prompt(
 - 不得从其他历史工程增加清单，不得生成新清单。
 
 对每个保留项：
-- 根据用户明确材料、规格、型号和工艺选择最终 practice_option_id；
-- practice_option_id 必须属于该历史项对应的同一 display；
-- 用户未明确工艺时优先保持历史项原 option；
 - 估计 exact 或 range quantity，用户明确工程量优先；
 - 同一施工范围的相关项可结合用户工程量，台、套、项、系统类可参考历史数量；
 - 不得机械照搬明显不适合当前范围的历史数量。
 
-不得输出价格、方案名称、方案说明或未要求字段。只输出以下 JSON：
+不得替换所选历史清单原有工艺，不得输出价格、方案名称、方案说明或未要求字段。只输出以下 JSON：
 {{
   "project_package_id": "输入中已有的真实ID",
   "selected_items": [
     {{
       "stable_sample_id": "所选工程中的已有ID",
-      "practice_option_id": "同一display中的已有option",
       "quantity": {{"type": "exact", "value": 500}},
-      "quantity_reason": "工程量和工艺选择依据"
+      "quantity_reason": "工程量确定依据"
     }}
   ]
 }}
 
-输入中的 core_display_id 是程序按 direct item 相似度确定的核心维修对象，最终至少保留一个该 display 的历史项。
-
 输入：
-{json_text({"user_query": raw_text, "core_display_id": core_display_id, "matched_project_examples": projects, "displays_with_options": displays})}
+{json_text({"user_query": raw_text, "matched_project_examples": projects})}
 """.strip()
-    return prompt, projects, displays
+    return prompt, projects
 
 
 def parse_historical_plan_determination_result(
     result: dict[str, Any],
     matched_project_examples: list[dict[str, Any]],
-    displays_with_options: pd.DataFrame,
     sample_lookup: dict[str, dict[str, Any]],
-    core_display_id: str,
 ) -> HistoricalPlan:
     if not isinstance(result, dict) or set(result) != {"project_package_id", "selected_items"}:
         raise ValueError("historical_plan_determination 顶层只允许 project_package_id 和 selected_items")
@@ -2004,17 +1965,23 @@ def parse_historical_plan_determination_result(
     project_package_id = cell_text(result.get("project_package_id"))
     if project_package_id not in project_ids:
         raise ValueError(f"未知 project_package_id: {project_package_id}")
+    selected_project_stable_ids = {
+        cell_text(item.get("stable_sample_id"))
+        for example in matched_project_examples
+        if cell_text(example.get("project_package_id")) == project_package_id
+        for item in (example.get("items") if isinstance(example.get("items"), list) else [])
+        if isinstance(item, dict) and cell_text(item.get("stable_sample_id"))
+    }
     raw_items = result.get("selected_items")
     if not isinstance(raw_items, list) or not raw_items:
         raise ValueError("selected_items 必须为非空 list")
-    _display_map, option_map = display_option_maps(displays_with_options)
     seen_stable_ids: set[str] = set()
     items: list[ScenarioItem] = []
     for raw_item in raw_items:
         if not isinstance(raw_item, dict):
             raise ValueError("selected_item 必须为 object")
-        if set(raw_item) != {"stable_sample_id", "practice_option_id", "quantity", "quantity_reason"}:
-            raise ValueError("selected_item 只允许 stable_sample_id、practice_option_id、quantity、quantity_reason")
+        if set(raw_item) != {"stable_sample_id", "quantity", "quantity_reason"}:
+            raise ValueError("selected_item 只允许 stable_sample_id、quantity、quantity_reason")
         stable_sample_id = cell_text(raw_item.get("stable_sample_id"))
         if stable_sample_id in seen_stable_ids:
             raise ValueError(f"stable_sample_id 重复: {stable_sample_id}")
@@ -2022,12 +1989,11 @@ def parse_historical_plan_determination_result(
         sample = sample_lookup.get(stable_sample_id)
         if sample is None:
             raise ValueError(f"未知 stable_sample_id: {stable_sample_id}")
-        if cell_text(sample.get("project_package_id")) != project_package_id:
+        if (
+            stable_sample_id not in selected_project_stable_ids
+            or cell_text(sample.get("project_package_id")) != project_package_id
+        ):
             raise ValueError(f"stable_sample_id 不属于所选 project: {stable_sample_id}")
-        display_id = cell_text(sample.get("display_id"))
-        practice_option_id = cell_text(raw_item.get("practice_option_id"))
-        if (display_id, practice_option_id) not in option_map:
-            raise ValueError(f"practice_option_id 不属于样本对应 display: {display_id}/{practice_option_id}")
         quantity_reason = cell_text(raw_item.get("quantity_reason"))
         if not quantity_reason:
             raise ValueError("quantity_reason 不得为空")
@@ -2036,36 +2002,27 @@ def parse_historical_plan_determination_result(
                 project_package_id=project_package_id,
                 stable_sample_id=stable_sample_id,
                 source_ref=cell_text(sample.get("source_ref")),
-                display_id=display_id,
-                practice_option_id=practice_option_id,
+                display_id=cell_text(sample.get("display_id")),
+                practice_option_id=cell_text(sample.get("practice_option_id")),
                 selection_reason="",
                 quantity=validate_quantity(raw_item.get("quantity")),
                 quantity_reason=quantity_reason,
             )
         )
-    if core_display_id and core_display_id not in {item.display_id for item in items}:
-        raise ValueError(f"selected_items 未覆盖用户核心维修对象 display: {core_display_id}")
     return HistoricalPlan(project_package_id=project_package_id, items=items)
 
 
 def generate_historical_plan_determination(
     raw_text: str,
     matched_project_examples: list[dict[str, Any]],
-    displays_with_options: pd.DataFrame,
     sample_lookup: dict[str, dict[str, Any]],
-    core_display_id: str,
     warnings: list[str] | None = None,
 ) -> tuple[HistoricalPlan | None, bool, str, str, dict[str, Any]]:
-    prompt, projects, displays = build_historical_plan_determination_prompt(
-        raw_text, matched_project_examples, displays_with_options, core_display_id
-    )
-    max_tokens = 8192
+    prompt, projects = build_historical_plan_determination_prompt(raw_text, matched_project_examples)
+    max_tokens = 4096
     input_counts = {
         "historical_project_count": len(projects),
         "historical_item_count": sum(len(project.get("items") or []) for project in projects),
-        "display_count": len(displays),
-        "practice_option_count": sum(len(display.get("practice_options") or []) for display in displays),
-        "core_display_id": core_display_id,
     }
     if not projects:
         raise ValueError("没有可供选择的完整历史工程")
@@ -2075,10 +2032,10 @@ def generate_historical_plan_determination(
             system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
         )
         plan = parse_historical_plan_determination_result(
-            response.content, matched_project_examples, displays_with_options, sample_lookup, core_display_id
+            response.content, matched_project_examples, sample_lookup
         )
         trace = trace_row(
-            "historical_plan_determination", "选择真实历史工程骨架、保留项、工艺和工程量", True,
+            "historical_plan_determination", "选择真实历史工程骨架、保留项和工程量", True,
             prompt=prompt, max_tokens=max_tokens,
             input_summary=json_text({**input_counts, "selected_project_package_id": plan.project_package_id, "selected_item_count": len(plan.items)}),
             usage=response.usage, raw_response=getattr(response, "raw_content", ""),
@@ -2088,7 +2045,7 @@ def generate_historical_plan_determination(
     except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
         append_warning(warnings, "historical_plan_determination_failed")
         trace = trace_row(
-            "historical_plan_determination", "选择真实历史工程骨架、保留项、工艺和工程量", False,
+            "historical_plan_determination", "选择真实历史工程骨架、保留项和工程量", False,
             error=str(exc), prompt=prompt, max_tokens=max_tokens,
             input_summary=json_text({**input_counts, "selected_item_count": 0}),
             scenario_count=0, scenario_item_count=0,
@@ -2887,12 +2844,6 @@ def run_query(
         matched_project_packages, samples, sample_lookup, limit=3
     )
     matched_project_examples_output = matched_project_examples_frame(matched_project_examples)
-    if candidate_display_groups.empty:
-        raise ValueError("没有可用于核心维修对象校验的 candidate display")
-    core_display_scores = pd.to_numeric(
-        candidate_display_groups["direct_item_similarity_max"], errors="coerce"
-    ).fillna(float("-inf"))
-    core_display_id = cell_text(candidate_display_groups.loc[core_display_scores.idxmax(), "display_id"])
     (
         historical_plan,
         historical_plan_success,
@@ -2902,9 +2853,7 @@ def run_query(
     ) = generate_historical_plan_determination(
         raw_text,
         matched_project_examples,
-        displays_with_options,
         sample_lookup,
-        core_display_id,
         warnings=warnings,
     )
     if not historical_plan_success or historical_plan is None:
