@@ -39,6 +39,22 @@ MATCHED_PROJECT_PACKAGE_COLUMNS = [
     "item_count",
 ]
 
+MATCHED_PROJECT_EXAMPLE_COLUMNS = [
+    "rank",
+    "project_package_id",
+    "工程名称",
+    "project_name_text",
+    "consultation_time",
+    "location",
+    "item_order",
+    "cost_item_name",
+    "project_description",
+    "unit",
+    "quantity",
+    "unit_price",
+    "total_price",
+]
+
 CANDIDATE_FAMILY_COLUMNS = [
     "family_id",
     "fine_signature",
@@ -135,26 +151,7 @@ DISPLAY_GROUP_FAMILY_COLUMNS = [
     "item_query_similarity最大值",
 ]
 
-DISPLAY_SELECTION_TRACE_COLUMNS = [
-    "selection_rank",
-    "display_id",
-    "display_key",
-    "display_name",
-    "unit",
-    "family_count",
-    "family_ids",
-    "retrieval_package_support_ratio",
-    "support_rank",
-    "retrieval_item_count",
-    "retrieval_package_count",
-    "direct_item_similarity_max",
-    "candidate_source",
-    "selected_by_llm",
-    "selection_reason",
-    "selection_source",
-]
-
-DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS = [
+DISPLAY_OPTION_GROUPING_TRACE_COLUMNS = [
     "display_id",
     "display_name",
     "practice_option_id",
@@ -171,7 +168,6 @@ DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS = [
     "unit_price_min",
     "unit_price_median",
     "unit_price_max",
-    "group_reason",
 ]
 
 ESTIMATE_SCENARIO_COLUMNS = [
@@ -180,9 +176,9 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "方案名称",
     "display_id",
     "清单名称",
-    "单位",
     "选用工艺",
     "其他可选工艺",
+    "单位",
     "项目说明",
     "工程量预估",
     "合价最低值",
@@ -273,8 +269,8 @@ class QueryResult:
     candidate_display_groups: pd.DataFrame
     package_evidence_weights: pd.DataFrame
     display_group_families: pd.DataFrame
-    display_selection_trace: pd.DataFrame
-    display_family_selection_trace: pd.DataFrame
+    display_option_grouping_trace: pd.DataFrame
+    matched_project_examples: pd.DataFrame
     evidence_items: pd.DataFrame
     parse_info: pd.DataFrame
     llm_trace: pd.DataFrame
@@ -302,8 +298,6 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="同一 cache_subject 最多保留的相似历史工程包数量，默认 1；设为 0 表示不限制",
     )
-    parser.add_argument("--display-selection-limit", type=int, default=50, help="发送给 display_selection LLM 的 display 上限，默认 50")
-    parser.add_argument("--display-exploration-limit", type=int, default=5, help="display_selection 等距探索候选上限，默认 5")
     parser.add_argument(
         "--package-weight-temperature",
         type=float,
@@ -666,6 +660,99 @@ def matched_project_packages_for_output(matched: pd.DataFrame) -> pd.DataFrame:
         if column not in output.columns:
             output[column] = ""
     return output[MATCHED_PROJECT_PACKAGE_COLUMNS].fillna("")
+
+
+def item_row_numeric_order(value: Any) -> float | None:
+    text = cell_text(value)
+    if not text:
+        return None
+    if re.fullmatch(r"\d+(?:\.0+)?", text):
+        return float(text)
+    match = re.search(r"(?:^|[-_])(\d+)$", text)
+    return float(match.group(1)) if match else None
+
+
+def ordered_project_items(samples: pd.DataFrame, project_package_id: str) -> pd.DataFrame:
+    rows = samples[samples["project_package_id"].map(cell_text).eq(project_package_id)].copy()
+    if rows.empty:
+        return rows
+    rows["_source_order"] = range(len(rows))
+    rows["_item_row_order"] = rows.get("item_row_id", pd.Series(index=rows.index, dtype=object)).map(item_row_numeric_order)
+    rows["_seq_order"] = pd.to_numeric(rows.get("seq", pd.Series(index=rows.index, dtype=object)), errors="coerce")
+    rows["_preferred_order"] = rows["_item_row_order"].where(rows["_item_row_order"].notna(), rows["_seq_order"])
+    rows["_missing_order"] = rows["_preferred_order"].isna()
+    return rows.sort_values(
+        ["_missing_order", "_preferred_order", "_source_order"],
+        ascending=[True, True, True],
+        kind="stable",
+    ).drop(columns=["_source_order", "_item_row_order", "_seq_order", "_preferred_order", "_missing_order"])
+
+
+def build_matched_project_examples(
+    matched_project_packages: pd.DataFrame,
+    samples: pd.DataFrame,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    if matched_project_packages.empty or limit <= 0:
+        return []
+    ranked = matched_project_packages.copy()
+    ranked["_rank_order"] = pd.to_numeric(ranked.get("rank"), errors="coerce")
+    ranked["_source_order"] = range(len(ranked))
+    ranked = ranked.sort_values(["_rank_order", "_source_order"], kind="stable").head(limit)
+    examples: list[dict[str, Any]] = []
+    for fallback_rank, (_index, project) in enumerate(ranked.iterrows(), start=1):
+        project_package_id = cell_text(project.get("project_package_id"))
+        project_items = ordered_project_items(samples, project_package_id)
+        items = [
+            {
+                "cost_item_name": cell_text(item.get("cost_item_name")),
+                "project_description": cell_text(item.get("project_description")),
+                "unit": cell_text(item.get("unit")) or cell_text(item.get("unit_normalized")),
+                "quantity": numeric_or_none(item.get("quantity")),
+                "unit_price": numeric_or_none(item.get("unit_price")),
+                "total_price": numeric_or_none(item.get("total_price")),
+            }
+            for _item_index, item in project_items.iterrows()
+        ]
+        examples.append(
+            {
+                "rank": int(numeric_or_none(project.get("rank")) or fallback_rank),
+                "project_package_id": project_package_id,
+                "project_name": cell_text(project.get("工程名称")),
+                "project_name_text": cell_text(project.get("project_name_text")),
+                "consultation_time": cell_text(project.get("consultation_time")),
+                "location": cell_text(project.get("location")),
+                "items": items,
+            }
+        )
+    return examples
+
+
+def matched_project_examples_frame(examples: list[dict[str, Any]]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for example in examples:
+        items = example.get("items") if isinstance(example.get("items"), list) else []
+        for item_order, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                {
+                    "rank": example.get("rank", ""),
+                    "project_package_id": cell_text(example.get("project_package_id")),
+                    "工程名称": cell_text(example.get("project_name")),
+                    "project_name_text": cell_text(example.get("project_name_text")),
+                    "consultation_time": cell_text(example.get("consultation_time")),
+                    "location": cell_text(example.get("location")),
+                    "item_order": item_order,
+                    "cost_item_name": cell_text(item.get("cost_item_name")),
+                    "project_description": cell_text(item.get("project_description")),
+                    "unit": cell_text(item.get("unit")),
+                    "quantity": item.get("quantity"),
+                    "unit_price": item.get("unit_price"),
+                    "total_price": item.get("total_price"),
+                }
+            )
+    return pd.DataFrame(rows, columns=MATCHED_PROJECT_EXAMPLE_COLUMNS)
 
 
 def score_direct_items(samples: pd.DataFrame, item_query_similarities: np.ndarray, top_items: int) -> pd.DataFrame:
@@ -1184,430 +1271,6 @@ def split_refs(value: Any, limit: int | None = None) -> list[str]:
     return refs[:limit] if limit is not None else refs
 
 
-def select_displays_for_llm(
-    candidate_display_groups: pd.DataFrame,
-    display_selection_limit: int = 50,
-    exploration_limit: int = 5,
-) -> pd.DataFrame:
-    if candidate_display_groups.empty or display_selection_limit <= 0:
-        return candidate_display_groups.head(0).copy()
-
-    display_selection_limit = max(int(display_selection_limit), 0)
-    exploration_limit = max(int(exploration_limit), 0)
-    if len(candidate_display_groups) <= display_selection_limit:
-        output = candidate_display_groups.copy().reset_index(drop=True)
-        output.insert(0, "selection_rank", range(1, len(output) + 1))
-        output["candidate_source"] = "all_under_limit"
-        return output
-
-    ranking_limit = max(display_selection_limit - min(exploration_limit, display_selection_limit), 0)
-    rankings = [
-        (
-            "retrieval_package_support_ratio",
-            candidate_display_groups.sort_values(
-                ["retrieval_package_support_ratio", "retrieval_package_count", "retrieval_item_count"],
-                ascending=[False, False, False],
-            ),
-        ),
-        (
-            "direct_item_similarity",
-            candidate_display_groups.sort_values(
-                ["direct_item_similarity_max", "retrieval_package_support_ratio", "retrieval_item_count"],
-                ascending=[False, False, False],
-            ),
-        ),
-        (
-            "retrieval_package_count",
-            candidate_display_groups.sort_values(
-                ["retrieval_package_count", "retrieval_item_count", "retrieval_package_support_ratio"],
-                ascending=[False, False, False],
-            ),
-        ),
-    ]
-    display_rows = {cell_text(row.get("display_id")): row for _index, row in candidate_display_groups.iterrows()}
-    selected_ids: list[str] = []
-    selected_set: set[str] = set()
-    selected_sources: dict[str, list[str]] = {}
-    positions = {name: 0 for name, _frame in rankings}
-
-    while len(selected_ids) < ranking_limit:
-        advanced = False
-        for source_name, ranked in rankings:
-            if len(selected_ids) >= ranking_limit:
-                break
-            while positions[source_name] < len(ranked):
-                advanced = True
-                row = ranked.iloc[positions[source_name]]
-                positions[source_name] += 1
-                display_id = cell_text(row.get("display_id"))
-                if not display_id:
-                    continue
-                if display_id in selected_set:
-                    sources = selected_sources.setdefault(display_id, [])
-                    if source_name not in sources:
-                        sources.append(source_name)
-                    continue
-                selected_set.add(display_id)
-                selected_ids.append(display_id)
-                selected_sources[display_id] = [source_name]
-                break
-        if not advanced:
-            break
-
-    remaining = candidate_display_groups[~candidate_display_groups["display_id"].map(cell_text).isin(selected_set)].reset_index(drop=True)
-    exploration_count = min(exploration_limit, display_selection_limit - len(selected_ids), len(remaining))
-    if exploration_count > 0:
-        indices = np.linspace(0, len(remaining) - 1, num=exploration_count, dtype=int).tolist()
-        indices = list(dict.fromkeys(indices))
-        used_indices = set(indices)
-        for index in range(len(remaining)):
-            if len(indices) >= exploration_count:
-                break
-            if index not in used_indices:
-                indices.append(index)
-                used_indices.add(index)
-        for index in indices[:exploration_count]:
-            display_id = cell_text(remaining.iloc[index].get("display_id"))
-            if not display_id or display_id in selected_set:
-                continue
-            selected_set.add(display_id)
-            selected_ids.append(display_id)
-            selected_sources[display_id] = ["exploration"]
-
-    output = pd.DataFrame([display_rows[display_id] for display_id in selected_ids], columns=candidate_display_groups.columns).reset_index(drop=True)
-    output.insert(0, "selection_rank", range(1, len(output) + 1))
-    output["candidate_source"] = [
-        ",".join(selected_sources.get(cell_text(row.get("display_id")), []))
-        for _index, row in output.iterrows()
-    ]
-    return output
-
-
-def display_selection_records(candidate_displays: pd.DataFrame, limit: int | None = None) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    frame = candidate_displays if limit is None else candidate_displays.head(limit)
-    for _index, row in frame.iterrows():
-        examples = []
-        try:
-            raw_examples = json.loads(cell_text(row.get("top_family_examples")) or "[]")
-        except ValueError:
-            raw_examples = []
-        if isinstance(raw_examples, list):
-            for item in raw_examples[:2]:
-                if not isinstance(item, dict):
-                    continue
-                text = truncate_text(item.get("项目特征简述") or item.get("spec"), 60)
-                if text:
-                    examples.append(text)
-        rows.append(
-            {
-                "id": cell_text(row.get("display_id")),
-                "name": truncate_text(row.get("display_name"), 40),
-                "unit": cell_text(row.get("unit")),
-                "retrieval_package_support_ratio": round(float(row.get("retrieval_package_support_ratio") or 0.0), 3),
-                "support_rank": int(row.get("support_rank") or 0),
-                "examples": examples,
-            }
-        )
-    return rows
-
-
-def build_display_selection_prompt(
-    rewrite: QueryRewrite,
-    candidate_displays: pd.DataFrame,
-) -> tuple[str, list[dict[str, Any]]]:
-    records = display_selection_records(candidate_displays)
-    payload = {
-        "raw_query": rewrite.raw_query,
-        "project_package_query_text": rewrite.project_package_query_text,
-        "item_query_text": rewrite.item_query_text,
-        "candidate_displays": records,
-    }
-    prompt = f"""
-你是物业维修工程建议清单选择器。
-
-【任务】
-
-根据用户需求和本次召回候选证据，从 candidate_displays 中选择应进入本次建议清单的工作项。
-
-每个 display 代表一个清单工作项，内部可能包含多个不同参考做法。
-本阶段只判断哪些 display 应进入建议清单：
-
-- 不选择具体 family；
-- 不判断价格和工程量；
-- 不撰写最终方案总结。
-
-【retrieval_package_support_ratio】
-
-retrieval_package_support_ratio 表示该工作项获得的本次召回工程包支持比例。
-
-计算方法：
-1. 对本次召回涉及的工程包，按照其与用户需求的整体语义相似度计算并归一化权重；
-2. 将包含当前工作项的工程包权重相加；
-3. 所得结果范围为 0 到 1。
-
-例如 0.62 表示：
-在本次召回工程包证据中，约 62% 的相关性权重支持该工作项。
-
-该比例已经同时考虑：
-- 该工作项出现于哪些本次召回工程包；
-- 这些工程包与当前需求有多相似。
-
-判断时可以比较不同候选的 retrieval_package_support_ratio，
-但不能只按比例机械选择，还应结合工作项名称、做法示例及其与用户需求的实际关系。
-
-【support_rank】
-
-support_rank 表示该工作项按 retrieval_package_support_ratio
-在本次全部候选 display 中的排名，1 表示本次召回工程包支持最高。
-
-当某个工作项的 retrieval_package_support_ratio 绝对值不高，
-但 support_rank 较靠前时，仍说明它相对于本次其他候选
-具有较强的本次召回工程包支持。
-
-support_rank 只表示相对支持强度，
-仍需结合用户需求、工作项名称、做法示例、
-施工关系、替代关系和现场条件综合判断。
-
-请综合判断：
-
-1. 用户明确描述的维修对象、问题、材料、规格和工程量；
-2. display 与用户维修目标的直接相关性；
-3. display 在本次召回相似工程包中的出现情况；
-4. display 与其他拟选工作项之间是否存在合理的施工或配套关系；
-5. 该工作项是否可能因现场条件、原有构造、施工组织或实施方案而需要。
-
-用户通常只描述维修目标，不会完整列出实际工程中的全部清单工作项。
-因此，不要只选择与用户原文措辞最相似的项目。
-
-但本次召回工程包中出现过，也不代表当前工程一定需要。
-只有当候选与本次需求存在清楚、可解释的关系时，才应选择。
-
-【需求与检索文本使用规则】
-
-1. display 业务选择必须优先依据 raw_query。
-2. project_package_query_text 和 item_query_text 只用于理解本次召回来源和追溯检索语义。
-3. 不得把检索文本当作用户新增需求，不得据此扩展用户未明确提出的清单项。
-
-【选择规则】
-
-1. 只能选择 candidate_displays 中存在的 display_id。
-2. 同一 display_id 最多选择一次。
-3. 不设置固定选择数量。
-4. 不得仅因为现场条件尚未明确，就自动排除一个与当前工程有较强关系的候选。
-5. 如果某个工作项是否实施依赖现场条件，可以选择，但 selection_reason 必须说明需要确认的条件。
-6. 对于 retrieval_package_support_ratio 排名靠前，且与已选主要工作项存在清楚、合理施工关系或实施关系的候选，即使其是否实施依赖现场条件、原有构造、楼层高度、运输条件、施工组织、作业方式或实施方案，也不要仅因为这些条件尚未明确而直接排除。
-7. 可以将上述候选条件性选入建议清单，并在 selection_reason 中说明它与当前主要工作项的关系，以及是否实施需要确认的具体条件。
-8. 对实质重复、相互包含或通常互为替代的 display，不要同时选择，除非它们确实代表可以独立计价且同时实施的不同工作内容。
-
-【selection_reason】
-
-每个已选 display 的 selection_reason 必须说明：
-
-1. 它为什么与用户需求相关；
-2. 如果是否实施依赖现场条件，需要确认什么条件。
-
-【输出 JSON】
-
-{{
-  "selected_displays": [
-    {{
-      "display_id": "D001",
-      "selection_reason": "该工作项直接对应用户提出的维修对象和施工目标"
-    }}
-  ]
-}}
-
-只能输出一个 JSON object，不得输出解释、Markdown 或思考过程。
-
-【输入数据】
-
-{json_text(payload)}
-""".strip()
-    return prompt, records
-
-
-def build_display_selection_trace_frame(displays_for_llm: pd.DataFrame) -> pd.DataFrame:
-    rows: list[dict[str, Any]] = []
-    for fallback_rank, (_index, row) in enumerate(displays_for_llm.iterrows(), start=1):
-        rows.append(
-            {
-                "selection_rank": int(row.get("selection_rank") or fallback_rank),
-                "display_id": cell_text(row.get("display_id")),
-                "display_key": cell_text(row.get("display_key")),
-                "display_name": cell_text(row.get("display_name")),
-                "unit": cell_text(row.get("unit")),
-                "family_count": row.get("family_count", ""),
-                "family_ids": cell_text(row.get("family_ids")),
-                "retrieval_package_support_ratio": row.get("retrieval_package_support_ratio", ""),
-                "support_rank": row.get("support_rank", ""),
-                "retrieval_item_count": row.get("retrieval_item_count", ""),
-                "retrieval_package_count": row.get("retrieval_package_count", ""),
-                "direct_item_similarity_max": row.get("direct_item_similarity_max", ""),
-                "candidate_source": cell_text(row.get("candidate_source")),
-                "selected_by_llm": "否",
-                "selection_reason": "",
-                "selection_source": "not_selected",
-            }
-        )
-    return pd.DataFrame(rows, columns=DISPLAY_SELECTION_TRACE_COLUMNS)
-
-
-def apply_display_selection_trace_result(
-    trace_frame: pd.DataFrame,
-    selected: pd.DataFrame,
-    selection_source: str,
-) -> pd.DataFrame:
-    output = trace_frame.copy()
-    if output.empty or selected.empty:
-        return output
-    selected_map = {cell_text(row.get("display_id")): row for _index, row in selected.iterrows()}
-    for index, row in output.iterrows():
-        display_id = cell_text(row.get("display_id"))
-        selected_row = selected_map.get(display_id)
-        if selected_row is None:
-            continue
-        output.at[index, "selected_by_llm"] = "是" if selection_source == "llm" else "否"
-        output.at[index, "selection_reason"] = cell_text(selected_row.get("selection_reason"))
-        output.at[index, "selection_source"] = selection_source
-    return output
-
-
-def display_selection_candidate_source_counts(trace_frame: pd.DataFrame) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    if trace_frame.empty or "candidate_source" not in trace_frame.columns:
-        return counts
-    for value in trace_frame["candidate_source"].tolist():
-        for source in split_refs(value):
-            counts[source] = counts.get(source, 0) + 1
-    return counts
-
-
-def parse_display_selection_result(
-    result: dict[str, Any],
-    allowed_display_ids: set[str],
-    warnings: list[str] | None = None,
-) -> tuple[pd.DataFrame, dict[str, Any]]:
-    raw_rows = result.get("selected_displays")
-    if not isinstance(raw_rows, list):
-        raise ValueError("LLM 输出缺少 selected_displays list")
-
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    meta = {"invalid_display_ids": [], "duplicate_display_ids": []}
-    for item in raw_rows:
-        if not isinstance(item, dict):
-            continue
-        display_id = cell_text(item.get("display_id"))
-        if display_id not in allowed_display_ids:
-            if display_id:
-                meta["invalid_display_ids"].append(display_id)
-                append_warning(warnings, "invalid_display_ids")
-            continue
-        if display_id in seen:
-            meta["duplicate_display_ids"].append(display_id)
-            append_warning(warnings, "duplicate_display_ids")
-            continue
-        seen.add(display_id)
-        rows.append(
-            {
-                "display_id": display_id,
-                "selection_reason": cell_text(item.get("selection_reason")),
-            }
-        )
-    return pd.DataFrame(rows, columns=["display_id", "selection_reason"]), meta
-
-
-def generate_display_selection(
-    rewrite: QueryRewrite,
-    candidate_display_groups: pd.DataFrame,
-    display_selection_limit: int = 50,
-    exploration_limit: int = 5,
-    warnings: list[str] | None = None,
-) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any], dict[str, Any], pd.DataFrame]:
-    displays_for_llm = select_displays_for_llm(
-        candidate_display_groups,
-        display_selection_limit=display_selection_limit,
-        exploration_limit=exploration_limit,
-    )
-    trace_frame = build_display_selection_trace_frame(displays_for_llm)
-    prompt, records = build_display_selection_prompt(rewrite, displays_for_llm)
-    allowed_display_ids = {cell_text(row.get("id")) for row in records}
-    candidate_ids = [cell_text(row.get("id")) for row in records if cell_text(row.get("id"))]
-    source_counts = display_selection_candidate_source_counts(trace_frame)
-    exploration_count = source_counts.get("exploration", 0)
-    max_tokens = 2048
-    try:
-        response = request_llm_json_with_usage(
-            prompt,
-            max_tokens=max_tokens,
-            system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
-        )
-        selected, meta = parse_display_selection_result(response.content, allowed_display_ids, warnings)
-        selected_ids = selected["display_id"].map(cell_text).tolist() if "display_id" in selected.columns else []
-        selected_detail = replace_nan_records(selected)
-        meta.update(
-            {
-                "candidate_ids": candidate_ids,
-                "selected_ids": selected_ids,
-                "selected_detail": selected_detail,
-                "candidate_source_counts": source_counts,
-                "exploration_count": exploration_count,
-            }
-        )
-        trace_frame = apply_display_selection_trace_result(trace_frame, selected, "llm")
-        trace = trace_row(
-            "display_selection",
-            "选择进入建议清单的 display_group",
-            True,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text(
-                {
-                    "displays_sent": len(records),
-                    "selected": len(selected),
-                    "candidate_ids": trace_id_summary(candidate_ids),
-                    "selected_ids": trace_id_summary(selected_ids),
-                    "exploration_count": exploration_count,
-                }
-            ),
-            usage=response.usage,
-        )
-        return selected, True, False, "", prompt, trace, meta, trace_frame
-    except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-        append_warning(warnings, "display_selection_failed")
-        if not trace_frame.empty:
-            trace_frame = trace_frame.copy()
-            trace_frame["selection_source"] = "fallback"
-        meta = {
-            "invalid_display_ids": [],
-            "duplicate_display_ids": [],
-            "candidate_ids": candidate_ids,
-            "selected_ids": [],
-            "selected_detail": [],
-            "candidate_source_counts": source_counts,
-            "exploration_count": exploration_count,
-        }
-        trace = trace_row(
-            "display_selection",
-            "选择进入建议清单的 display_group",
-            False,
-            error=str(exc),
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text(
-                {
-                    "displays_sent": len(records),
-                    "selected": 0,
-                    "candidate_ids": trace_id_summary(candidate_ids),
-                    "selected_ids": [],
-                    "exploration_count": exploration_count,
-                }
-            ),
-        )
-        return pd.DataFrame(columns=["display_id", "selection_reason"]), False, True, str(exc), prompt, trace, meta, trace_frame
-
-
 def trace_id_summary(ids: list[str], limit: int = 20) -> dict[str, Any]:
     if len(ids) <= limit:
         return {"ids": ids}
@@ -1631,7 +1294,7 @@ def append_trace_warnings(trace: dict[str, Any], warnings: list[str]) -> None:
         trace["input_summary"] = f"{summary}; warnings={';'.join(warnings)}"
 
 
-def family_selection_payload_for_display(
+def option_grouping_payload_for_display(
     display_id: str,
     display_group_families: pd.DataFrame,
     candidate_families: pd.DataFrame,
@@ -1650,6 +1313,7 @@ def family_selection_payload_for_display(
                 "family_id": family_id,
                 "name": truncate_text(row.get("representative_cost_item_name"), 40),
                 "spec": truncate_text(normalize_display_description(row.get("representative_project_description")), 80),
+                "unit": cell_text(family.get("unit_normalized")) or cell_text(row.get("unit")) or cell_text(family.get("unit")),
                 "samples": int(row.get("本次召回样本数") or 0),
                 "packages": int(row.get("本次召回工程包数") or 0),
                 "item_query_similarity": round(float(row.get("item_query_similarity最大值") or 0.0), 4),
@@ -1661,101 +1325,43 @@ def family_selection_payload_for_display(
     return payload
 
 
-def build_display_family_selection_prompt(
-    rewrite: QueryRewrite,
-    selected_displays: pd.DataFrame,
+def build_display_option_grouping_prompt(
     candidate_display_groups: pd.DataFrame,
     display_group_families: pd.DataFrame,
     candidate_families: pd.DataFrame,
 ) -> tuple[str, list[dict[str, Any]]]:
-    display_map = {cell_text(row.get("display_id")): row for _index, row in candidate_display_groups.iterrows()}
     records: list[dict[str, Any]] = []
-    for _index, selected in selected_displays.iterrows():
-        display_id = cell_text(selected.get("display_id"))
-        display = display_map.get(display_id)
-        if display is None:
-            continue
-        candidate_families_payload = family_selection_payload_for_display(display_id, display_group_families, candidate_families)
+    for _index, display in candidate_display_groups.iterrows():
+        display_id = cell_text(display.get("display_id"))
+        candidate_families_payload = option_grouping_payload_for_display(display_id, display_group_families, candidate_families)
         candidate_family_ids = [cell_text(family.get("family_id")) for family in candidate_families_payload if cell_text(family.get("family_id"))]
         records.append(
             {
                 "display_id": display_id,
                 "display_name": truncate_text(display.get("display_name"), 40),
-                "selection_reason": cell_text(selected.get("selection_reason")),
                 "candidate_family_ids": candidate_family_ids,
                 "candidate_family_count": len(candidate_family_ids),
                 "candidate_families": candidate_families_payload,
             }
         )
-    payload = {
-        "raw_query": rewrite.raw_query,
-        "project_package_query_text": rewrite.project_package_query_text,
-        "item_query_text": rewrite.item_query_text,
-        "selected_displays": records,
-    }
+    payload = {"candidate_displays": records}
     prompt = f"""
-你是物业维修工程参考做法整理器。
+你负责将同一个清单展示项下的历史 family 划分为若干明确的 practice_options。
 
-【任务】
+每个 practice_option 都必须代表一个可以独立形成价格统计口径的具体做法。
 
-candidate_families 已经属于同一个 selected display。
+【分组原则】
 
-本步骤不重新创建、拆分或选择 display，也不判断这些 family 是否应属于其他 display。
+1. 如果 family 中明确写出的主要材料或设备类型、关键规格、厚度、
+   层数、型号、主要施工方法、施工对象、部位或计价范围存在冲突，
+   必须拆成不同 option。
 
-对于每个 selected display：
+2. 某个 family 未写明材料、规格或施工范围时，不得仅凭另一 family
+   的明确描述推定其相同；信息不充分且无法确认时，单独形成 option。
 
-1. 将其内部全部 candidate_families 完整划分为一个或多个 practice_options；
-2. 每个 practice_option 表示一种可以共同作为价格证据范围的明确参考做法；
-3. 为每个 option 选择一个 representative_family_id；
-4. 根据用户原始需求，从所有 options 中选择一个当前默认做法，使用 default_representative_family_id 表示；
-5. 每个 candidate family 必须且只能属于一个 option。
-6. 每个 selected display 输入中的 candidate_family_ids 是必须完整覆盖的 family_id 清单。
-
-【practice option 分组原则】
-
-1. 同一 option 内 family 的主要材料或设备类型、关键规格、主要施工或维修方法、施工对象、主要部位和核心工作内容应基本一致。
-2. 如果 family 之间仅在 OCR、标点、文字表达，或基层清理、垃圾清运、现场保洁、运距、结算口径等附属范围存在差异，且这些差异不改变主要施工内容和价格口径，可以归入同一 option。
-3. 如果材料种类、设备类型、关键规格、厚度、层数、主要施工或维修工艺、施工对象、主要部位或核心工作内容明显不同，应拆成不同 option。
-4. 不要仅因为 cost_item_name 相同就放入同一 option。必须比较具体项目特征、材料或设备、规格、施工方法、施工对象、主要部位和核心工作内容。
-5. 不要因为来源工程主目录与查询目录不一致而拆分，主要依据具体清单名称、项目特征和施工内容判断。
-6. 每个 candidate family 必须且只能属于一个 option，不得遗漏、重复、修改或新增 family_id。
-7. 即使某个 family 与当前默认做法不同，也必须放入某个其他 option；不得通过省略 family_id 表示排除。
-
-【当前默认参考做法选择原则】
-
-1. 优先匹配用户明确提出的材料、规格、部位和工艺。
-2. 优先选择描述清晰、没有明显 OCR 歧义的 option。
-3. 优先选择施工边界适合作为当前参考口径的 option。
-4. 本次召回样本数和工程包数充分的 option 优先。
-5. 样本数量不能覆盖材料、规格或施工边界不匹配。
-6. default_representative_family_id 必须等于某个 practice_option 的 representative_family_id。
-7. 当前默认 option 只用于现有后续链路继续运行，不表示其他 option 无效，也不限制后续 scenario 选择。
-
-【需求与检索文本使用规则】
-
-1. 默认参考做法选择必须优先依据 raw_query。
-2. project_package_query_text 和 item_query_text 只用于理解本次召回来源和追溯检索语义。
-3. 不得把检索文本当作用户新增需求，不得据此覆盖用户原始需求。
-
-【覆盖校验】
-
-对每个 selected display，必须满足：
-
-1. flatten(practice_options[*].family_ids) 与输入的 candidate_family_ids 完全一致。
-2. candidate_family_ids 中的每个 family_id 都必须出现且只能出现一次。
-3. 不得输出 candidate_family_ids 之外的 family_id。
-4. representative_family_id 也必须同时出现在自己 option 的 family_ids 中。
-5. 不输出 exclude，不允许通过省略 family_id 表达排除或不采用。
-6. 输出 JSON 前必须按 candidate_family_ids 顺序逐个检查：每个 family_id 已出现一次，且没有任何 family_id 出现两次。
-7. 如果某个 family_id 在分组判断中发生调整，只输出最终归属；不得在 group_reason 中写“修正”“重新分组”“应归入”等自我修改过程。
-8. group_reason 只说明最终分组理由，保持简短，不讨论未采用的分组方案。
-9. family_assignments 必须按 candidate_family_ids 原顺序逐个列出每个 family_id 的最终 option 序号，用于自检覆盖完整性。
-
-【输出文字限制】
-
-1. practice_description 用一句短语描述该 option。
-2. group_reason 只写最终理由，不超过 80 个汉字。
-3. 不输出推理过程、检查过程、草稿、纠错说明或 Markdown。
+3. 如果上述关键信息一致，仅存在 OCR、标点、文字顺序、同义表达，
+   或不改变主要计价范围的普通清理、保洁、垃圾清运、运距说明差异，
+   可以合并。
 
 【输出 JSON】
 
@@ -1763,31 +1369,23 @@ candidate_families 已经属于同一个 selected display。
   "display_results": [
     {{
       "display_id": "D001",
-      "default_representative_family_id": "F004",
-      "selection_reason": "与用户明确要求一致，描述清晰，本次召回样本可追溯",
-      "family_assignments": [
-        {{"family_id": "F004", "practice_option_index": 1}},
-        {{"family_id": "F007", "practice_option_index": 1}},
-        {{"family_id": "F010", "practice_option_index": 2}},
-        {{"family_id": "F012", "practice_option_index": 2}}
-      ],
       "practice_options": [
         {{
           "representative_family_id": "F004",
-          "practice_description": "与用户需求匹配的参考做法",
-          "family_ids": ["F004", "F007"],
-          "group_reason": "主要材料、规格、施工方法和施工对象一致，仅附属施工范围存在差异"
+          "practice_description": "1.5mm单组份聚氨酯涂膜防水",
+          "family_ids": ["F004", "F007"]
         }},
         {{
           "representative_family_id": "F010",
-          "practice_description": "另一种可选参考做法",
-          "family_ids": ["F010", "F012"],
-          "group_reason": "主要材料和施工方法一致，但与默认工艺不同"
+          "practice_description": "2.0mm单组份聚氨酯涂膜防水",
+          "family_ids": ["F010"]
         }}
       ]
     }}
   ]
 }}
+
+只输出 JSON，不输出解释或 Markdown。
 
 【输入数据】
 
@@ -1800,28 +1398,32 @@ def display_family_unit(row: pd.Series) -> str:
     return cell_text(row.get("unit_normalized")) or normalized_unit(row.get("unit"))
 
 
-def empty_display_family_selection_meta() -> dict[str, Any]:
+def empty_display_option_grouping_meta() -> dict[str, Any]:
     return {
-        "selected_display_ids": [],
+        "display_ids": [],
         "practice_option_count": 0,
         "families_grouped_count": 0,
         "option_count_by_display": {},
         "max_options_per_display": 0,
+        "llm_display_count": 0,
+        "programmatic_single_family_display_count": 0,
     }
 
 
-def parse_display_family_selection_result(
+def parse_display_option_grouping_result(
     result: dict[str, Any],
-    selected_displays: pd.DataFrame,
     candidate_display_groups: pd.DataFrame,
     display_group_families: pd.DataFrame,
     warnings: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    if not isinstance(result, dict) or set(result) != {"display_results"}:
+        actual_keys = sorted(result) if isinstance(result, dict) else [type(result).__name__]
+        raise ValueError(f"display_option_grouping 顶层只允许包含 display_results，实际为: {actual_keys}")
     raw_rows = result.get("display_results")
     if not isinstance(raw_rows, list):
-        raise ValueError("display_family_selection 输出缺少 display_results list")
+        raise ValueError("display_option_grouping 输出缺少 display_results list")
 
-    display_ids = [cell_text(value) for value in selected_displays.get("display_id", pd.Series(dtype=object)).tolist()]
+    display_ids = [cell_text(value) for value in candidate_display_groups.get("display_id", pd.Series(dtype=object)).tolist()]
     allowed_order_by_display = {
         display_id: [
             family_id
@@ -1836,23 +1438,24 @@ def parse_display_family_selection_result(
         display_id: set(family_ids)
         for display_id, family_ids in allowed_order_by_display.items()
     }
-    selected_by_display = {cell_text(row.get("display_id")): row for _index, row in selected_displays.iterrows()}
     display_map = {cell_text(row.get("display_id")): row for _index, row in candidate_display_groups.iterrows()}
     family_row_map = {
         (cell_text(row.get("display_id")), cell_text(row.get("family_id"))): row
         for _index, row in display_group_families.iterrows()
     }
     result_by_display: dict[str, dict[str, Any]] = {}
-    meta = empty_display_family_selection_meta()
+    meta = empty_display_option_grouping_meta()
 
     for item in raw_rows:
         if not isinstance(item, dict):
-            raise ValueError("display_family_selection display_result 必须为 object")
+            raise ValueError("display_option_grouping display_result 必须为 object")
+        if set(item) != {"display_id", "practice_options"}:
+            raise ValueError("display_result 只允许包含 display_id 和 practice_options")
         display_id = cell_text(item.get("display_id"))
         if display_id not in allowed_by_display:
-            raise ValueError(f"display_family_selection 返回未选中的 display: {display_id}")
+            raise ValueError(f"display_option_grouping 返回未知 display: {display_id}")
         if display_id in result_by_display:
-            raise ValueError(f"display_family_selection 重复返回 display: {display_id}")
+            raise ValueError(f"display_option_grouping 重复返回 display: {display_id}")
         allowed_family_ids = allowed_by_display[display_id]
         if not allowed_family_ids:
             raise ValueError(f"display 缺少 candidate families: {display_id}")
@@ -1863,19 +1466,21 @@ def parse_display_family_selection_result(
         practice_options: list[dict[str, Any]] = []
         seen_family_ids: set[str] = set()
         representative_family_ids: set[str] = set()
+        seen_family_groups: set[frozenset[str]] = set()
         for option_index, raw_option in enumerate(raw_options, start=1):
             if not isinstance(raw_option, dict):
                 raise ValueError(f"practice_option 必须为 object: {display_id}/O{option_index:02d}")
+            if set(raw_option) != {"representative_family_id", "practice_description", "family_ids"}:
+                raise ValueError(
+                    "practice_option 只允许包含 representative_family_id、practice_description 和 family_ids"
+                )
             representative_family_id = cell_text(raw_option.get("representative_family_id"))
             practice_description = truncate_text(normalize_display_description(raw_option.get("practice_description")), 120)
-            group_reason = cell_text(raw_option.get("group_reason"))
             raw_family_ids = raw_option.get("family_ids")
             if not representative_family_id:
                 raise ValueError(f"practice_option 缺少 representative_family_id: {display_id}/O{option_index:02d}")
             if not practice_description:
                 raise ValueError(f"practice_description 不得为空: {display_id}/{representative_family_id}")
-            if not group_reason:
-                raise ValueError(f"group_reason 不得为空: {display_id}/{representative_family_id}")
             if not isinstance(raw_family_ids, list) or not raw_family_ids:
                 raise ValueError(f"family_ids 必须为非空 list: {display_id}/{representative_family_id}")
             family_ids = [cell_text(family_id) for family_id in raw_family_ids]
@@ -1887,6 +1492,9 @@ def parse_display_family_selection_result(
             unknown_family_ids = [family_id for family_id in family_ids if family_id not in allowed_family_ids]
             if unknown_family_ids:
                 raise ValueError(f"practice_option 包含不属于当前 display 的 family: {display_id}/{join_non_empty(unknown_family_ids)}")
+            family_group = frozenset(family_ids)
+            if family_group in seen_family_groups:
+                raise ValueError(f"同一 display 内不得存在完全相同的 family_ids 分组: {display_id}")
             duplicate_across_options = [family_id for family_id in family_ids if family_id in seen_family_ids]
             if duplicate_across_options:
                 raise ValueError(f"family 不得出现在多个 practice_options: {display_id}/{join_non_empty(duplicate_across_options)}")
@@ -1906,6 +1514,7 @@ def parse_display_family_selection_result(
                 sample_count += int(numeric_or_none(family_row.get("本次召回样本数")) or 0)
 
             representative_family_ids.add(representative_family_id)
+            seen_family_groups.add(family_group)
             seen_family_ids.update(family_ids)
             practice_option_id = f"{display_id}-O{option_index:02d}"
             practice_options.append(
@@ -1915,7 +1524,6 @@ def parse_display_family_selection_result(
                     "practice_description": practice_description,
                     "sample_count": sample_count,
                     "family_ids": family_ids,
-                    "group_reason": group_reason,
                 }
             )
 
@@ -1925,38 +1533,15 @@ def parse_display_family_selection_result(
         extra_family_ids = [family_id for family_id in seen_family_ids if family_id not in allowed_family_ids]
         if extra_family_ids:
             raise ValueError(f"practice_options 新增非法 family: {display_id}/{join_non_empty(extra_family_ids)}")
-        raw_assignments = item.get("family_assignments")
-        if isinstance(raw_assignments, list):
-            assignment_ids: list[str] = []
-            option_by_family = {
-                family_id: index
-                for index, option in enumerate(practice_options, start=1)
-                for family_id in option.get("family_ids", [])
-            }
-            for assignment in raw_assignments:
-                if not isinstance(assignment, dict):
-                    raise ValueError(f"family_assignments 中每项必须为 object: {display_id}")
-                family_id = cell_text(assignment.get("family_id"))
-                assignment_ids.append(family_id)
-                option_index = int(numeric_or_none(assignment.get("practice_option_index")) or 0)
-                if family_id not in allowed_family_ids:
-                    raise ValueError(f"family_assignments 包含不属于当前 display 的 family: {display_id}/{family_id}")
-                if option_by_family.get(family_id) != option_index:
-                    raise ValueError(f"family_assignments 与 practice_options 不一致: {display_id}/{family_id}")
-            if assignment_ids != allowed_order_by_display[display_id]:
-                raise ValueError(f"family_assignments 必须按 candidate_family_ids 完整列出: {display_id}")
-
-        selected_row = selected_by_display[display_id]
         display_row = display_map.get(display_id, pd.Series(dtype=object))
         result_by_display[display_id] = {
             "display_id": display_id,
             "display_name": cell_text(display_row.get("display_name")),
             "unit": cell_text(display_row.get("unit")),
             "family_count": display_row.get("family_count", ""),
-            "selection_reason": cell_text(selected_row.get("selection_reason")),
             "practice_options": practice_options,
         }
-        meta["selected_display_ids"].append(display_id)
+        meta["display_ids"].append(display_id)
         meta["practice_option_count"] += len(practice_options)
         meta["families_grouped_count"] += len(seen_family_ids)
         meta["option_count_by_display"][display_id] = len(practice_options)
@@ -1964,12 +1549,12 @@ def parse_display_family_selection_result(
 
     missing = [display_id for display_id in display_ids if display_id not in result_by_display]
     if missing:
-        raise ValueError(f"每个 selected_display 必须返回 practice_options: {join_non_empty(missing)}")
+        raise ValueError(f"每个 candidate display 必须返回 practice_options: {join_non_empty(missing)}")
     return pd.DataFrame([result_by_display[display_id] for display_id in display_ids]), meta
 
 
-def build_display_family_selection_trace_frame(
-    selected_display_practices: pd.DataFrame,
+def build_display_option_grouping_trace_frame(
+    displays_with_options: pd.DataFrame,
     display_group_families: pd.DataFrame,
     candidate_families: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -1978,17 +1563,16 @@ def build_display_family_selection_trace_frame(
         (cell_text(row.get("display_id")), cell_text(row.get("family_id"))): row
         for _index, row in display_group_families.iterrows()
     }
-    selected_map = {cell_text(row.get("display_id")): row for _index, row in selected_display_practices.iterrows()}
+    display_map = {cell_text(row.get("display_id")): row for _index, row in displays_with_options.iterrows()}
     rows: list[dict[str, Any]] = []
-    for display_id, selected in selected_map.items():
-        practice_options = selected.get("practice_options") if isinstance(selected.get("practice_options"), list) else []
+    for display_id, display in display_map.items():
+        practice_options = display.get("practice_options") if isinstance(display.get("practice_options"), list) else []
         for option in practice_options:
             if not isinstance(option, dict):
                 continue
             practice_option_id = cell_text(option.get("practice_option_id"))
             representative_family_id = cell_text(option.get("representative_family_id"))
             practice_description = cell_text(option.get("practice_description"))
-            group_reason = cell_text(option.get("group_reason"))
             family_ids = option.get("family_ids") if isinstance(option.get("family_ids"), list) else []
             for family_id_value in family_ids:
                 family_id = cell_text(family_id_value)
@@ -1997,7 +1581,7 @@ def build_display_family_selection_trace_frame(
                 rows.append(
                     {
                         "display_id": display_id,
-                        "display_name": cell_text(row.get("display_name")) or cell_text(selected.get("display_name")),
+                        "display_name": cell_text(row.get("display_name")) or cell_text(display.get("display_name")),
                         "practice_option_id": practice_option_id,
                         "representative_family_id": representative_family_id,
                         "practice_description": practice_description,
@@ -2012,10 +1596,9 @@ def build_display_family_selection_trace_frame(
                         "unit_price_min": candidate.get("本次召回综合单价最低值", ""),
                         "unit_price_median": candidate.get("本次召回综合单价中位数", ""),
                         "unit_price_max": candidate.get("本次召回综合单价最高值", ""),
-                        "group_reason": group_reason,
                     }
                 )
-    frame = pd.DataFrame(rows, columns=DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS)
+    frame = pd.DataFrame(rows, columns=DISPLAY_OPTION_GROUPING_TRACE_COLUMNS)
     if frame.empty:
         return frame
     frame["_family_role_sort"] = frame["family_role"].map(lambda value: 0 if cell_text(value) == "representative" else 1)
@@ -2024,66 +1607,118 @@ def build_display_family_selection_trace_frame(
         ["display_id", "practice_option_id", "_family_role_sort", "_item_similarity_sort"],
         ascending=[True, True, True, False],
     ).drop(columns=["_family_role_sort", "_item_similarity_sort"])
-    return frame[DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS]
+    return frame[DISPLAY_OPTION_GROUPING_TRACE_COLUMNS]
 
 
-def generate_display_family_selection(
-    rewrite: QueryRewrite,
-    selected_displays: pd.DataFrame,
+def generate_display_option_grouping(
     candidate_display_groups: pd.DataFrame,
     display_group_families: pd.DataFrame,
     candidate_families: pd.DataFrame,
     warnings: list[str] | None = None,
 ) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any], dict[str, Any], pd.DataFrame]:
-    prompt, records = build_display_family_selection_prompt(
-        rewrite,
-        selected_displays,
-        candidate_display_groups,
-        display_group_families,
-        candidate_families,
+    family_ids_by_display = {
+        display_id: [family_id for family_id in group["family_id"].map(cell_text).tolist() if family_id]
+        for display_id, group in display_group_families.groupby("display_id", sort=False, dropna=False)
+    }
+    multi_family_mask = candidate_display_groups["display_id"].map(
+        lambda value: len(family_ids_by_display.get(cell_text(value), [])) > 1
+    )
+    multi_family_displays = candidate_display_groups[multi_family_mask].copy().reset_index(drop=True)
+    prompt, records = build_display_option_grouping_prompt(
+        multi_family_displays, display_group_families, candidate_families
     )
     family_count = sum(len(item.get("candidate_families") or []) for item in records)
-    max_tokens = min(8192, max(3072, 3072 + family_count * 160 + len(records) * 256))
-    if selected_displays.empty:
-        trace = trace_row(
-            "display_family_selection",
-            "将已选 display 内的 family 整理为 practice options，并选择当前默认参考做法",
-            True,
-            prompt=prompt,
+    max_tokens = min(16384, max(4096, 4096 + family_count * 192 + len(records) * 256))
+    response = None
+    if multi_family_displays.empty:
+        grouped_displays = pd.DataFrame()
+    else:
+        response = request_llm_json_with_usage(
+            prompt,
             max_tokens=max_tokens,
-            input_summary=json_text({"display_count": 0, "family_count": 0, "practice_option_count": 0}),
+            system_prompt=(
+                "你只输出一个 JSON object，顶层必须且只能包含 display_results 数组；"
+                "每个输入 candidate display 必须在数组中恰好出现一次。"
+                "不输出解释、Markdown 或思考过程。"
+            ),
         )
-        return pd.DataFrame(), True, False, "", prompt, trace, empty_display_family_selection_meta(), pd.DataFrame(columns=DISPLAY_FAMILY_SELECTION_TRACE_COLUMNS)
-    response = request_llm_json_with_usage(
-        prompt,
-        max_tokens=max_tokens,
-        system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
+        grouped_displays, _grouped_meta = parse_display_option_grouping_result(
+            response.content,
+            multi_family_displays,
+            display_group_families,
+            warnings,
+        )
+
+    family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
+    grouped_map = {cell_text(row.get("display_id")): row for _index, row in grouped_displays.iterrows()}
+    display_rows: list[dict[str, Any]] = []
+    meta = empty_display_option_grouping_meta()
+    for _index, display in candidate_display_groups.iterrows():
+        display_id = cell_text(display.get("display_id"))
+        family_ids = family_ids_by_display.get(display_id, [])
+        if not family_ids:
+            raise ValueError(f"display 缺少 candidate families: {display_id}")
+        if len(family_ids) == 1:
+            family_id = family_ids[0]
+            family = family_map.get(family_id, pd.Series(dtype=object))
+            description = truncate_text(
+                normalize_display_description(family.get("representative_project_description"))
+                or cell_text(family.get("representative_cost_item_name"))
+                or cell_text(display.get("display_name")),
+                120,
+            )
+            row = {
+                "display_id": display_id,
+                "display_name": cell_text(display.get("display_name")),
+                "unit": cell_text(display.get("unit")),
+                "family_count": display.get("family_count", 1),
+                "practice_options": [
+                    {
+                        "practice_option_id": f"{display_id}-O01",
+                        "representative_family_id": family_id,
+                        "practice_description": description,
+                        "sample_count": int(numeric_or_none(family.get("本次召回样本数")) or 0),
+                        "family_ids": [family_id],
+                    }
+                ],
+            }
+            meta["programmatic_single_family_display_count"] += 1
+        else:
+            grouped = grouped_map.get(display_id)
+            if grouped is None:
+                raise ValueError(f"display_option_grouping 缺少 display: {display_id}")
+            row = grouped.to_dict()
+        options = row["practice_options"]
+        display_rows.append(row)
+        meta["display_ids"].append(display_id)
+        meta["practice_option_count"] += len(options)
+        meta["families_grouped_count"] += len(family_ids)
+        meta["option_count_by_display"][display_id] = len(options)
+        meta["max_options_per_display"] = max(meta["max_options_per_display"], len(options))
+    meta["llm_display_count"] = len(multi_family_displays)
+    displays_with_options = pd.DataFrame(display_rows)
+    trace_frame = build_display_option_grouping_trace_frame(
+        displays_with_options, display_group_families, candidate_families
     )
-    selected, meta = parse_display_family_selection_result(
-        response.content,
-        selected_displays,
-        candidate_display_groups,
-        display_group_families,
-        warnings,
-    )
-    trace_frame = build_display_family_selection_trace_frame(selected, display_group_families, candidate_families)
     trace = trace_row(
-        "display_family_selection",
-        "将已选 display 内的 family 整理为 practice options，并选择当前默认参考做法",
+        "display_option_grouping",
+        "将全部 candidate display 内的 family 划分为独立价格统计口径的 practice options",
         True,
         prompt=prompt,
         max_tokens=max_tokens,
         input_summary=json_text(
             {
-                "display_count": len(records),
+                "display_count": len(candidate_display_groups),
+                "llm_display_count": len(records),
+                "programmatic_single_family_display_count": meta["programmatic_single_family_display_count"],
                 "family_count": family_count,
                 "practice_option_count": meta.get("practice_option_count", 0),
             }
         ),
-        usage=response.usage,
-        raw_response=getattr(response, "raw_content", ""),
+        usage=response.usage if response is not None else None,
+        raw_response=getattr(response, "raw_content", "") if response is not None else "",
     )
-    return selected, True, False, "", prompt, trace, meta, trace_frame
+    return displays_with_options, True, False, "", prompt, trace, meta, trace_frame
 
 
 def normalized_unit(value: Any) -> str:
@@ -2126,16 +1761,17 @@ def format_number_cell(value: Any) -> str:
 
 def build_scenario_generation_prompt(
     raw_text: str,
-    selected_displays: pd.DataFrame,
+    displays_with_options: pd.DataFrame,
+    matched_project_examples: list[dict[str, Any]],
 ) -> tuple[str, list[dict[str, Any]]]:
     records: list[dict[str, Any]] = []
-    for _index, selected in selected_displays.iterrows():
-        practice_options = selected.get("practice_options") if isinstance(selected.get("practice_options"), list) else []
+    for _index, display in displays_with_options.iterrows():
+        practice_options = display.get("practice_options") if isinstance(display.get("practice_options"), list) else []
         records.append(
             {
-                "display_id": cell_text(selected.get("display_id")),
-                "display_name": cell_text(selected.get("display_name")),
-                "unit": cell_text(selected.get("unit")),
+                "display_id": cell_text(display.get("display_id")),
+                "display_name": cell_text(display.get("display_name")),
+                "unit": cell_text(display.get("unit")),
                 "practice_options": [
                     {
                         "practice_option_id": cell_text(option.get("practice_option_id")),
@@ -2148,12 +1784,12 @@ def build_scenario_generation_prompt(
             }
         )
     prompt = f"""
-你负责根据用户原始需求、已选 display 以及每个 display 下的全部 practice options，生成一个或多个完整的估价 scenario。
+你负责根据用户原始需求、候选 display 以及每个 display 下的全部 practice options，生成一个或多个完整的估价 scenario。
 
 上游已经完成：
 
-1. 识别与用户需求相关的 display；
-2. 将每个 display 下的历史做法整理为若干 practice options。
+1. 检索并聚合可用的候选 display；
+2. 将每个候选 display 下的历史做法整理为若干 practice options。
 
 上游没有决定最终 scenario，也没有预先选定任何 practice option。
 
@@ -2164,6 +1800,19 @@ def build_scenario_generation_prompt(
 - sample_count
 
 sample_count 表示该 option 在当前历史样本中的支持数量，只作为判断信息之一。它不是价格、工程量或最终选择概率。
+
+【历史工程参考】
+
+matched_project_examples 是本次召回的相似历史工程。
+每个历史工程的 items 是该工程实际使用的清单组合。
+
+请参考这些历史工程理解常见的施工链、设备组成和配套关系，
+但不要机械复制某个历史工程，也不要把历史工程中的所有 item
+无条件加入当前方案。
+
+历史工程只作为方案组织参考。
+最终 scenario 仍只能选择 displays 中已有的 display_id
+以及该 display 下已有的 practice_option_id。
 
 你的任务：
 
@@ -2264,13 +1913,13 @@ quantity 格式：
 14. 不得输出单价、合价或其他未要求字段。
 
 输入：
-{json_text({"user_query": raw_text, "displays": records})}
+{json_text({"user_query": raw_text, "displays": records, "matched_project_examples": matched_project_examples})}
 """.strip()
     return prompt, records
 
 
-def selected_display_maps(selected_displays: pd.DataFrame) -> tuple[dict[str, pd.Series], dict[tuple[str, str], dict[str, Any]]]:
-    display_map = {cell_text(row.get("display_id")): row for _index, row in selected_displays.iterrows()}
+def display_option_maps(displays_with_options: pd.DataFrame) -> tuple[dict[str, pd.Series], dict[tuple[str, str], dict[str, Any]]]:
+    display_map = {cell_text(row.get("display_id")): row for _index, row in displays_with_options.iterrows()}
     option_map: dict[tuple[str, str], dict[str, Any]] = {}
     for display_id, row in display_map.items():
         practice_options = row.get("practice_options") if isinstance(row.get("practice_options"), list) else []
@@ -2308,7 +1957,7 @@ def validate_quantity(value: Any) -> dict[str, Any]:
 
 def parse_scenario_generation_result(
     result: dict[str, Any],
-    selected_displays: pd.DataFrame,
+    displays_with_options: pd.DataFrame,
     warnings: list[str] | None = None,
 ) -> list[EstimateScenario]:
     _ = warnings
@@ -2317,8 +1966,8 @@ def parse_scenario_generation_result(
     raw_scenarios = result.get("scenarios")
     if not isinstance(raw_scenarios, list) or not raw_scenarios:
         raise ValueError("scenario_generation 输出缺少非空 scenarios list")
-    display_map, option_map = selected_display_maps(selected_displays)
-    selected_id_set = set(display_map)
+    display_map, option_map = display_option_maps(displays_with_options)
+    available_display_ids = set(display_map)
     scenarios: list[EstimateScenario] = []
     scenario_ids: set[str] = set()
     for expected_order, raw_scenario in enumerate(raw_scenarios, start=1):
@@ -2355,7 +2004,7 @@ def parse_scenario_generation_result(
                 raise ValueError(f"scenario item 包含未要求字段: {join_non_empty(sorted(extra_item_keys))}")
             display_id = cell_text(raw_item.get("display_id"))
             practice_option_id = cell_text(raw_item.get("practice_option_id"))
-            if display_id not in selected_id_set:
+            if display_id not in available_display_ids:
                 raise ValueError(f"scenario item 引用了无效 display_id: {display_id}")
             if (display_id, practice_option_id) not in option_map:
                 raise ValueError(f"practice_option_id 不属于对应 display: {display_id}/{practice_option_id}")
@@ -2388,19 +2037,20 @@ def parse_scenario_generation_result(
 
 def generate_estimate_scenarios(
     raw_text: str,
-    selected_displays: pd.DataFrame,
+    displays_with_options: pd.DataFrame,
+    matched_project_examples: list[dict[str, Any]],
     warnings: list[str] | None = None,
 ) -> tuple[list[EstimateScenario], bool, bool, str, str, dict[str, Any]]:
-    prompt, records = build_scenario_generation_prompt(raw_text, selected_displays)
+    prompt, records = build_scenario_generation_prompt(raw_text, displays_with_options, matched_project_examples)
     max_tokens = 4096
-    if selected_displays.empty:
+    if displays_with_options.empty:
         trace = trace_row(
             "scenario_generation",
             "根据 practice options 生成估价 scenarios",
             True,
             prompt=prompt,
             max_tokens=max_tokens,
-            input_summary=json_text({"selected_display_ids": [], "scenario_count": 0}),
+            input_summary=json_text({"display_ids": [], "matched_project_example_count": len(matched_project_examples), "scenario_count": 0}),
             scenario_count=0,
             scenario_item_count=0,
         )
@@ -2411,7 +2061,7 @@ def generate_estimate_scenarios(
             max_tokens=max_tokens,
             system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
         )
-        scenarios = parse_scenario_generation_result(response.content, selected_displays, warnings)
+        scenarios = parse_scenario_generation_result(response.content, displays_with_options, warnings)
         scenario_item_count = sum(len(scenario.items) for scenario in scenarios)
         trace = trace_row(
             "scenario_generation",
@@ -2421,7 +2071,8 @@ def generate_estimate_scenarios(
             max_tokens=max_tokens,
             input_summary=json_text(
                 {
-                    "selected_display_ids": [record["display_id"] for record in records],
+                    "display_ids": [record["display_id"] for record in records],
+                    "matched_project_example_count": len(matched_project_examples),
                     "scenario_count": len(scenarios),
                     "scenario_item_count": scenario_item_count,
                 }
@@ -2445,7 +2096,8 @@ def generate_estimate_scenarios(
             max_tokens=max_tokens,
             input_summary=json_text(
                 {
-                    "selected_display_ids": [record["display_id"] for record in records],
+                    "display_ids": [record["display_id"] for record in records],
+                    "matched_project_example_count": len(matched_project_examples),
                     "scenario_count": len(scenarios),
                     "scenario_item_count": scenario_item_count,
                     "fallback": False,
@@ -2573,11 +2225,11 @@ def quantity_amounts(quantity: dict[str, Any], price_stats: dict[str, Any]) -> t
 
 def build_scenario_outputs(
     scenarios: list[EstimateScenario],
-    selected_displays: pd.DataFrame,
+    displays_with_options: pd.DataFrame,
     candidate_families: pd.DataFrame,
     evidence_items: pd.DataFrame,
 ) -> pd.DataFrame:
-    display_map, option_map = selected_display_maps(selected_displays)
+    display_map, option_map = display_option_maps(displays_with_options)
     scenario_rows: list[dict[str, Any]] = []
     for scenario in scenarios:
         for item in scenario.items:
@@ -2849,17 +2501,13 @@ def build_parse_info(
     evidence_item_row_count: int,
     candidate_family_count: int,
     candidate_display_group_count: int,
-    display_selection_input_count: int,
-    display_selection_selected_count: int,
-    display_selection_trace: dict[str, Any],
-    display_selection_fallback: bool,
-    display_selection_error: str,
-    display_selection_meta: dict[str, Any],
-    display_family_selection_display_count: int,
-    display_family_selection_trace: dict[str, Any],
-    display_family_selection_fallback: bool,
-    display_family_selection_error: str,
-    display_family_selection_meta: dict[str, Any],
+    matched_project_example_count: int,
+    matched_project_example_item_count: int,
+    display_option_grouping_display_count: int,
+    display_option_grouping_trace: dict[str, Any],
+    display_option_grouping_fallback: bool,
+    display_option_grouping_error: str,
+    display_option_grouping_meta: dict[str, Any],
     scenario_count: int,
     scenario_item_count: int,
     scenario_exact_quantity_count: int,
@@ -2871,8 +2519,7 @@ def build_parse_info(
     started_at: datetime,
     index_dir: Path,
     include_debug_text: bool,
-    display_selection_prompt: str,
-    display_family_selection_prompt: str,
+    display_option_grouping_prompt: str,
     scenario_generation_prompt: str,
     warnings: list[str] | None = None,
 ) -> pd.DataFrame:
@@ -2897,26 +2544,19 @@ def build_parse_info(
         ("evidence_item_row_count", evidence_item_row_count),
         ("candidate_family_count", candidate_family_count),
         ("candidate_display_group_count", candidate_display_group_count),
-        ("display_selection_input_count", display_selection_input_count),
-        ("display_selection_candidate_count", len(display_selection_meta.get("candidate_ids") or [])),
-        ("display_selection_candidate_ids", json_text(display_selection_meta.get("candidate_ids") or [])),
-        ("display_selection_selected_count", display_selection_selected_count),
-        ("display_selection_selected_ids", json_text(display_selection_meta.get("selected_ids") or [])),
-        ("display_selection_selected_detail", json_text(display_selection_meta.get("selected_detail") or [])),
-        ("display_selection_candidate_source_counts", json_text(display_selection_meta.get("candidate_source_counts") or {})),
-        ("display_selection_exploration_count", display_selection_meta.get("exploration_count", "")),
-        ("display_selection_prompt_chars", display_selection_trace.get("prompt_chars", "")),
-        ("display_selection_prompt_tokens", display_selection_trace.get("prompt_tokens") or display_selection_trace.get("estimated_tokens", "")),
-        ("display_selection_completion_tokens", display_selection_trace.get("completion_tokens", "")),
-        ("display_family_selection_display_count", display_family_selection_display_count),
-        ("display_family_selection_selected_display_ids", json_text(display_family_selection_meta.get("selected_display_ids") or [])),
-        ("display_family_selection_practice_option_count", display_family_selection_meta.get("practice_option_count", "")),
-        ("display_family_selection_families_grouped_count", display_family_selection_meta.get("families_grouped_count", "")),
-        ("display_family_selection_option_count_by_display", json_text(display_family_selection_meta.get("option_count_by_display") or {})),
-        ("display_family_selection_max_options_per_display", display_family_selection_meta.get("max_options_per_display", "")),
-        ("display_family_selection_prompt_chars", display_family_selection_trace.get("prompt_chars", "")),
-        ("display_family_selection_prompt_tokens", display_family_selection_trace.get("prompt_tokens") or display_family_selection_trace.get("estimated_tokens", "")),
-        ("display_family_selection_completion_tokens", display_family_selection_trace.get("completion_tokens", "")),
+        ("matched_project_example_count", matched_project_example_count),
+        ("matched_project_example_item_count", matched_project_example_item_count),
+        ("display_option_grouping_display_count", display_option_grouping_display_count),
+        ("display_option_grouping_display_ids", json_text(display_option_grouping_meta.get("display_ids") or [])),
+        ("display_option_grouping_llm_display_count", display_option_grouping_meta.get("llm_display_count", "")),
+        ("display_option_grouping_programmatic_single_family_display_count", display_option_grouping_meta.get("programmatic_single_family_display_count", "")),
+        ("display_option_grouping_practice_option_count", display_option_grouping_meta.get("practice_option_count", "")),
+        ("display_option_grouping_families_grouped_count", display_option_grouping_meta.get("families_grouped_count", "")),
+        ("display_option_grouping_option_count_by_display", json_text(display_option_grouping_meta.get("option_count_by_display") or {})),
+        ("display_option_grouping_max_options_per_display", display_option_grouping_meta.get("max_options_per_display", "")),
+        ("display_option_grouping_prompt_chars", display_option_grouping_trace.get("prompt_chars", "")),
+        ("display_option_grouping_prompt_tokens", display_option_grouping_trace.get("prompt_tokens") or display_option_grouping_trace.get("estimated_tokens", "")),
+        ("display_option_grouping_completion_tokens", display_option_grouping_trace.get("completion_tokens", "")),
         ("scenario_count", scenario_count),
         ("scenario_item_count", scenario_item_count),
         ("scenario_exact_quantity_count", scenario_exact_quantity_count),
@@ -2925,13 +2565,9 @@ def build_parse_info(
         ("scenario_generation_prompt_chars", scenario_generation_trace.get("prompt_chars", "")),
         ("scenario_generation_prompt_tokens", scenario_generation_trace.get("prompt_tokens") or scenario_generation_trace.get("estimated_tokens", "")),
         ("scenario_generation_completion_tokens", scenario_generation_trace.get("completion_tokens", "")),
-        ("invalid_display_ids", join_non_empty(display_selection_meta.get("invalid_display_ids") or [])),
-        ("duplicate_display_ids", join_non_empty(display_selection_meta.get("duplicate_display_ids") or [])),
-        ("是否 display_selection fallback", "是" if display_selection_fallback else "否"),
-        ("是否 display_family_selection fallback", "是" if display_family_selection_fallback else "否"),
+        ("是否 display_option_grouping fallback", "是" if display_option_grouping_fallback else "否"),
         ("是否 scenario_generation fallback", "是" if scenario_generation_fallback else "否"),
-        ("display_selection LLM error", display_selection_error),
-        ("display_family_selection LLM error", display_family_selection_error),
+        ("display_option_grouping LLM error", display_option_grouping_error),
         ("scenario_generation LLM error", scenario_generation_error),
         ("output_path", str(output_path or "")),
         ("运行时间", f"{(datetime.now() - started_at).total_seconds():.2f}s"),
@@ -2941,8 +2577,7 @@ def build_parse_info(
         ("warnings", "；".join(warnings or [])),
     ]
     if include_debug_text:
-        rows.append(("display_selection_prompt_preview", display_selection_prompt[:3000]))
-        rows.append(("display_family_selection_prompt_preview", display_family_selection_prompt[:3000]))
+        rows.append(("display_option_grouping_prompt_preview", display_option_grouping_prompt[:3000]))
         rows.append(("scenario_generation_prompt_preview", scenario_generation_prompt[:3000]))
     return pd.DataFrame(rows, columns=["字段", "值"])
 
@@ -2962,19 +2597,19 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
             sheet_name="candidate_families",
             index=False,
         )
-        display_frame(result.display_selection_trace, display).to_excel(
+        display_frame(result.display_option_grouping_trace, display).to_excel(
             writer,
-            sheet_name="display_selection_trace",
-            index=False,
-        )
-        display_frame(result.display_family_selection_trace, display).to_excel(
-            writer,
-            sheet_name="display_family_selection_trace",
+            sheet_name="display_option_grouping_trace",
             index=False,
         )
         display_frame(result.matched_project_packages, display).to_excel(
             writer,
             sheet_name="matched_project_packages",
+            index=False,
+        )
+        display_frame(result.matched_project_examples, display).to_excel(
+            writer,
+            sheet_name="matched_project_examples",
             index=False,
         )
         display_frame(result.package_evidence_weights, display).to_excel(
@@ -3046,8 +2681,6 @@ def run_query(
     top_items: int,
     output: Path | None,
     max_packages_per_cache_subject: int = 1,
-    display_selection_limit: int = 50,
-    display_exploration_limit: int = 5,
     package_weight_temperature: float = DEFAULT_PACKAGE_WEIGHT_TEMPERATURE,
     include_debug_text: bool = False,
     display: bool = False,
@@ -3107,35 +2740,19 @@ def run_query(
         package_evidence_weights,
     )
     matched_project_packages = matched_project_packages_for_output(matched_raw)
+    matched_project_examples = build_matched_project_examples(matched_project_packages, samples, limit=3)
+    matched_project_examples_output = matched_project_examples_frame(matched_project_examples)
 
     (
-        selected_displays,
-        display_selection_success,
-        display_selection_fallback,
-        display_selection_error,
-        display_selection_prompt,
-        display_selection_trace,
-        display_selection_meta,
-        display_selection_trace_frame,
-    ) = generate_display_selection(
-        rewrite,
-        candidate_display_groups,
-        display_selection_limit=display_selection_limit,
-        exploration_limit=display_exploration_limit,
-        warnings=warnings,
-    )
-    (
-        selected_display_practices,
-        display_family_selection_success,
-        display_family_selection_fallback,
-        display_family_selection_error,
-        display_family_selection_prompt,
-        display_family_selection_trace,
-        display_family_selection_meta,
-        display_family_selection_trace_frame,
-    ) = generate_display_family_selection(
-        rewrite,
-        selected_displays,
+        displays_with_options,
+        _display_option_grouping_success,
+        display_option_grouping_fallback,
+        display_option_grouping_error,
+        display_option_grouping_prompt,
+        display_option_grouping_trace,
+        display_option_grouping_meta,
+        display_option_grouping_trace_frame,
+    ) = generate_display_option_grouping(
         candidate_display_groups,
         display_group_families,
         candidate_families,
@@ -3150,16 +2767,15 @@ def run_query(
         scenario_generation_trace,
     ) = generate_estimate_scenarios(
         raw_text,
-        selected_display_practices,
+        displays_with_options,
+        matched_project_examples,
         warnings=warnings,
     )
-    estimate_scenarios = build_scenario_outputs(scenarios, selected_display_practices, candidate_families, evidence_items)
+    estimate_scenarios = build_scenario_outputs(scenarios, displays_with_options, candidate_families, evidence_items)
     estimate_summary = build_estimate_summary(scenarios, estimate_scenarios)
     if warnings:
-        append_trace_warnings(display_selection_trace, warnings)
-        append_trace_warnings(display_family_selection_trace, warnings)
+        append_trace_warnings(display_option_grouping_trace, warnings)
         append_trace_warnings(scenario_generation_trace, warnings)
-    displays_for_llm_count = len(display_selection_meta.get("candidate_ids") or [])
     scenario_item_count = sum(len(scenario.items) for scenario in scenarios)
     scenario_exact_quantity_count = sum(1 for scenario in scenarios for item in scenario.items if cell_text(item.quantity.get("type")) == "exact")
     scenario_range_quantity_count = sum(1 for scenario in scenarios for item in scenario.items if cell_text(item.quantity.get("type")) == "range")
@@ -3179,17 +2795,13 @@ def run_query(
         evidence_item_row_count=len(evidence_items),
         candidate_family_count=len(candidate_families),
         candidate_display_group_count=len(candidate_display_groups),
-        display_selection_input_count=displays_for_llm_count,
-        display_selection_selected_count=len(selected_displays),
-        display_selection_trace=display_selection_trace,
-        display_selection_fallback=display_selection_fallback,
-        display_selection_error=display_selection_error,
-        display_selection_meta=display_selection_meta,
-        display_family_selection_display_count=len(selected_displays),
-        display_family_selection_trace=display_family_selection_trace,
-        display_family_selection_fallback=display_family_selection_fallback,
-        display_family_selection_error=display_family_selection_error,
-        display_family_selection_meta=display_family_selection_meta,
+        matched_project_example_count=len(matched_project_examples),
+        matched_project_example_item_count=len(matched_project_examples_output),
+        display_option_grouping_display_count=len(displays_with_options),
+        display_option_grouping_trace=display_option_grouping_trace,
+        display_option_grouping_fallback=display_option_grouping_fallback,
+        display_option_grouping_error=display_option_grouping_error,
+        display_option_grouping_meta=display_option_grouping_meta,
         scenario_count=len(scenarios),
         scenario_item_count=scenario_item_count,
         scenario_exact_quantity_count=scenario_exact_quantity_count,
@@ -3201,16 +2813,14 @@ def run_query(
         started_at=started_at,
         index_dir=index_dir,
         include_debug_text=include_debug_text,
-        display_selection_prompt=display_selection_prompt,
-        display_family_selection_prompt=display_family_selection_prompt,
+        display_option_grouping_prompt=display_option_grouping_prompt,
         scenario_generation_prompt=scenario_generation_prompt,
         warnings=warnings,
     )
     llm_trace = pd.DataFrame(
         [
             rewrite_trace,
-            display_selection_trace,
-            display_family_selection_trace,
+            display_option_grouping_trace,
             scenario_generation_trace,
         ],
         columns=LLM_TRACE_COLUMNS,
@@ -3225,8 +2835,8 @@ def run_query(
         candidate_display_groups=candidate_display_groups,
         package_evidence_weights=package_evidence_weights,
         display_group_families=display_group_families,
-        display_selection_trace=display_selection_trace_frame,
-        display_family_selection_trace=display_family_selection_trace_frame,
+        display_option_grouping_trace=display_option_grouping_trace_frame,
+        matched_project_examples=matched_project_examples_output,
         evidence_items=evidence_items,
         parse_info=parse_info,
         llm_trace=llm_trace,
@@ -3242,6 +2852,7 @@ def print_terminal_summary(result: QueryResult, output_path: Path | None) -> Non
     print(f"[DONE] matched project packages: {len(result.matched_project_packages)}")
     print(f"[DONE] candidate families: {len(result.candidate_families)}")
     print(f"[DONE] candidate display groups: {len(result.candidate_display_groups)}")
+    print(f"[DONE] matched project example items: {len(result.matched_project_examples)}")
     print(f"[DONE] evidence items: {len(result.evidence_items)}")
     print(f"[DONE] estimate scenarios: {len(result.estimate_scenarios)}")
     if result.rewrite.notes:
@@ -3279,8 +2890,6 @@ def main() -> int:
             top_items=args.top_items,
             output=output_path,
             max_packages_per_cache_subject=args.max_packages_per_cache_subject,
-            display_selection_limit=args.display_selection_limit,
-            display_exploration_limit=args.display_exploration_limit,
             package_weight_temperature=args.package_weight_temperature,
             include_debug_text=args.include_debug_text,
             display=args.display,

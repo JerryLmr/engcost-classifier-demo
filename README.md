@@ -236,14 +236,6 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 
 如果输出文件已存在，需要显式传 `--overwrite`。
 
-display_selection 默认最多发送 50 个 display。候选过多时，主排序候选由 `retrieval_package_support_ratio`、`direct_item_similarity_max`、`retrieval_package_count` 三个排行榜交替补足，重复 display 不占配额；末尾保留 5 个确定性等距探索候选。相关 CLI 参数为：
-
-```text
---display-selection-limit
---display-exploration-limit
---package-weight-temperature
-```
-
 `--package-weight-temperature` 控制工程包证据权重 softmax 的平滑程度，默认 `0.10`，必须大于 0。
 
 新查询流程：
@@ -257,9 +249,9 @@ display_selection 默认最多发送 50 个 display。候选过多时，主排�
 → fine_signature family 聚合
 → 按 cost_item_name + unit 形成 display groups
 → 按 display 重新计算 retrieval_package_support_ratio
-→ LLM 选择最小完整施工链中的 display
-→ display_family_selection 形成每个 display 下的完整 practice_options
-→ scenario generation 生成一个或多个估价方案
+→ display_option_grouping 为全部候选 display 形成完整 practice_options
+→ 从完整 samples 展开排名前 3 的历史工程清单
+→ scenario generation 参考历史工程组合生成一个或多个估价方案
 → 程序按 scenario 选用的 practice option 回填单价并计算合价
 → estimate_summary / estimate_scenarios
 ```
@@ -286,12 +278,12 @@ candidate_display_groups
 - `package_evidence_weights`：本次查询证据工程包全集的权重表，包括 `project_package_id`、`package_query_similarity`、`package_evidence_weight`；权重和为 1，direct item 引入但未进入 package top-k 的工程包也会按相似度获得连续权重。
 - `candidate_families`：按规范化 `fine_signature = cost_item_name + project_description + unit` 聚合的候选施工做法统计。当前没有新增第二套 family 规范化规则；每个 family 是唯一可报价边界，3mm/4mm、自粘/热熔、单层/双层等不同规格不会合并；表内保留 `package_query_similarity最大值`、`item_query_similarity最大值` 和价格样本统计用于追溯。
 - `candidate_display_groups`：按 normalized `cost_item_name + unit` 组织出来的客户展示候选。display 只用于减少同名清单项重复展示，不合并同组 family 的价格样本；`retrieval_package_support_ratio` 表示本次召回工程包证据对该 display 的加权支持比例。
-- `display_group_families`：display 到内部 family 的映射表，用于从 display 回查 `fine_signature`、默认 family 和 evidence。
-- `display_selection_trace`：记录实际发送给 display_selection LLM 的 display、`selection_rank`、`retrieval_package_support_ratio`、`candidate_source`、是否被选中和选择原因。
-- `display_family_selection_trace`：记录每个已选 display 内部的 practice options 及其覆盖的 family，用于追溯 option 分组。
+- `display_group_families`：display 到内部 family 的映射表，用于从 display 回查 `fine_signature` 和 evidence。
+- `display_option_grouping_trace`：记录全部候选 display 内部的 practice options 及其覆盖的 family；单 family display 由程序直接生成唯一 option，多 family display 合并为一次 LLM 分组调用。
+- `matched_project_examples`：按召回 rank 展开前三个历史工程包的完整清单行，保持原工程 item 顺序，仅作为 scenario 组织方案的参考。
 - `evidence_items`：来源样本明细，保存本次查询进入候选池的历史清单行。`source_ref = project_key + "::" + item_row_id`，`family_id` 和 `fine_signature` 可用于从历史样本回查所属 family。
 - `parse_info`：本次查询解析结果和检索参数，包括原始需求、ParsedQuery、retrieved evidence 行数、family 数、display 数、LLM 输入/输出规模、token、fallback、错误、dedup 抑制摘要和 warnings。
-- `llm_trace`：记录 query rewrite、display selection、display family selection、scenario generation 的 prompt、原始响应、解析状态、token、输入摘要和错误。
+- `llm_trace`：记录 query rewrite、display option grouping、scenario generation 的 prompt、原始响应、解析状态、token、输入摘要和错误。
 
 `fine_signature` 会对已确认的等价表达做受控归一化，例如：
 
@@ -304,9 +296,8 @@ candidate_display_groups
 
 LLM 职责边界：
 
-- display_selection：只从输入的 `candidate_displays` 中选择真实存在的 `display_id`；主证据是 `retrieval_package_support_ratio` 和简短参考做法示例，但不能只按比例机械选择。
-- display_family_selection：只把已选 display 内的全部 family 完整整理为 practice_options，不决定最终 option。
-- scenario generation：接收完整 practice_options，决定 scenario、每个 item 的 practice_option 和 exact/range quantity，并生成 scenario summary 和 item explanation。scenario 中出现的 item 即表示该方案采用该清单。
+- display_option_grouping：把全部候选 display 内的 family 按具体工艺和价格统计口径完整整理为 practice_options，不选择默认 option。
+- scenario generation：接收全部候选 display 的 practice_options 和前三个相似历史工程的完整 items，决定 scenario、每个 item 的 practice_option 和 exact/range quantity，并生成 scenario summary 和 item explanation。历史工程仅用于理解常见组合，不能创建输入中不存在的 display 或 option。
 - LLM 不生成单价、来源、清单名称、单位或合价。综合单价和合价由程序根据 scenario 选用的 practice option 回填和计算。
 
 来源样本统一使用：

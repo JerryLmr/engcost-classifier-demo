@@ -9,14 +9,14 @@
 - 支持按批次导入 OCR Excel，独立生成 cleaned、removed、classified 和单批次 cost item samples。
 - 支持自动合并 `samples/*/cost_item_samples.xlsx` 为总样本，并使用不含 `project_code` / `batch_id` 的 `stable_sample_id` 去重。
 - 支持从总样本 `samples/cost_item_samples_all.xlsx` 构建 project package / item embedding 索引，保留样本明细、工程包明细、工程包向量、清单行向量和索引元数据。
-- 支持自然语言造价查询：召回相似历史工程包和清单行，合并为 `retrieved_evidence_items` 后聚合 `fine_signature` family，再按 display 选择、display 内 practice options 分组、重复展示抑制和工程量判断，由程序回填单价、来源并计算金额摘要。
+- 支持自然语言造价查询：召回相似历史工程包和清单行，聚合 `fine_signature` family 与 candidate displays，为全部 display 生成 practice options，并参考前三个完整历史工程清单组织 scenario，最后由程序回填单价、来源并计算金额摘要。
 
 ## Recent Changes
 - 新增批次入口 `scripts/run_ingest_batch.py`，统一执行 OCR 必填字段过滤、项目级分类和单批次样本生成。
 - 新增 `scripts/merge_cost_item_sample_batches.py`，自动合并历史批次样本、追加 `batch_id` / `stable_sample_id`，并输出去重报告。
 - `build_cost_item_embedding_index.py` 默认读取 `samples/cost_item_samples_all.xlsx`，输出 project package / item embedding 索引。
 - 自然语言造价查询的召回证据层次统一为 `matched_project_packages` / `direct_item_hits` → `retrieved_evidence_items` → `candidate_families` → `candidate_display_groups`。
-- display_family_selection 改为将已选 display 内的全部 family 严格划分为 practice options，由 Python 生成 option id 并派生旧链路所需默认 family 与价格证据范围。
+- 删除 display 预筛选 LLM；`display_option_grouping` 全量处理 candidate displays，单 family 由程序生成 option，多 family 合并为一次 LLM 调用。
 
 ## Decisions
 - 当前阶段不引入数据库、Milvus 或 LangChain；样本合并后重建本地 parquet + npy 索引。
@@ -25,6 +25,7 @@
 - `batch_id` 只负责来源追踪；`stable_sample_id` 负责样本去重，且不包含 `project_code` 或 `batch_id`。
 - 索引构建阶段不再调用 LLM 清洗工程名称，只读取 batch 分类产出的 `project_name_text`；为空时 warning 并回退原始工程名称。
 - 查询阶段 LLM 不生成清单名称、项目特征、单位、单价、来源或金额；价格和金额由程序按同一 `fine_signature` 历史样本确定性回填和计算。
+- scenario 的历史工程参考只从索引加载的完整 `samples.parquet` 按工程包展开，不使用局部检索 evidence，也不参与最终价格计算。
 - dedup_selection 只抑制最终展示项，不创建新 family，不合并 source_refs、本次召回样本、工程量或价格区间。
 
 ## Known Limitations
