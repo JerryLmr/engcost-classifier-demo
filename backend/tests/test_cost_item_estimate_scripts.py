@@ -1354,8 +1354,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "display_name": "屋面卷材防水",
                     "unit": "m²",
                     "practice_options": [
-                        {"practice_option_id": "D001-O01", "practice_description": "3mm SBS", "family_ids": ["F001"]},
-                        {"practice_option_id": "D001-O02", "practice_description": "4mm SBS", "family_ids": ["F002"]},
+                        {
+                            "practice_option_id": "D001-O01", "practice_description": "3mm SBS",
+                            "representative_family_id": "F001", "family_ids": ["F001"], "sample_count": 3,
+                        },
+                        {
+                            "practice_option_id": "D001-O02", "practice_description": "4mm SBS",
+                            "representative_family_id": "F002", "family_ids": ["F002"], "sample_count": 2,
+                        },
                     ],
                 },
                 {
@@ -1390,11 +1396,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "selected_items": [
                 {
                     "stable_sample_id": "sid-main",
+                    "practice_option_id": "D001-O01",
                     "quantity": {"type": "exact", "value": 500},
-                    "quantity_reason": "用户明确屋面维修面积约500㎡",
+                    "quantity_reason": "用户明确屋面维修面积约500㎡并指定3mm SBS",
                 },
                 {
                     "stable_sample_id": "sid-remove",
+                    "practice_option_id": "D002-O01",
                     "quantity": {"type": "range", "min": 0, "max": 500},
                     "quantity_reason": "拆除范围需现场确认，不机械复制主体工程量",
                 },
@@ -1402,39 +1410,40 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         }
         return displays, examples, lookup, valid
 
-    def test_historical_plan_parser_restores_original_sample_links(self):
-        _displays, examples, lookup, valid = self.historical_plan_fixtures()
+    def test_historical_plan_parser_allows_same_display_practice_selection(self):
+        displays, examples, lookup, valid = self.historical_plan_fixtures()
 
         plan = query_estimate_llm.parse_historical_plan_determination_result(
-            valid, examples, lookup
+            valid, examples, displays, lookup
         )
 
         self.assertEqual(plan.project_package_id, "PKG-1")
         self.assertEqual(plan.items[0].stable_sample_id, "sid-main")
         self.assertEqual(plan.items[0].display_id, "D001")
         self.assertEqual(plan.items[0].source_ref, "same-ref")
-        self.assertEqual(plan.items[0].practice_option_id, "D001-O02")
+        self.assertEqual(plan.items[0].practice_option_id, "D001-O01")
         self.assertEqual(plan.items[0].quantity, {"type": "exact", "value": 500.0})
         self.assertEqual(plan.items[1].quantity, {"type": "range", "min": 0.0, "max": 500.0})
 
     def test_historical_plan_prompt_contains_only_public_project_and_item_fields(self):
-        _displays, examples, _lookup, _valid = self.historical_plan_fixtures()
+        displays, examples, lookup, _valid = self.historical_plan_fixtures()
         examples[0]["items"][0].update(
             {
                 "source_ref": "source-a",
                 "family_id": "F002",
                 "display_id": "D001",
                 "practice_option_id": "D001-O02",
-                "cost_item_name": "消防报警主机",
-                "project_description": "更换报警主机",
-                "unit": "台",
-                "quantity": 1,
+                "cost_item_name": "屋面卷材防水",
+                "project_description": "4mm SBS改性沥青防水卷材",
+                "unit": "m²",
+                "quantity": 500,
                 "unit_price": 9999,
+                "package_query_similarity": 0.9,
             }
         )
 
         prompt, projects = query_estimate_llm.build_historical_plan_determination_prompt(
-            "物业消防报警主机故障，需要更换", examples
+            "屋面漏水，想做3mm SBS防水，面积大概500平", examples, displays, lookup
         )
 
         self.assertEqual(projects[0]["project_package_id"], "PKG-1")
@@ -1444,41 +1453,74 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             for item in project["items"]:
                 self.assertEqual(
                     set(item),
-                    {"stable_sample_id", "cost_item_name", "project_description", "unit", "quantity"},
+                    {"stable_sample_id", "cost_item_name", "project_description", "unit", "quantity", "practice_options"},
                 )
+                for option in item["practice_options"]:
+                    self.assertEqual(set(option), {"practice_option_id", "practice_description"})
+        self.assertEqual(
+            projects[0]["items"][0]["practice_options"],
+            [
+                {"practice_option_id": "D001-O02", "practice_description": "4mm SBS"},
+                {"practice_option_id": "D001-O01", "practice_description": "3mm SBS"},
+            ],
+        )
         for forbidden_field in [
-            "display_id", "practice_option_id", "family_id", "source_ref", "core_display_id",
-            "displays_with_options", "package_query_similarity", "unit_price", "total_price",
+            "display_id", "family_id", "family_ids", "representative_family_id", "source_ref", "core_display_id",
+            "displays_with_options", "package_query_similarity", "unit_price", "total_price", "sample_count",
         ]:
             self.assertNotIn(forbidden_field, prompt)
         self.assertIn("不得从其他历史工程增加清单", prompt)
-        self.assertIn("不得替换所选历史清单原有工艺", prompt)
+        self.assertIn("用户未明确材料、厚度、型号或施工工艺时，优先选择 practice_options 第一项", prompt)
+        self.assertIn('"practice_option_id": "该historical item的practice_options中的已有ID"', prompt)
 
-    def test_historical_plan_result_schema_contains_only_selection_and_quantity_fields(self):
+    def test_historical_plan_prompt_rejects_missing_original_practice_option(self):
+        displays, examples, lookup, _valid = self.historical_plan_fixtures()
+        invalid_lookup = {
+            **lookup,
+            "sid-main": {**lookup["sid-main"], "practice_option_id": "D001-BAD"},
+        }
+
+        with self.assertRaisesRegex(ValueError, "原 practice option 无法回查"):
+            query_estimate_llm.build_historical_plan_determination_prompt(
+                "屋面维修", examples, displays, invalid_lookup
+            )
+
+    def test_historical_plan_result_schema_contains_only_selection_practice_and_quantity_fields(self):
         _displays, _examples, _lookup, valid = self.historical_plan_fixtures()
 
         self.assertEqual(set(valid), {"project_package_id", "selected_items"})
         self.assertTrue(valid["selected_items"])
         for item in valid["selected_items"]:
-            self.assertEqual(set(item), {"stable_sample_id", "quantity", "quantity_reason"})
+            self.assertEqual(set(item), {"stable_sample_id", "practice_option_id", "quantity", "quantity_reason"})
 
-    def test_historical_plan_generation_uses_reduced_completion_budget(self):
-        _displays, examples, lookup, valid = self.historical_plan_fixtures()
-        response = types.SimpleNamespace(content=valid, usage={}, raw_content=json.dumps(valid))
+    def test_historical_plan_generation_uses_original_first_option_when_unspecified(self):
+        displays, examples, lookup, valid = self.historical_plan_fixtures()
+        unspecified_result = {
+            **valid,
+            "selected_items": [
+                {**valid["selected_items"][0], "practice_option_id": "D001-O02"},
+                valid["selected_items"][1],
+            ],
+        }
+        response = types.SimpleNamespace(
+            content=unspecified_result, usage={}, raw_content=json.dumps(unspecified_result)
+        )
 
         with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response) as request:
             plan, success, error, _prompt, trace = query_estimate_llm.generate_historical_plan_determination(
-                "屋面维修500㎡", examples, lookup
+                "屋面维修500㎡，未指定厚度", examples, displays, lookup
             )
 
         self.assertTrue(success)
         self.assertEqual(error, "")
         self.assertEqual(plan.project_package_id, "PKG-1")
+        self.assertEqual(plan.items[0].practice_option_id, "D001-O02")
         self.assertEqual(request.call_args.kwargs["max_tokens"], 4096)
         self.assertEqual(trace["max_tokens"], 4096)
+        self.assertEqual(json.loads(trace["input_summary"])["historical_item_practice_option_count"], 5)
 
     def test_historical_plan_parser_rejects_invalid_references_and_shape(self):
-        _displays, examples, lookup, valid = self.historical_plan_fixtures()
+        displays, examples, lookup, valid = self.historical_plan_fixtures()
         first = valid["selected_items"][0]
         cases = [
             ({**valid, "extra": True}, "顶层只允许"),
@@ -1488,6 +1530,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ({**valid, "selected_items": [{**first, "stable_sample_id": "sid-other"}]}, "不属于所选 project"),
             ({**valid, "selected_items": [{**first, "stable_sample_id": "sid-not-in-input"}]}, "不属于所选 project"),
             ({**valid, "selected_items": [first, first]}, "stable_sample_id 重复"),
+            ({**valid, "selected_items": [{**first, "practice_option_id": "D002-O01"}]}, "不属于历史清单允许工艺"),
+            ({**valid, "selected_items": [{**first, "practice_option_id": "BAD"}]}, "不属于历史清单允许工艺"),
             ({**valid, "selected_items": [{**first, "quantity_reason": ""}]}, "quantity_reason"),
             ({**valid, "selected_items": [{**first, "extra": True}]}, "只允许"),
             ({**valid, "selected_items": [{**first, "quantity": {"type": "exact", "value": -1}}]}, "非负"),
@@ -1496,7 +1540,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
                     query_estimate_llm.parse_historical_plan_determination_result(
-                        result, examples, lookup
+                        result, examples, displays, lookup
                     )
 
     def test_stable_sample_lookup_is_unique_and_allows_duplicate_source_ref(self):
@@ -1567,7 +1611,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_final_explanation_requires_exact_stable_sample_id_set(self):
         displays, examples, lookup, valid = self.historical_plan_fixtures()
-        plan = query_estimate_llm.parse_historical_plan_determination_result(valid, examples, lookup)
+        plan = query_estimate_llm.parse_historical_plan_determination_result(valid, examples, displays, lookup)
         scenario = query_estimate_llm.scenario_from_historical_plan(plan)
         result = {
             "scenario_name": "屋面维修方案",
@@ -1595,7 +1639,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_final_explanation_failure_keeps_blank_scenario_and_records_trace(self):
         displays, examples, lookup, valid = self.historical_plan_fixtures()
-        plan = query_estimate_llm.parse_historical_plan_determination_result(valid, examples, lookup)
+        plan = query_estimate_llm.parse_historical_plan_determination_result(valid, examples, displays, lookup)
         scenario = query_estimate_llm.scenario_from_historical_plan(plan)
         priced = pd.DataFrame(
             [
