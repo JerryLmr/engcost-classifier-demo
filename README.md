@@ -205,7 +205,7 @@ index_meta.json
 
 本系统不是通用联网报价工具，而是基于内部历史审价样本和相似工程包的离线估价辅助工具。LLM 只负责识别需求、选择真实存在的候选施工做法和判断 exact/range 工程量；清单名称、项目特征、单位、历史单价、来源样本和估算金额全部由程序按 `fine_signature` 回填或计算。
 
-系统从前三个完整真实历史工程中选择一个 `project_package_id` 作为唯一方案骨架，按 `stable_sample_id` 裁剪清单，并可根据用户明确规格在该历史清单对应的同 display 工艺中选择 `practice_option_id`，价格从完整召回证据池回填。
+系统从前三个完整真实历史工程中选择一个 `project_package_id` 作为唯一方案骨架，按 `stable_sample_id` 保守裁剪清单；通过已有 `display_id` 统一提供有限的 practice options，并根据用户明确规格选择最终 `practice_option_id`；用户未明确工艺时沿用历史清单原工艺；价格从 top 20 工程包与 top 300 直接清单形成的完整证据池回填。
 
 运行 `query_cost_estimate_llm.py` 前需先启动 LM Studio Server 或兼容 OpenAI `chat/completions` 的本地 LLM 服务；脚本启动时会先检查 `LMSTUDIO_BASE_URL/models`，服务不可用会快速退出。
 
@@ -253,7 +253,8 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 → 按 display 重新计算 retrieval_package_support_ratio
 → display_option_grouping 为全部候选 display 形成完整 practice_options
 → 从完整 samples 展开排名前 3 的历史工程清单
-→ historical_plan_determination 选择一个真实工程骨架，裁剪原有清单并确定同 display 工艺和工程量
+→ historical_plan_determination 比较三个完整真实工程，选择一个骨架并保守裁剪原有清单
+→ 按 historical items 的 display_id 统一提供有限 practice options，确定最终工艺和工程量
 → 程序按选用的 practice option 回填单价并计算合价
 → final_explanation 仅补充单方案名称、整体说明和逐项说明
 → estimate_summary / estimate_scenarios
@@ -300,7 +301,7 @@ candidate_display_groups
 LLM 职责边界：
 
 - display_option_grouping：把全部候选 display 内的 family 按具体工艺和价格统计口径完整整理为 practice_options，不选择默认 option。
-- historical_plan_determination：从前三个相似历史工程中选择一个真实工程骨架，只能保留或删除其已有清单；每条历史 item 仅携带所属 display 的精简 practice_options，可按用户明确规格选择 practice_option，并确定 exact/range quantity。
+- historical_plan_determination：比较前三个相似历史工程并选择一个真实工程骨架，只能保守保留或删除其已有清单；historical items 通过现有 `display_id` 共享统一的有限 `display_options`，用户明确规格时选择匹配工艺，未明确或无匹配候选时沿用各 item 原 `practice_option_id`，并确定 exact/range quantity。
 - final_explanation：在清单、工艺、工程量、价格和金额锁定后，仅生成单方案名称、整体说明和逐项说明。
 - LLM 不生成单价、来源、清单名称、单位或合价。综合单价和合价由程序根据 scenario 选用的 practice option 回填和计算。
 

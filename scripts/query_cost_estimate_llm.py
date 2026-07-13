@@ -499,6 +499,18 @@ def encode_query(model: Any, text: str) -> np.ndarray:
     return normalize_embeddings(embedding)[0]
 
 
+def encode_texts(model: Any, texts: list[str]) -> np.ndarray:
+    if not texts:
+        return np.empty((0, 0), dtype=np.float32)
+    embeddings = model.encode(
+        texts,
+        show_progress_bar=False,
+        convert_to_numpy=True,
+        normalize_embeddings=False,
+    )
+    return normalize_embeddings(embeddings)
+
+
 def load_index(index_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray, dict[str, Any]]:
     samples_path = index_dir / "samples.parquet"
     packages_path = index_dir / "project_packages.parquet"
@@ -1890,80 +1902,38 @@ def build_stable_sample_lookup(
     return lookup
 
 
-def historical_item_practice_options(
-    stable_sample_id: str,
-    sample_lookup: dict[str, dict[str, Any]],
-    display_map: dict[str, pd.Series],
-) -> list[dict[str, str]]:
-    sample = sample_lookup.get(stable_sample_id)
-    if sample is None:
-        raise ValueError(f"历史工程样本未映射到 sample_lookup: {stable_sample_id}")
-    display_id = cell_text(sample.get("display_id"))
-    display = display_map.get(display_id)
-    if display is None:
-        raise ValueError(f"历史工程样本无法回查 display: {stable_sample_id}/{display_id}")
-    raw_options = display.get("practice_options") if isinstance(display.get("practice_options"), list) else []
-    options: list[dict[str, str]] = []
-    seen_option_ids: set[str] = set()
-    for option in raw_options:
-        if not isinstance(option, dict):
-            continue
-        practice_option_id = cell_text(option.get("practice_option_id"))
-        if not practice_option_id or practice_option_id in seen_option_ids:
-            continue
-        seen_option_ids.add(practice_option_id)
-        options.append(
-            {
-                "practice_option_id": practice_option_id,
-                "practice_description": cell_text(option.get("practice_description")),
-            }
-        )
-    original_practice_option_id = cell_text(sample.get("practice_option_id"))
-    original_index = next(
-        (
-            index
-            for index, option in enumerate(options)
-            if option["practice_option_id"] == original_practice_option_id
-        ),
-        None,
-    )
-    if original_index is None:
-        raise ValueError(
-            f"历史工程样本原 practice option 无法回查: {stable_sample_id}/{original_practice_option_id}"
-        )
-    original_option = options.pop(original_index)
-    return [original_option, *options]
-
-
 def historical_project_prompt_records(
     examples: list[dict[str, Any]],
-    displays_with_options: pd.DataFrame,
     sample_lookup: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    display_map, _option_map = display_option_maps(displays_with_options)
     records: list[dict[str, Any]] = []
     for example in examples:
+        project_package_id = cell_text(example.get("project_package_id"))
         items = example.get("items") if isinstance(example.get("items"), list) else []
         item_records: list[dict[str, Any]] = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             stable_sample_id = cell_text(item.get("stable_sample_id"))
+            sample = sample_lookup.get(stable_sample_id)
+            if sample is None:
+                raise ValueError(f"历史工程样本未映射到 sample_lookup: {stable_sample_id}")
+            if cell_text(sample.get("project_package_id")) != project_package_id:
+                raise ValueError(f"历史工程样本 project_package_id 不一致: {stable_sample_id}")
             item_records.append(
                 {
                     "stable_sample_id": stable_sample_id,
+                    "display_id": cell_text(sample.get("display_id")),
+                    "practice_option_id": cell_text(sample.get("practice_option_id")),
                     "cost_item_name": cell_text(item.get("cost_item_name")),
                     "project_description": cell_text(item.get("project_description")),
                     "unit": cell_text(item.get("unit")),
                     "quantity": item.get("quantity"),
-                    "practice_options": historical_item_practice_options(
-                        stable_sample_id, sample_lookup, display_map
-                    ),
                 }
             )
         records.append(
             {
-                "project_package_id": cell_text(example.get("project_package_id")),
+                "project_package_id": project_package_id,
                 "project_name": cell_text(example.get("project_name")) or cell_text(example.get("project_name_text")),
                 "items": item_records,
             }
@@ -1971,27 +1941,142 @@ def historical_project_prompt_records(
     return records
 
 
+def historical_display_options(
+    historical_projects: list[dict[str, Any]],
+    displays_with_options: pd.DataFrame,
+    model: Any,
+    item_query_embedding: np.ndarray,
+    max_alternatives: int = 5,
+) -> dict[str, list[dict[str, str]]]:
+    display_map, _option_map = display_option_maps(displays_with_options)
+    display_ids: list[str] = []
+    original_option_ids: dict[str, list[str]] = {}
+    for project in historical_projects:
+        for item in project.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            display_id = cell_text(item.get("display_id"))
+            practice_option_id = cell_text(item.get("practice_option_id"))
+            if display_id not in original_option_ids:
+                display_ids.append(display_id)
+                original_option_ids[display_id] = []
+            if practice_option_id and practice_option_id not in original_option_ids[display_id]:
+                original_option_ids[display_id].append(practice_option_id)
+
+    options_by_display: dict[str, list[dict[str, str]]] = {}
+    alternative_options_by_display: dict[str, list[dict[str, str]]] = {}
+    unique_descriptions: list[str] = []
+    seen_descriptions: set[str] = set()
+    for display_id in display_ids:
+        display = display_map.get(display_id)
+        if display is None:
+            raise ValueError(f"历史工程 display 无法回查: {display_id}")
+        raw_options = display.get("practice_options") if isinstance(display.get("practice_options"), list) else []
+        option_records: list[dict[str, str]] = []
+        seen_option_ids: set[str] = set()
+        for option in raw_options:
+            if not isinstance(option, dict):
+                continue
+            practice_option_id = cell_text(option.get("practice_option_id"))
+            if not practice_option_id or practice_option_id in seen_option_ids:
+                continue
+            seen_option_ids.add(practice_option_id)
+            option_records.append(
+                {
+                    "practice_option_id": practice_option_id,
+                    "practice_description": cell_text(option.get("practice_description")),
+                }
+            )
+        option_by_id = {option["practice_option_id"]: option for option in option_records}
+        missing_originals = [
+            option_id
+            for option_id in original_option_ids.get(display_id, [])
+            if option_id not in option_by_id
+        ]
+        if missing_originals:
+            raise ValueError(
+                f"历史工程原 practice option 无法回查: {display_id}/{join_non_empty(missing_originals)}"
+            )
+        if len(option_records) <= 1:
+            continue
+        original_records = [option_by_id[option_id] for option_id in original_option_ids[display_id]]
+        original_id_set = set(original_option_ids[display_id])
+        alternatives = [
+            option for option in option_records if option["practice_option_id"] not in original_id_set
+        ]
+        options_by_display[display_id] = original_records
+        alternative_options_by_display[display_id] = alternatives
+        for option in alternatives:
+            description = option["practice_description"]
+            if description not in seen_descriptions:
+                seen_descriptions.add(description)
+                unique_descriptions.append(description)
+
+    description_scores: dict[str, float] = {}
+    if unique_descriptions:
+        description_embeddings = encode_texts(model, unique_descriptions)
+        query_embedding = np.asarray(item_query_embedding, dtype=np.float32).reshape(-1)
+        if description_embeddings.shape[1] != query_embedding.shape[0]:
+            raise ValueError("practice description embedding 维度与 item query embedding 不一致")
+        similarities = description_embeddings @ query_embedding
+        description_scores = {
+            description: float(similarities[index])
+            for index, description in enumerate(unique_descriptions)
+        }
+
+    output: dict[str, list[dict[str, str]]] = {}
+    alternative_limit = max(0, int(max_alternatives))
+    for display_id in display_ids:
+        if display_id not in options_by_display:
+            continue
+        ranked_alternatives = sorted(
+            alternative_options_by_display[display_id],
+            key=lambda option: -description_scores.get(option["practice_description"], float("-inf")),
+        )
+        output[display_id] = [
+            *options_by_display[display_id],
+            *ranked_alternatives[:alternative_limit],
+        ]
+    return output
+
+
 def build_historical_plan_determination_prompt(
     raw_text: str,
     matched_project_examples: list[dict[str, Any]],
     displays_with_options: pd.DataFrame,
     sample_lookup: dict[str, dict[str, Any]],
-) -> tuple[str, list[dict[str, Any]]]:
-    projects = historical_project_prompt_records(
-        matched_project_examples, displays_with_options, sample_lookup
+    model: Any,
+    item_query_embedding: np.ndarray,
+) -> tuple[str, list[dict[str, Any]], dict[str, list[dict[str, str]]]]:
+    projects = historical_project_prompt_records(matched_project_examples, sample_lookup)
+    display_options = historical_display_options(
+        projects, displays_with_options, model, item_query_embedding
     )
     prompt = f"""
 你需要从三个完整历史工程中选择一个最适合作为当前维修估价骨架的真实工程。
 
-只能选择输入中已有的 project_package_id 和该工程已有的 stable_sample_id。以所选历史工程完整清单为基础：
-- 保留与当前维修对象和范围相关的清单；
-- 剔除明显属于其他维修对象、其他系统或扩大工程范围的清单；
-- 不得从其他历史工程增加清单，不得生成新清单。
+必须比较三个完整历史工程，不能固定选择 rank 最靠前的工程。选择时综合考虑维修对象匹配程度、同一维修对象施工链完整性、无关清单数量、需要删除的无关项数量，以及工程整体与当前需求的接近程度。优先选择维修对象更纯粹、无关项更少、同一维修对象施工链更完整且需要删除项更少的真实工程。
+
+只能选择输入中已有的 project_package_id 和该工程已有的 stable_sample_id。所选历史工程中的清单默认保留，仅允许在以下情况删除：
+- 清单明确属于其他维修对象或另一个独立维修范围，例如用户问屋面时，清单明确属于外墙、地下室或消防；
+- 清单与用户明确要求冲突；
+- 清单是明显互相替代的重复做法，并且用户已经明确选择其中一种。
+
+保守删除规则：
+- 用户没有逐项提到某个施工层，不构成删除理由；
+- 同一维修对象下真实历史工程已有的完整施工链应优先保留；
+- 拆除、基层处理、防水层、保护层、运输、脚手架和措施费等，只要属于同一维修对象，不得仅因用户没有逐项说明就删除；
+- 无法确定某项是否相关时保留，不得为了缩短结果而主动压缩清单数量；
+- 历史工程中卷材防水和涂膜防水同时存在时，默认视为完整施工链中的不同施工层并全部保留；
+- 只有用户明确要求只使用某一种做法，或两项明显属于互斥替代方案时，才删除其中一项；
+- 不得从另外两个历史工程补项，不得生成新清单。
 
 对每个保留项：
-- 用户明确指定材料、厚度、型号或施工工艺时，从该项 practice_options 中选择匹配的 practice_option_id；
-- 用户未明确材料、厚度、型号或施工工艺时，优先选择 practice_options 第一项，即历史清单原工艺；
-- 不得选择该 historical item 的 practice_options 之外的 practice_option_id；
+- historical item 中的 practice_option_id 是该历史清单原工艺；
+- 用户明确指定材料、厚度、型号或施工工艺时，从该 item 的 display_id 对应 display_options 中选择匹配的 practice_option_id；
+- 用户未明确具体工艺，或候选中没有明确匹配项时，沿用 historical item 原 practice_option_id；
+- display_options 未包含该 display_id 时，该 display 只有原工艺，必须沿用 historical item 原 practice_option_id；
+- 不得选择对应 display_options 之外的 option，不得跨 display 选择 practice_option_id；
 - 估计 exact 或 range quantity，用户明确工程量优先；
 - 同一施工范围的相关项可结合用户工程量，台、套、项、系统类可参考历史数量；
 - 不得机械照搬明显不适合当前范围的历史数量。
@@ -2002,7 +2087,7 @@ def build_historical_plan_determination_prompt(
   "selected_items": [
     {{
       "stable_sample_id": "所选工程中的已有ID",
-      "practice_option_id": "该historical item的practice_options中的已有ID",
+      "practice_option_id": "historical item原工艺或其display_id对应display_options中的已有ID",
       "quantity": {{"type": "exact", "value": 500}},
       "quantity_reason": "工程量确定依据"
     }}
@@ -2010,14 +2095,15 @@ def build_historical_plan_determination_prompt(
 }}
 
 输入：
-{json_text({"user_query": raw_text, "matched_project_examples": projects})}
+{json_text({"user_query": raw_text, "historical_projects": projects, "display_options": display_options})}
 """.strip()
-    return prompt, projects
+    return prompt, projects, display_options
 
 
 def parse_historical_plan_determination_result(
     result: dict[str, Any],
-    matched_project_examples: list[dict[str, Any]],
+    historical_projects: list[dict[str, Any]],
+    display_options: dict[str, list[dict[str, str]]],
     displays_with_options: pd.DataFrame,
     sample_lookup: dict[str, dict[str, Any]],
 ) -> HistoricalPlan:
@@ -2025,23 +2111,26 @@ def parse_historical_plan_determination_result(
         raise ValueError("historical_plan_determination 顶层只允许 project_package_id 和 selected_items")
     project_ids = {
         cell_text(example.get("project_package_id"))
-        for example in matched_project_examples
+        for example in historical_projects
         if cell_text(example.get("project_package_id"))
     }
     project_package_id = cell_text(result.get("project_package_id"))
     if project_package_id not in project_ids:
         raise ValueError(f"未知 project_package_id: {project_package_id}")
-    selected_project_stable_ids = {
-        cell_text(item.get("stable_sample_id"))
-        for example in matched_project_examples
-        if cell_text(example.get("project_package_id")) == project_package_id
-        for item in (example.get("items") if isinstance(example.get("items"), list) else [])
-        if isinstance(item, dict) and cell_text(item.get("stable_sample_id"))
-    }
+    historical_items: dict[str, tuple[str, dict[str, Any]]] = {}
+    for example in historical_projects:
+        example_project_id = cell_text(example.get("project_package_id"))
+        for item in (example.get("items") if isinstance(example.get("items"), list) else []):
+            if not isinstance(item, dict):
+                continue
+            stable_sample_id = cell_text(item.get("stable_sample_id"))
+            if stable_sample_id in historical_items:
+                raise ValueError(f"historical_projects stable_sample_id 重复: {stable_sample_id}")
+            historical_items[stable_sample_id] = (example_project_id, item)
     raw_items = result.get("selected_items")
     if not isinstance(raw_items, list) or not raw_items:
         raise ValueError("selected_items 必须为非空 list")
-    display_map, _option_map = display_option_maps(displays_with_options)
+    _display_map, full_option_map = display_option_maps(displays_with_options)
     seen_stable_ids: set[str] = set()
     items: list[ScenarioItem] = []
     for raw_item in raw_items:
@@ -2056,19 +2145,36 @@ def parse_historical_plan_determination_result(
         sample = sample_lookup.get(stable_sample_id)
         if sample is None:
             raise ValueError(f"未知 stable_sample_id: {stable_sample_id}")
+        historical_item_entry = historical_items.get(stable_sample_id)
         if (
-            stable_sample_id not in selected_project_stable_ids
+            historical_item_entry is None
+            or historical_item_entry[0] != project_package_id
             or cell_text(sample.get("project_package_id")) != project_package_id
         ):
             raise ValueError(f"stable_sample_id 不属于所选 project: {stable_sample_id}")
+        historical_item = historical_item_entry[1]
+        display_id = cell_text(sample.get("display_id"))
+        original_practice_option_id = cell_text(sample.get("practice_option_id"))
+        if (
+            cell_text(historical_item.get("display_id")) != display_id
+            or cell_text(historical_item.get("practice_option_id")) != original_practice_option_id
+        ):
+            raise ValueError(f"historical item 与 sample_lookup 不一致: {stable_sample_id}")
         practice_option_id = cell_text(raw_item.get("practice_option_id"))
-        allowed_practice_option_ids = {
-            option["practice_option_id"]
-            for option in historical_item_practice_options(stable_sample_id, sample_lookup, display_map)
-        }
-        if practice_option_id not in allowed_practice_option_ids:
+        if display_id in display_options:
+            allowed_practice_option_ids = {
+                cell_text(option.get("practice_option_id"))
+                for option in display_options.get(display_id) or []
+                if isinstance(option, dict) and cell_text(option.get("practice_option_id"))
+            }
+        else:
+            allowed_practice_option_ids = {original_practice_option_id}
+        if (
+            practice_option_id not in allowed_practice_option_ids
+            or (display_id, practice_option_id) not in full_option_map
+        ):
             raise ValueError(
-                f"practice_option_id 不属于历史清单允许工艺: {stable_sample_id}/{practice_option_id}"
+                f"practice_option_id 不属于本次 display_options: {stable_sample_id}/{display_id}/{practice_option_id}"
             )
         quantity_reason = cell_text(raw_item.get("quantity_reason"))
         if not quantity_reason:
@@ -2078,7 +2184,7 @@ def parse_historical_plan_determination_result(
                 project_package_id=project_package_id,
                 stable_sample_id=stable_sample_id,
                 source_ref=cell_text(sample.get("source_ref")),
-                display_id=cell_text(sample.get("display_id")),
+                display_id=display_id,
                 practice_option_id=practice_option_id,
                 selection_reason="",
                 quantity=validate_quantity(raw_item.get("quantity")),
@@ -2093,20 +2199,23 @@ def generate_historical_plan_determination(
     matched_project_examples: list[dict[str, Any]],
     displays_with_options: pd.DataFrame,
     sample_lookup: dict[str, dict[str, Any]],
+    model: Any,
+    item_query_embedding: np.ndarray,
     warnings: list[str] | None = None,
 ) -> tuple[HistoricalPlan | None, bool, str, str, dict[str, Any]]:
-    prompt, projects = build_historical_plan_determination_prompt(
-        raw_text, matched_project_examples, displays_with_options, sample_lookup
+    prompt, projects, display_options = build_historical_plan_determination_prompt(
+        raw_text,
+        matched_project_examples,
+        displays_with_options,
+        sample_lookup,
+        model,
+        item_query_embedding,
     )
     max_tokens = 4096
     input_counts = {
         "historical_project_count": len(projects),
         "historical_item_count": sum(len(project.get("items") or []) for project in projects),
-        "historical_item_practice_option_count": sum(
-            len(item.get("practice_options") or [])
-            for project in projects
-            for item in project.get("items") or []
-        ),
+        "historical_display_option_count": sum(len(options) for options in display_options.values()),
     }
     if not projects:
         raise ValueError("没有可供选择的完整历史工程")
@@ -2116,7 +2225,7 @@ def generate_historical_plan_determination(
             system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
         )
         plan = parse_historical_plan_determination_result(
-            response.content, matched_project_examples, displays_with_options, sample_lookup
+            response.content, projects, display_options, displays_with_options, sample_lookup
         )
         trace = trace_row(
             "historical_plan_determination", "选择真实历史工程骨架、保留项、工艺和工程量", True,
@@ -2864,9 +2973,11 @@ def run_query(
     try:
         package_query_embedding = encode_query(model, rewrite.project_package_query_text)
         item_query_embedding = encode_query(model, rewrite.item_query_text)
-    finally:
+    except Exception:
         release_embedding_model(model)
+        del model
         gc.collect()
+        raise
 
     if package_query_embedding.shape[0] != project_package_embeddings.shape[1]:
         raise ValueError("package query embedding 维度与索引 embedding 维度不一致")
@@ -2928,19 +3039,26 @@ def run_query(
         matched_project_packages, samples, sample_lookup, limit=3
     )
     matched_project_examples_output = matched_project_examples_frame(matched_project_examples)
-    (
-        historical_plan,
-        historical_plan_success,
-        historical_plan_error,
-        historical_plan_prompt,
-        historical_plan_trace,
-    ) = generate_historical_plan_determination(
-        raw_text,
-        matched_project_examples,
-        displays_with_options,
-        sample_lookup,
-        warnings=warnings,
-    )
+    try:
+        (
+            historical_plan,
+            historical_plan_success,
+            historical_plan_error,
+            historical_plan_prompt,
+            historical_plan_trace,
+        ) = generate_historical_plan_determination(
+            raw_text,
+            matched_project_examples,
+            displays_with_options,
+            sample_lookup,
+            model,
+            item_query_embedding,
+            warnings=warnings,
+        )
+    finally:
+        release_embedding_model(model)
+        del model
+        gc.collect()
     if not historical_plan_success or historical_plan is None:
         raise ValueError(f"historical_plan_determination 失败: {historical_plan_error}")
 
