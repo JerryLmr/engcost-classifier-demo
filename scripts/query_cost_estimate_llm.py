@@ -184,8 +184,6 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "选用工艺",
     "其他可选工艺",
     "项目说明",
-    "是否纳入方案",
-    "是否计入金额",
     "工程量类型",
     "工程量最低值",
     "工程量中位数",
@@ -218,7 +216,6 @@ ESTIMATE_SUMMARY_COLUMNS = [
     "主要施工内容",
     "与其他方案的核心差异",
     "计价项目数",
-    "展示但未计价项目数",
     "合价最低值",
     "合价中位数",
     "合价最高值",
@@ -257,8 +254,6 @@ class QueryRewrite:
 class ScenarioItem:
     display_id: str
     practice_option_id: str
-    include: bool
-    amount: bool
     selection_reason: str
     quantity: dict[str, Any]
 
@@ -2180,15 +2175,12 @@ sample_count 表示该 option 在当前历史样本中的支持数量，只作�
 2. 决定每个 scenario 应包含哪些 display。
 3. 为每个被纳入的 display 选择对应的 practice_option_id。
 4. 为每个 scenario 生成 scenario_name。
-5. 为每个 scenario 生成 scenario_summary，说明该 scenario 的整体施工范围、施工链、适用现场条件、与其他 scenario 的实质差异、已计价范围和仅展示暂未计价范围。
-6. 为每个 scenario item 生成 item_explanation，说明当前 option 在本方案中的用途、施工环节、选用原因、工程量来源或继承逻辑、include/amount 判断，以及暂不计价时的待确认事项。
+5. 为每个 scenario 生成 scenario_summary，说明该 scenario 的整体施工范围、施工链、适用现场条件和与其他 scenario 的实质差异。
+6. 为每个 scenario item 生成 item_explanation，说明当前 option 在本方案中的用途、施工环节、选用原因、工程量来源或继承逻辑。
 7. 为每个 scenario item 判断 quantity：
    - 可以可靠确定单一数值时，输出 exact；
-   - 可以可靠确定一个范围时，输出 range；
-   - 无法可靠确定时，输出 unknown。
-8. 为每个 scenario item 判断 include。
-9. 为每个 scenario item 判断 amount。
-10. 按与用户原始需求的符合程度排列 scenario。
+   - 可以可靠确定一个范围时，输出 range。
+8. 按与用户原始需求的符合程度排列 scenario。
 
 判断原则：
 
@@ -2201,16 +2193,14 @@ sample_count 表示该 option 在当前历史样本中的支持数量，只作�
 7. 不得输出单价或合价。
 8. 不得根据 sample_count 推算工程量。
 9. 不得根据其他 item 的工程量推算当前 item 的工程量。
-10. 信息不足时应输出 unknown，不要为了计算金额而猜测工程量。
-11. scenario_summary 和 item_explanation 必须针对当前 scenario 的实际内容撰写，避免通用模板。
-12. practice_description 只描述工艺本身，不承担方案解释；不得用 scenario_summary 或 item_explanation 简单复述 practice_description。
+10. scenario_summary 和 item_explanation 必须针对当前 scenario 的实际内容撰写，避免通用模板。
+11. practice_description 只描述工艺本身，不承担方案解释；不得用 scenario_summary 或 item_explanation 简单复述 practice_description。
 
 scenario_summary 必须同时覆盖：
 
 1. 整体施工内容：说明该方案包含的主要施工范围和施工链。
 2. 适用条件：说明适合什么现场条件、基层状态或维修目标。
 3. 与其他方案的差异：如果存在多个 scenario，必须明确指出与其他方案不同的前置工序、拆除范围、基层处理或材料做法；如果只有一个 scenario，也要说明该方案的关键取舍。
-4. 已计价与未计价范围：说明哪些重要项目已计价，哪些项目仅展示、暂未计价及原因。
 
 item_explanation 必须同时覆盖：
 
@@ -2218,8 +2208,6 @@ item_explanation 必须同时覆盖：
 2. 该 item 在当前施工方案中的施工环节。
 3. 为什么选用该 practice option。
 4. 工程量来源或继承逻辑；如果工程量从同一施工范围继承，必须说明“按用户给出的同一施工面积暂估，最终以现场核定为准”。
-5. include 和 amount 的判断原因。
-6. include=true 且 amount=false 时，必须说明为什么属于方案但暂不计价，以及需要补充哪些现场信息。
 
 quantity 格式：
 
@@ -2238,12 +2226,6 @@ quantity 格式：
   "max": 120
 }}
 
-无法确定：
-
-{{
-  "type": "unknown"
-}}
-
 输出必须严格符合：
 
 {{
@@ -2257,9 +2239,7 @@ quantity 格式：
         {{
           "display_id": "D001",
           "practice_option_id": "D001-O01",
-          "include": true,
-          "amount": true,
-          "item_explanation": "当前项目说明，覆盖用途、施工环节、选用原因、工程量来源、include/amount 判断和待确认事项",
+          "item_explanation": "当前项目说明，覆盖用途、施工环节、选用原因和工程量来源",
           "quantity": {{
             "type": "exact",
             "value": 100
@@ -2282,15 +2262,10 @@ quantity 格式：
 8. scenario_name 不得为空。
 9. scenario_summary 不得为空。
 10. item_explanation 不得为空。
-11. include 必须为布尔值。
-12. amount 必须为布尔值。
-13. quantity.type 只能是 exact、range 或 unknown。
-14. exact 必须包含非负 value。
-15. range 必须包含非负 min 和 max，且 min 不得大于 max。
-16. unknown 不得包含 value、min 或 max。
-17. 不得输出单价、合价或其他未要求字段。
-
-include 和 amount 的具体语义沿用项目现有定义，不要重新设计另一套字段。
+11. quantity.type 只能是 exact 或 range。
+12. exact 必须包含非负 value。
+13. range 必须包含非负 min 和 max，且 min 不得大于 max。
+14. 不得输出单价、合价或其他未要求字段。
 
 输入：
 {json_text({"user_query": raw_text, "displays": records})}
@@ -2332,11 +2307,7 @@ def validate_quantity(value: Any) -> dict[str, Any]:
         if minimum > maximum:
             raise ValueError("range quantity min 不得大于 max")
         return {"type": "range", "min": minimum, "max": maximum}
-    if quantity_type == "unknown":
-        if set(value) != {"type"}:
-            raise ValueError("unknown quantity 不得包含 value、min 或 max")
-        return {"type": "unknown"}
-    raise ValueError("quantity.type 只能是 exact、range 或 unknown")
+    raise ValueError("quantity.type 只能是 exact 或 range")
 
 
 def parse_scenario_generation_result(
@@ -2346,7 +2317,7 @@ def parse_scenario_generation_result(
 ) -> list[EstimateScenario]:
     _ = warnings
     allowed_scenario_keys = {"scenario_id", "scenario_order", "scenario_name", "scenario_summary", "items"}
-    allowed_item_keys = {"display_id", "practice_option_id", "include", "amount", "item_explanation", "selection_reason", "quantity"}
+    allowed_item_keys = {"display_id", "practice_option_id", "item_explanation", "selection_reason", "quantity"}
     raw_scenarios = result.get("scenarios")
     if not isinstance(raw_scenarios, list) or not raw_scenarios:
         raise ValueError("scenario_generation 输出缺少非空 scenarios list")
@@ -2396,10 +2367,6 @@ def parse_scenario_generation_result(
             if item_key in seen_items:
                 raise ValueError(f"同一 scenario 中重复 display_id 和 practice_option_id: {display_id}/{practice_option_id}")
             seen_items.add(item_key)
-            if not isinstance(raw_item.get("include"), bool):
-                raise ValueError("include 必须为布尔值")
-            if not isinstance(raw_item.get("amount"), bool):
-                raise ValueError("amount 必须为布尔值")
             selection_reason = cell_text(raw_item.get("item_explanation")) or cell_text(raw_item.get("selection_reason"))
             if not selection_reason:
                 raise ValueError("item_explanation 不得为空")
@@ -2407,8 +2374,6 @@ def parse_scenario_generation_result(
                 ScenarioItem(
                     display_id=display_id,
                     practice_option_id=practice_option_id,
-                    include=raw_item["include"],
-                    amount=raw_item["amount"],
                     selection_reason=selection_reason,
                     quantity=validate_quantity(raw_item.get("quantity")),
                 )
@@ -2423,36 +2388,6 @@ def parse_scenario_generation_result(
             )
         )
     return scenarios
-
-
-def fallback_scenario_generation(selected_displays: pd.DataFrame, error: str) -> list[EstimateScenario]:
-    items: list[ScenarioItem] = []
-    for _index, row in selected_displays.iterrows():
-        display_id = cell_text(row.get("display_id"))
-        practice_options = row.get("practice_options") if isinstance(row.get("practice_options"), list) else []
-        if not display_id or not practice_options or not isinstance(practice_options[0], dict):
-            continue
-        items.append(
-            ScenarioItem(
-                display_id=display_id,
-                practice_option_id=cell_text(practice_options[0].get("practice_option_id")),
-                include=True,
-                amount=False,
-                selection_reason=f"scenario generation 失败，需人工确认方案选择：{error}",
-                quantity={"type": "unknown"},
-            )
-        )
-    if not items:
-        return []
-    return [
-        EstimateScenario(
-            scenario_id="S001",
-            scenario_order=1,
-            scenario_name="默认估价方案",
-            scenario_summary="scenario generation 失败，按已选 display 形成仅展示、不计价的默认方案。",
-            items=items,
-        )
-    ]
 
 
 def generate_estimate_scenarios(
@@ -2503,9 +2438,8 @@ def generate_estimate_scenarios(
         return scenarios, True, False, "", prompt, trace
     except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
         append_warning(warnings, "scenario_generation_failed")
-        append_warning(warnings, "scenario_generation_fallback")
-        scenarios = fallback_scenario_generation(selected_displays, str(exc))
-        scenario_item_count = sum(len(scenario.items) for scenario in scenarios)
+        scenarios: list[EstimateScenario] = []
+        scenario_item_count = 0
         trace = trace_row(
             "scenario_generation",
             "根据 practice options 生成估价 scenarios",
@@ -2518,13 +2452,13 @@ def generate_estimate_scenarios(
                     "selected_display_ids": [record["display_id"] for record in records],
                     "scenario_count": len(scenarios),
                     "scenario_item_count": scenario_item_count,
-                    "fallback": True,
+                    "fallback": False,
                 }
             ),
             scenario_count=len(scenarios),
             scenario_item_count=scenario_item_count,
         )
-        return scenarios, False, True, str(exc), prompt, trace
+        return scenarios, False, False, str(exc), prompt, trace
 
 
 def aggregate_price_from_evidence_items(evidence_items: pd.DataFrame, family_ids: list[str]) -> dict[str, Any]:
@@ -2604,7 +2538,7 @@ def quantity_display(quantity: dict[str, Any]) -> Any:
         return quantity.get("value", "")
     if quantity_type == "range":
         return f"{format_number_cell(quantity.get('min'))}～{format_number_cell(quantity.get('max'))}"
-    return "无法确定"
+    raise ValueError("quantity.type 只能是 exact 或 range")
 
 
 def quantity_values(quantity: dict[str, Any]) -> tuple[Any, Any, Any]:
@@ -2617,7 +2551,7 @@ def quantity_values(quantity: dict[str, Any]) -> tuple[Any, Any, Any]:
         maximum = numeric_or_none(quantity.get("max"))
         midpoint = None if minimum is None or maximum is None else (minimum + maximum) / 2
         return minimum if minimum is not None else "", midpoint if midpoint is not None else "", maximum if maximum is not None else ""
-    return "", "", ""
+    raise ValueError("quantity.type 只能是 exact 或 range")
 
 
 def quantity_basis(quantity: dict[str, Any]) -> str:
@@ -2626,12 +2560,10 @@ def quantity_basis(quantity: dict[str, Any]) -> str:
         return "按 scenario item 判断为精确工程量，最终以现场核定为准"
     if quantity_type == "range":
         return "按 scenario item 判断为工程量区间，中位数按区间中点暂估，最终以现场核定为准"
-    return "工程量暂无法可靠确定，需补充现场范围、尺寸或数量信息后计价"
+    raise ValueError("quantity.type 只能是 exact 或 range")
 
 
-def quantity_amounts(quantity: dict[str, Any], price_stats: dict[str, Any], should_amount: bool) -> tuple[Any, Any, Any]:
-    if not should_amount:
-        return "", "", ""
+def quantity_amounts(quantity: dict[str, Any], price_stats: dict[str, Any]) -> tuple[Any, Any, Any]:
     quantity_type = cell_text(quantity.get("type"))
     if quantity_type == "exact":
         value = quantity.get("value")
@@ -2649,7 +2581,7 @@ def quantity_amounts(quantity: dict[str, Any], price_stats: dict[str, Any], shou
             calc_amount(midpoint, price_stats.get("unit_price_median")),
             calc_amount(maximum, price_stats.get("unit_price_max")),
         )
-    return "", "", ""
+    raise ValueError("quantity.type 只能是 exact 或 range")
 
 
 def build_scenario_outputs(
@@ -2673,7 +2605,7 @@ def build_scenario_outputs(
                 if isinstance(other, dict) and cell_text(other.get("practice_option_id")) != item.practice_option_id
             ]
             price_stats = price_stats_for_option(option, candidate_families, evidence_items)
-            amount_low, amount_mid, amount_high = quantity_amounts(item.quantity, price_stats, item.amount)
+            amount_low, amount_mid, amount_high = quantity_amounts(item.quantity, price_stats)
             quantity_low, quantity_mid, quantity_high = quantity_values(item.quantity)
             family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
             scenario_rows.append(
@@ -2687,8 +2619,6 @@ def build_scenario_outputs(
                     "选用工艺": cell_text(option.get("practice_description")),
                     "其他可选工艺": "；".join([text for text in other_options if text]),
                     "项目说明": item.selection_reason,
-                    "是否纳入方案": "是" if item.include else "否",
-                    "是否计入金额": "是" if item.amount else "否",
                     "工程量类型": cell_text(item.quantity.get("type")),
                     "工程量最低值": quantity_low,
                     "工程量中位数": quantity_mid,
@@ -2751,8 +2681,6 @@ TEXT_IDENTIFIER_COLUMNS = {
 
 TEXT_VALUE_COLUMNS = {
     "是否推荐方案",
-    "是否纳入方案",
-    "是否计入金额",
     "工程量类型",
     "工程量依据",
     "方案说明",
@@ -2897,9 +2825,10 @@ def build_estimate_summary(
     first_order = numeric_or_none(estimate_scenarios.iloc[0].get("方案顺序"))
     for (_scenario_order, scenario_id), frame in estimate_scenarios.groupby(["方案顺序", "方案编号"], sort=True):
         scenario = frame.iloc[0]
-        amount_frame = frame[frame["是否计入金额"].map(cell_text).eq("是")]
-        included_frame = frame[frame["是否纳入方案"].map(cell_text).eq("是")]
-        unpriced_frame = included_frame[included_frame["是否计入金额"].map(cell_text).ne("是")]
+        conditional_frame = frame[
+            frame["工程量类型"].map(cell_text).eq("range")
+            & pd.to_numeric(frame["工程量最低值"], errors="coerce").fillna(-1).eq(0)
+        ]
         scenario_summary = scenario_summary_by_id.get(cell_text(scenario_id), "")
         rows.append(
             {
@@ -2908,14 +2837,13 @@ def build_estimate_summary(
                 "方案名称": scenario.get("方案名称", ""),
                 "是否推荐方案": "是" if numeric_or_none(scenario.get("方案顺序")) == first_order else "否",
                 "方案说明": scenario_summary,
-                "主要施工内容": join_non_empty([display_item_label(row) for _index, row in included_frame.iterrows()]),
+                "主要施工内容": join_non_empty([display_item_label(row) for _index, row in frame.iterrows()]),
                 "与其他方案的核心差异": scenario_summary,
-                "计价项目数": int(frame["是否计入金额"].map(cell_text).eq("是").sum()),
-                "展示但未计价项目数": int(len(unpriced_frame)),
-                "合价最低值": amount_sum(amount_frame, "合价最低值"),
-                "合价中位数": amount_sum(amount_frame, "合价中位数"),
-                "合价最高值": amount_sum(amount_frame, "合价最高值"),
-                "待现场确认事项": join_non_empty(unpriced_frame.get("项目说明", pd.Series(dtype=object)).tolist()),
+                "计价项目数": int(len(frame)),
+                "合价最低值": amount_sum(frame, "合价最低值"),
+                "合价中位数": amount_sum(frame, "合价中位数"),
+                "合价最高值": amount_sum(frame, "合价最高值"),
+                "待现场确认事项": join_non_empty(conditional_frame.get("项目说明", pd.Series(dtype=object)).tolist()),
             }
         )
     return pd.DataFrame(rows, columns=ESTIMATE_SUMMARY_COLUMNS).fillna("")
@@ -2950,11 +2878,8 @@ def build_parse_info(
     display_family_selection_meta: dict[str, Any],
     scenario_count: int,
     scenario_item_count: int,
-    scenario_included_item_count: int,
-    scenario_amount_item_count: int,
     scenario_exact_quantity_count: int,
     scenario_range_quantity_count: int,
-    scenario_unknown_quantity_count: int,
     scenario_generation_trace: dict[str, Any],
     scenario_generation_fallback: bool,
     scenario_generation_error: str,
@@ -3010,11 +2935,8 @@ def build_parse_info(
         ("display_family_selection_completion_tokens", display_family_selection_trace.get("completion_tokens", "")),
         ("scenario_count", scenario_count),
         ("scenario_item_count", scenario_item_count),
-        ("scenario_included_item_count", scenario_included_item_count),
-        ("scenario_amount_item_count", scenario_amount_item_count),
         ("scenario_exact_quantity_count", scenario_exact_quantity_count),
         ("scenario_range_quantity_count", scenario_range_quantity_count),
-        ("scenario_unknown_quantity_count", scenario_unknown_quantity_count),
         ("scenario_generation_status", "fallback" if scenario_generation_fallback else ("failed" if scenario_generation_error else "success")),
         ("scenario_generation_prompt_chars", scenario_generation_trace.get("prompt_chars", "")),
         ("scenario_generation_prompt_tokens", scenario_generation_trace.get("prompt_tokens") or scenario_generation_trace.get("estimated_tokens", "")),
@@ -3255,11 +3177,8 @@ def run_query(
         append_trace_warnings(scenario_generation_trace, warnings)
     displays_for_llm_count = len(display_selection_meta.get("candidate_ids") or [])
     scenario_item_count = sum(len(scenario.items) for scenario in scenarios)
-    scenario_included_item_count = sum(1 for scenario in scenarios for item in scenario.items if item.include)
-    scenario_amount_item_count = sum(1 for scenario in scenarios for item in scenario.items if item.amount)
     scenario_exact_quantity_count = sum(1 for scenario in scenarios for item in scenario.items if cell_text(item.quantity.get("type")) == "exact")
     scenario_range_quantity_count = sum(1 for scenario in scenarios for item in scenario.items if cell_text(item.quantity.get("type")) == "range")
-    scenario_unknown_quantity_count = sum(1 for scenario in scenarios for item in scenario.items if cell_text(item.quantity.get("type")) == "unknown")
     parse_info = build_parse_info(
         rewrite=rewrite,
         top_packages=top_packages,
@@ -3289,11 +3208,8 @@ def run_query(
         display_family_selection_meta=display_family_selection_meta,
         scenario_count=len(scenarios),
         scenario_item_count=scenario_item_count,
-        scenario_included_item_count=scenario_included_item_count,
-        scenario_amount_item_count=scenario_amount_item_count,
         scenario_exact_quantity_count=scenario_exact_quantity_count,
         scenario_range_quantity_count=scenario_range_quantity_count,
-        scenario_unknown_quantity_count=scenario_unknown_quantity_count,
         scenario_generation_trace=scenario_generation_trace,
         scenario_generation_fallback=scenario_generation_fallback,
         scenario_generation_error=scenario_generation_error,

@@ -203,7 +203,7 @@ index_meta.json
 
 ### 5. 自然语言造价查询
 
-本系统不是通用联网报价工具，而是基于内部历史审价样本和相似工程包的离线估价辅助工具。LLM 只负责识别需求、选择真实存在的候选施工做法、判断工程量区间和是否计入金额；清单名称、项目特征、单位、历史单价、来源样本和估算金额全部由程序按 `fine_signature` 回填或计算。
+本系统不是通用联网报价工具，而是基于内部历史审价样本和相似工程包的离线估价辅助工具。LLM 只负责识别需求、选择真实存在的候选施工做法和判断 exact/range 工程量；清单名称、项目特征、单位、历史单价、来源样本和估算金额全部由程序按 `fine_signature` 回填或计算。
 
 运行 `query_cost_estimate_llm.py` 前需先启动 LM Studio Server 或兼容 OpenAI `chat/completions` 的本地 LLM 服务；脚本启动时会先检查 `LMSTUDIO_BASE_URL/models`，服务不可用会快速退出。
 
@@ -278,8 +278,8 @@ candidate_display_groups
 
 输出 xlsx 固定包含：
 
-- `estimate_summary`：面向用户/领导的估价摘要，一行一个 scenario，展示推荐标记、方案说明、主要施工内容、计价/未计价项目数量和合价区间。
-- `estimate_scenarios`：scenario 完整项目级主表，一行一个 scenario item，展示清单名称、选用工艺、其他可选工艺、项目说明、工程量三值、是否纳入、是否计价、综合单价、人工费/机械费单价组成参考、合价和来源样本。
+- `estimate_summary`：面向用户/领导的估价摘要，一行一个 scenario，展示推荐标记、方案说明、主要施工内容、计价项目数和合价区间。
+- `estimate_scenarios`：scenario 完整项目级主表，一行一个 scenario item，展示清单名称、选用工艺、其他可选工艺、项目说明、exact/range 工程量三值、综合单价、人工费/机械费单价组成参考、合价和来源样本。
 - `matched_project_packages`：工程包级召回结果，包括 `package_query_similarity`、`project_package_id`、工程名称、`project_name_text`、`cost_item_names_summary`、`consultation_time`、`location`、`cache_subject` 和 `item_count`。
 - `direct_item_hits`：清单行级直接召回结果，参与生成 `retrieved_evidence_items`，不单独输出为 sheet。
 - `retrieved_evidence_items`：工程包召回与清单行召回合并后的逐行结果；输出时体现为回填 `family_id` 后的 `evidence_items`。
@@ -306,7 +306,7 @@ LLM 职责边界：
 
 - display_selection：只从输入的 `candidate_displays` 中选择真实存在的 `display_id`；主证据是 `retrieval_package_support_ratio` 和简短参考做法示例，但不能只按比例机械选择。
 - display_family_selection：只把已选 display 内的全部 family 完整整理为 practice_options，不决定最终 option。
-- scenario generation：接收完整 practice_options，决定 scenario、每个 item 的 practice_option、quantity、include、amount，并生成 scenario summary 和 item explanation。
+- scenario generation：接收完整 practice_options，决定 scenario、每个 item 的 practice_option 和 exact/range quantity，并生成 scenario summary 和 item explanation。scenario 中出现的 item 即表示该方案采用该清单。
 - LLM 不生成单价、来源、清单名称、单位或合价。综合单价和合价由程序根据 scenario 选用的 practice option 回填和计算。
 
 来源样本统一使用：

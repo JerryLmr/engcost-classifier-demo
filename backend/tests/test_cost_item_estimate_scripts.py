@@ -1333,7 +1333,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertIn("scenario_summary", prompt)
         self.assertIn("item_explanation", prompt)
         self.assertIn("不得用 scenario_summary 或 item_explanation 简单复述 practice_description", prompt)
-        self.assertIn("已计价与未计价范围", prompt)
+        self.assertNotIn("include", prompt)
+        self.assertNotIn("amount", prompt)
+        self.assertNotIn("unknown", prompt)
         self.assertIn("按用户给出的同一施工面积暂估，最终以现场核定为准", prompt)
         self.assertNotIn("project_package_query_text", prompt)
         self.assertNotIn("item_query_text", prompt)
@@ -1353,18 +1355,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                         {
                             "display_id": "D001",
                             "practice_option_id": "D001-O01",
-                            "include": True,
-                            "amount": True,
                             "item_explanation": "该项用于屋面防水层施工，位于基层处理后的主防水环节；按用户给出的同一施工面积暂估，最终以现场核定为准；纳入方案并计入金额。",
                             "quantity": {"type": "exact", "value": 100},
                         },
                         {
                             "display_id": "D002",
                             "practice_option_id": "D002-O01",
-                            "include": True,
-                            "amount": False,
                             "item_explanation": "该项用于拆除原防水层，属于新做防水前置工序；因原层范围和厚度待现场确认，纳入方案但暂不计价。",
-                            "quantity": {"type": "unknown"},
+                            "quantity": {"type": "range", "min": 0, "max": 100},
                         },
                     ],
                 }
@@ -1390,8 +1388,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": []}]}, "至少包含一个 item"),
             ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "display_id": "BAD"}]}]}, "无效 display_id"),
             ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "practice_option_id": "D001-BAD"}]}]}, "不属于对应 display"),
-            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "include": "true"}]}]}, "include 必须为布尔值"),
-            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "amount": "true"}]}]}, "amount 必须为布尔值"),
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "include": True}]}]}, "未要求字段"),
+            ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "amount": True}]}]}, "未要求字段"),
             ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "item_explanation": ""}]}]}, "item_explanation"),
             ({"scenarios": [{**self.valid_scenario_result()["scenarios"][0], "items": [{**self.valid_scenario_result()["scenarios"][0]["items"][0], "unit_price": 100}]}]}, "未要求字段"),
         ]
@@ -1403,14 +1401,17 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
     def test_quantity_validation(self):
         self.assertEqual(query_estimate_llm.validate_quantity({"type": "exact", "value": 10}), {"type": "exact", "value": 10.0})
         self.assertEqual(query_estimate_llm.validate_quantity({"type": "range", "min": 5, "max": 10}), {"type": "range", "min": 5.0, "max": 10.0})
-        self.assertEqual(query_estimate_llm.validate_quantity({"type": "unknown"}), {"type": "unknown"})
+        self.assertEqual(query_estimate_llm.validate_quantity({"type": "range", "min": 0, "max": 10}), {"type": "range", "min": 0.0, "max": 10.0})
 
         invalid_quantities = [
             ({"type": "exact"}, "exact"),
             ({"type": "range", "min": 10}, "range"),
             ({"type": "range", "min": 20, "max": 10}, "不得大于"),
-            ({"type": "unknown", "value": 1}, "unknown"),
+            ({"type": "unknown"}, "exact 或 range"),
+            ({"type": "include"}, "exact 或 range"),
+            ({"type": "amount"}, "exact 或 range"),
             ({"type": "exact", "value": -1}, "非负"),
+            ({"type": "range", "min": -1, "max": 10}, "非负"),
         ]
         for quantity, message in invalid_quantities:
             with self.subTest(quantity=quantity):
@@ -1454,18 +1455,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                             {
                                 "display_id": "D001",
                                 "practice_option_id": "D001-O01",
-                                "include": True,
-                                "amount": True,
                                 "item_explanation": "用于屋面主防水层施工，按用户给出的同一施工面积暂估，最终以现场核定为准；纳入方案并计入金额。",
                                 "quantity": {"type": "exact", "value": 10},
                             },
                             {
                                 "display_id": "D002",
                                 "practice_option_id": "D002-O01",
-                                "include": True,
-                                "amount": False,
                                 "item_explanation": "用于拆除原防水层，属于前置工序；原防水层范围和厚度待现场确认，纳入方案但暂不计价。",
-                                "quantity": {"type": "unknown"},
+                                "quantity": {"type": "range", "min": 0, "max": 10},
                             },
                         ],
                     },
@@ -1478,8 +1475,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                             {
                                 "display_id": "D001",
                                 "practice_option_id": "D001-O02",
-                                "include": True,
-                                "amount": True,
                                 "item_explanation": "用于屋面主防水层施工，作为卷材之外的涂膜做法；工程量按区间暂估，纳入方案并计入金额。",
                                 "quantity": {"type": "range", "min": 5, "max": 15},
                             }
@@ -1516,7 +1511,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(first["合价最低值"], 800.0)
         self.assertEqual(first["合价中位数"], 1100.0)
         self.assertEqual(first["合价最高值"], 1400.0)
-        self.assertEqual(estimate_scenarios.iloc[1]["合价最低值"], "")
+        self.assertEqual(estimate_scenarios.iloc[1]["合价最低值"], 0.0)
+        self.assertEqual(estimate_scenarios.iloc[1]["合价中位数"], 100.0)
+        self.assertEqual(estimate_scenarios.iloc[1]["合价最高值"], 200.0)
         self.assertEqual(estimate_scenarios.iloc[1]["综合单价中位数"], 20.0)
         self.assertEqual(estimate_scenarios.iloc[1]["其中包含人工费单价最低值"], "")
         self.assertEqual(estimate_scenarios.iloc[1]["其中包含机械费单价最低值"], "")
@@ -1531,8 +1528,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(summary.loc[0, "是否推荐方案"], "是")
         self.assertIn("屋面防水（3mm SBS卷材防水）", summary.loc[0, "主要施工内容"])
         self.assertIn("防水层拆除（拆除原防水层）", summary.loc[0, "主要施工内容"])
-        self.assertEqual(summary.loc[0, "计价项目数"], 1)
-        self.assertEqual(summary.loc[0, "展示但未计价项目数"], 1)
+        self.assertEqual(summary.loc[0, "计价项目数"], 2)
+        self.assertNotIn("展示但未计价项目数", summary.columns)
+        self.assertNotIn("是否纳入方案", estimate_scenarios.columns)
+        self.assertNotIn("是否计入金额", estimate_scenarios.columns)
         self.assertEqual(summary.loc[0, "合价最低值"], 800.0)
         self.assertIn("原防水层范围和厚度待现场确认", summary.loc[0, "待现场确认事项"])
 
@@ -1582,11 +1581,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             },
             scenario_count=2,
             scenario_item_count=3,
-            scenario_included_item_count=2,
-            scenario_amount_item_count=1,
             scenario_exact_quantity_count=1,
-            scenario_range_quantity_count=1,
-            scenario_unknown_quantity_count=1,
+            scenario_range_quantity_count=2,
             scenario_generation_trace={"prompt_chars": 120, "prompt_tokens": 50, "completion_tokens": 10},
             scenario_generation_fallback=False,
             scenario_generation_error="",
@@ -1605,6 +1601,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertNotIn("display_family_selection_default_practice_option_ids", values)
         self.assertEqual(values["scenario_count"], 2)
         self.assertEqual(values["scenario_item_count"], 3)
+        self.assertNotIn("scenario_included_item_count", values)
+        self.assertNotIn("scenario_amount_item_count", values)
+        self.assertNotIn("scenario_unknown_quantity_count", values)
         self.assertEqual(values["scenario_generation_status"], "success")
         self.assertEqual(values["scenario_generation_prompt_tokens"], 50)
         self.assertEqual(values["invalid_display_ids"], "BAD")
