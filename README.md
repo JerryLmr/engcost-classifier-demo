@@ -279,7 +279,7 @@ candidate_display_groups
 输出 xlsx 固定包含：
 
 - `estimate_summary`：面向用户/领导的估价摘要，一行一个 scenario，展示推荐标记、方案说明、主要施工内容、计价项目数和合价区间。
-- `estimate_scenarios`：scenario 完整项目级主表，一行一个 scenario item，展示清单名称、选用工艺、其他可选工艺、项目说明、exact/range 工程量三值、综合单价、人工费/机械费单价组成参考、合价和来源样本。
+- `estimate_scenarios`：scenario 完整项目级主表，一行一个 scenario item，展示清单名称、选用工艺、其他可选工艺、项目说明、单列“工程量预估”、综合单价、人工费/机械费单价组成参考、合价和来源样本。exact 显示单值，range 显示 `min～max`，单位继续使用独立的“单位”列。
 - `matched_project_packages`：工程包级召回结果，包括 `package_query_similarity`、`project_package_id`、工程名称、`project_name_text`、`cost_item_names_summary`、`consultation_time`、`location`、`cache_subject` 和 `item_count`。
 - `direct_item_hits`：清单行级直接召回结果，参与生成 `retrieved_evidence_items`，不单独输出为 sheet。
 - `retrieved_evidence_items`：工程包召回与清单行召回合并后的逐行结果；输出时体现为回填 `family_id` 后的 `evidence_items`。

@@ -1493,10 +1493,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(first["方案编号"], "S001")
         self.assertEqual(first["清单名称"], "屋面防水")
         self.assertEqual(first["项目说明"], "用于屋面主防水层施工，按用户给出的同一施工面积暂估，最终以现场核定为准；纳入方案并计入金额。")
-        self.assertEqual(first["工程量类型"], "exact")
-        self.assertEqual(first["工程量最低值"], 10.0)
-        self.assertEqual(first["工程量中位数"], 10.0)
-        self.assertEqual(first["工程量最高值"], 10.0)
+        self.assertEqual(first["工程量预估"], 10.0)
         self.assertEqual(first["综合单价最低值"], 80.0)
         self.assertEqual(first["综合单价最高值"], 140.0)
         self.assertEqual(first["其中包含人工费单价最低值"], 10.0)
@@ -1518,9 +1515,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(estimate_scenarios.iloc[1]["其中包含人工费单价最低值"], "")
         self.assertEqual(estimate_scenarios.iloc[1]["其中包含机械费单价最低值"], "")
         range_row = estimate_scenarios[estimate_scenarios["方案编号"] == "S002"].iloc[0]
-        self.assertEqual(range_row["工程量最低值"], 5.0)
-        self.assertEqual(range_row["工程量中位数"], 10.0)
-        self.assertEqual(range_row["工程量最高值"], 15.0)
+        self.assertEqual(estimate_scenarios.iloc[1]["工程量预估"], "0～10")
+        self.assertEqual(range_row["工程量预估"], "5～15")
         self.assertEqual(range_row["合价最低值"], 250.0)
         self.assertEqual(range_row["合价中位数"], 600.0)
         self.assertEqual(range_row["合价最高值"], 1050.0)
@@ -1534,6 +1530,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertNotIn("是否计入金额", estimate_scenarios.columns)
         self.assertEqual(summary.loc[0, "合价最低值"], 800.0)
         self.assertIn("原防水层范围和厚度待现场确认", summary.loc[0, "待现场确认事项"])
+        for removed_column in ["工程量类型", "工程量最低值", "工程量中位数", "工程量最高值", "工程量依据"]:
+            self.assertNotIn(removed_column, estimate_scenarios.columns)
+
+    def test_quantity_values_keeps_internal_three_value_calculation(self):
+        self.assertEqual(query_estimate_llm.quantity_values({"type": "exact", "value": 10}), (10, 10, 10))
+        self.assertEqual(query_estimate_llm.quantity_values({"type": "range", "min": 5, "max": 15}), (5.0, 10.0, 15.0))
 
     def test_build_parse_info_includes_scenario_metrics(self):
         rewrite = query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], True)

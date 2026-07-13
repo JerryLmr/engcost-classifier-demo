@@ -184,11 +184,7 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "选用工艺",
     "其他可选工艺",
     "项目说明",
-    "工程量类型",
-    "工程量最低值",
-    "工程量中位数",
-    "工程量最高值",
-    "工程量依据",
+    "工程量预估",
     "合价最低值",
     "合价中位数",
     "合价最高值",
@@ -2554,15 +2550,6 @@ def quantity_values(quantity: dict[str, Any]) -> tuple[Any, Any, Any]:
     raise ValueError("quantity.type 只能是 exact 或 range")
 
 
-def quantity_basis(quantity: dict[str, Any]) -> str:
-    quantity_type = cell_text(quantity.get("type"))
-    if quantity_type == "exact":
-        return "按 scenario item 判断为精确工程量，最终以现场核定为准"
-    if quantity_type == "range":
-        return "按 scenario item 判断为工程量区间，中位数按区间中点暂估，最终以现场核定为准"
-    raise ValueError("quantity.type 只能是 exact 或 range")
-
-
 def quantity_amounts(quantity: dict[str, Any], price_stats: dict[str, Any]) -> tuple[Any, Any, Any]:
     quantity_type = cell_text(quantity.get("type"))
     if quantity_type == "exact":
@@ -2606,7 +2593,6 @@ def build_scenario_outputs(
             ]
             price_stats = price_stats_for_option(option, candidate_families, evidence_items)
             amount_low, amount_mid, amount_high = quantity_amounts(item.quantity, price_stats)
-            quantity_low, quantity_mid, quantity_high = quantity_values(item.quantity)
             family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
             scenario_rows.append(
                 {
@@ -2619,11 +2605,7 @@ def build_scenario_outputs(
                     "选用工艺": cell_text(option.get("practice_description")),
                     "其他可选工艺": "；".join([text for text in other_options if text]),
                     "项目说明": item.selection_reason,
-                    "工程量类型": cell_text(item.quantity.get("type")),
-                    "工程量最低值": quantity_low,
-                    "工程量中位数": quantity_mid,
-                    "工程量最高值": quantity_high,
-                    "工程量依据": quantity_basis(item.quantity),
+                    "工程量预估": quantity_display(item.quantity),
                     "合价最低值": amount_low,
                     "合价中位数": amount_mid,
                     "合价最高值": amount_high,
@@ -2681,8 +2663,7 @@ TEXT_IDENTIFIER_COLUMNS = {
 
 TEXT_VALUE_COLUMNS = {
     "是否推荐方案",
-    "工程量类型",
-    "工程量依据",
+    "工程量预估",
     "方案说明",
     "主要施工内容",
     "与其他方案的核心差异",
@@ -2820,16 +2801,19 @@ def build_estimate_summary(
 ) -> pd.DataFrame:
     if estimate_scenarios.empty:
         return pd.DataFrame(columns=ESTIMATE_SUMMARY_COLUMNS)
-    scenario_summary_by_id = {scenario.scenario_id: scenario.scenario_summary for scenario in scenarios}
+    scenario_by_id = {scenario.scenario_id: scenario for scenario in scenarios}
     rows: list[dict[str, Any]] = []
     first_order = numeric_or_none(estimate_scenarios.iloc[0].get("方案顺序"))
     for (_scenario_order, scenario_id), frame in estimate_scenarios.groupby(["方案顺序", "方案编号"], sort=True):
         scenario = frame.iloc[0]
-        conditional_frame = frame[
-            frame["工程量类型"].map(cell_text).eq("range")
-            & pd.to_numeric(frame["工程量最低值"], errors="coerce").fillna(-1).eq(0)
+        scenario_object = scenario_by_id.get(cell_text(scenario_id))
+        scenario_summary = scenario_object.scenario_summary if scenario_object is not None else ""
+        conditional_explanations = [
+            item.selection_reason
+            for item in (scenario_object.items if scenario_object is not None else [])
+            if cell_text(item.quantity.get("type")) == "range"
+            and numeric_or_none(item.quantity.get("min")) == 0
         ]
-        scenario_summary = scenario_summary_by_id.get(cell_text(scenario_id), "")
         rows.append(
             {
                 "方案顺序": scenario.get("方案顺序", ""),
@@ -2843,7 +2827,7 @@ def build_estimate_summary(
                 "合价最低值": amount_sum(frame, "合价最低值"),
                 "合价中位数": amount_sum(frame, "合价中位数"),
                 "合价最高值": amount_sum(frame, "合价最高值"),
-                "待现场确认事项": join_non_empty(conditional_frame.get("项目说明", pd.Series(dtype=object)).tolist()),
+                "待现场确认事项": join_non_empty(conditional_explanations),
             }
         )
     return pd.DataFrame(rows, columns=ESTIMATE_SUMMARY_COLUMNS).fillna("")
