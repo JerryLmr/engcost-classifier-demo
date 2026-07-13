@@ -25,7 +25,6 @@ from classifier.llm_client import LLMServiceError, check_lmstudio_service, reque
 
 
 DEFAULT_PACKAGE_WEIGHT_TEMPERATURE = 0.10
-SCENARIO_DISPLAY_LIMIT = 100
 
 MATCHED_PROJECT_PACKAGE_COLUMNS = [
     "rank",
@@ -48,6 +47,11 @@ MATCHED_PROJECT_EXAMPLE_COLUMNS = [
     "consultation_time",
     "location",
     "item_order",
+    "stable_sample_id",
+    "source_ref",
+    "family_id",
+    "display_id",
+    "practice_option_id",
     "cost_item_name",
     "project_description",
     "unit",
@@ -175,6 +179,9 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "方案顺序",
     "方案编号",
     "方案名称",
+    "project_package_id",
+    "stable_sample_id",
+    "source_ref",
     "display_id",
     "清单名称",
     "选用工艺",
@@ -182,6 +189,7 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "单位",
     "项目说明",
     "工程量预估",
+    "工程量依据",
     "合价最低值",
     "合价中位数",
     "合价最高值",
@@ -245,10 +253,20 @@ class QueryRewrite:
 
 @dataclass(frozen=True)
 class ScenarioItem:
+    project_package_id: str
+    stable_sample_id: str
+    source_ref: str
     display_id: str
     practice_option_id: str
     selection_reason: str
     quantity: dict[str, Any]
+    quantity_reason: str
+
+
+@dataclass(frozen=True)
+class HistoricalPlan:
+    project_package_id: str
+    items: list[ScenarioItem]
 
 
 @dataclass(frozen=True)
@@ -275,6 +293,8 @@ class QueryResult:
     evidence_items: pd.DataFrame
     parse_info: pd.DataFrame
     llm_trace: pd.DataFrame
+    success: bool = True
+    error_message: str = ""
 
 
 def parse_args() -> argparse.Namespace:
@@ -692,6 +712,7 @@ def ordered_project_items(samples: pd.DataFrame, project_package_id: str) -> pd.
 def build_matched_project_examples(
     matched_project_packages: pd.DataFrame,
     samples: pd.DataFrame,
+    sample_lookup: dict[str, dict[str, Any]],
     limit: int = 3,
 ) -> list[dict[str, Any]]:
     if matched_project_packages.empty or limit <= 0:
@@ -704,21 +725,32 @@ def build_matched_project_examples(
     for fallback_rank, (_index, project) in enumerate(ranked.iterrows(), start=1):
         project_package_id = cell_text(project.get("project_package_id"))
         project_items = ordered_project_items(samples, project_package_id)
-        items = [
-            {
-                "cost_item_name": cell_text(item.get("cost_item_name")),
-                "project_description": cell_text(item.get("project_description")),
-                "unit": cell_text(item.get("unit")) or cell_text(item.get("unit_normalized")),
-                "quantity": numeric_or_none(item.get("quantity")),
-                "unit_price": numeric_or_none(item.get("unit_price")),
-                "total_price": numeric_or_none(item.get("total_price")),
-            }
-            for _item_index, item in project_items.iterrows()
-        ]
+        items: list[dict[str, Any]] = []
+        for _item_index, item in project_items.iterrows():
+            stable_sample_id = cell_text(item.get("stable_sample_id"))
+            mapped = sample_lookup.get(stable_sample_id)
+            if mapped is None:
+                raise ValueError(f"历史工程样本未映射到证据池: {project_package_id}/{stable_sample_id}")
+            items.append(
+                {
+                    "stable_sample_id": stable_sample_id,
+                    "source_ref": cell_text(mapped.get("source_ref")),
+                    "family_id": cell_text(mapped.get("family_id")),
+                    "display_id": cell_text(mapped.get("display_id")),
+                    "practice_option_id": cell_text(mapped.get("practice_option_id")),
+                    "cost_item_name": cell_text(item.get("cost_item_name")),
+                    "project_description": cell_text(item.get("project_description")),
+                    "unit": cell_text(item.get("unit")) or cell_text(item.get("unit_normalized")),
+                    "quantity": numeric_or_none(item.get("quantity")),
+                    "unit_price": numeric_or_none(item.get("unit_price")),
+                    "total_price": numeric_or_none(item.get("total_price")),
+                }
+            )
         examples.append(
             {
                 "rank": int(numeric_or_none(project.get("rank")) or fallback_rank),
                 "project_package_id": project_package_id,
+                "package_query_similarity": numeric_or_none(project.get("package_query_similarity")),
                 "project_name": cell_text(project.get("工程名称")),
                 "project_name_text": cell_text(project.get("project_name_text")),
                 "consultation_time": cell_text(project.get("consultation_time")),
@@ -745,6 +777,11 @@ def matched_project_examples_frame(examples: list[dict[str, Any]]) -> pd.DataFra
                     "consultation_time": cell_text(example.get("consultation_time")),
                     "location": cell_text(example.get("location")),
                     "item_order": item_order,
+                    "stable_sample_id": cell_text(item.get("stable_sample_id")),
+                    "source_ref": cell_text(item.get("source_ref")),
+                    "family_id": cell_text(item.get("family_id")),
+                    "display_id": cell_text(item.get("display_id")),
+                    "practice_option_id": cell_text(item.get("practice_option_id")),
                     "cost_item_name": cell_text(item.get("cost_item_name")),
                     "project_description": cell_text(item.get("project_description")),
                     "unit": cell_text(item.get("unit")),
@@ -754,34 +791,6 @@ def matched_project_examples_frame(examples: list[dict[str, Any]]) -> pd.DataFra
                 }
             )
     return pd.DataFrame(rows, columns=MATCHED_PROJECT_EXAMPLE_COLUMNS)
-
-
-def compact_matched_project_examples_for_scenario(
-    matched_project_examples: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    compact_examples: list[dict[str, Any]] = []
-    for example in matched_project_examples:
-        if not isinstance(example, dict):
-            continue
-        raw_items = example.get("items") if isinstance(example.get("items"), list) else []
-        items = [
-            {
-                "cost_item_name": cell_text(item.get("cost_item_name")),
-                "project_description": cell_text(item.get("project_description")),
-                "unit": cell_text(item.get("unit")),
-                "quantity": numeric_or_none(item.get("quantity")),
-            }
-            for item in raw_items
-            if isinstance(item, dict)
-        ]
-        compact_examples.append(
-            {
-                "project_name": cell_text(example.get("project_name"))
-                or cell_text(example.get("project_name_text")),
-                "items": items,
-            }
-        )
-    return compact_examples
 
 
 def score_direct_items(samples: pd.DataFrame, item_query_similarities: np.ndarray, top_items: int) -> pd.DataFrame:
@@ -1779,242 +1788,17 @@ def format_number_cell(value: Any) -> str:
     return str(number)
 
 
-def select_scenario_displays(
+def display_option_maps(
     displays_with_options: pd.DataFrame,
-    candidate_display_groups: pd.DataFrame,
-    limit: int = SCENARIO_DISPLAY_LIMIT,
-) -> pd.DataFrame:
-    if displays_with_options.empty or candidate_display_groups.empty or limit <= 0:
-        return displays_with_options.iloc[0:0].copy().reset_index(drop=True)
-
-    ranked = candidate_display_groups.copy()
-    ranked["_source_order"] = range(len(ranked))
-    ranked["_support_rank"] = pd.to_numeric(ranked.get("support_rank"), errors="coerce")
-    ranked = ranked.sort_values(
-        ["_support_rank", "_source_order"],
-        ascending=[True, True],
-        kind="stable",
-        na_position="last",
-    )
-    selected_display_ids = [
-        display_id
-        for display_id in ranked.get("display_id", pd.Series(dtype=object)).map(cell_text).tolist()
-        if display_id
-    ][:limit]
+) -> tuple[dict[str, pd.Series], dict[tuple[str, str], dict[str, Any]]]:
     display_map = {
-        cell_text(row.get("display_id")): row.to_dict()
+        cell_text(row.get("display_id")): row
         for _index, row in displays_with_options.iterrows()
     }
-    selected_rows = [display_map[display_id] for display_id in selected_display_ids if display_id in display_map]
-    return pd.DataFrame(selected_rows, columns=displays_with_options.columns).reset_index(drop=True)
-
-
-def build_scenario_generation_prompt(
-    raw_text: str,
-    scenario_displays: pd.DataFrame,
-    matched_project_examples: list[dict[str, Any]],
-) -> tuple[str, list[dict[str, Any]]]:
-    records: list[dict[str, Any]] = []
-
-    for _index, display in scenario_displays.iterrows():
-        practice_options = (
-            display.get("practice_options")
-            if isinstance(display.get("practice_options"), list)
-            else []
-        )
-        records.append(
-            {
-                "display_id": cell_text(display.get("display_id")),
-                "display_name": cell_text(display.get("display_name")),
-                "unit": cell_text(display.get("unit")),
-                "practice_options": [
-                    {
-                        "practice_option_id": cell_text(
-                            option.get("practice_option_id")
-                        ),
-                        "practice_description": cell_text(
-                            option.get("practice_description")
-                        ),
-                    }
-                    for option in practice_options
-                    if isinstance(option, dict)
-                ],
-            }
-        )
-    prompt = f"""
-你负责根据用户需求、候选清单及相似历史工程，生成一个或多个维修估价方案。
-
-候选 displays 已由检索结果整理完成。
-每个 display 下提供一个或多个 practice_options，代表历史数据中不同的具体做法。
-
-matched_project_examples 是本次召回的相似历史工程。
-其中每个 project 都代表一个实际实施过的完整历史工程，
-items 是该工程实际使用过的清单组合。
-
-本次任务不是从候选清单中自由拼装方案，
-而是以相似历史工程为基础形成当前估价方案。
-
-【方案形成方法】
-
-1. 先结合用户需求，从 matched_project_examples 中选择最适合作为参考骨架的历史工程。
-
-2. 以该历史工程中与当前用户需求相关的 items 作为方案主体。
-
-3. 再查看其他高相似历史工程：
-   - 将与方案主体相同或近似的历史项合并；
-   - 将多个高相似历史工程中重复出现、与当前需求相关但骨架中缺少的内容补入；
-   - 不纳入仅属于某个更大综合工程、且与当前需求明显无关的内容。
-
-4. 历史工程中的重复项或不同写法，应尽量合并为一个当前估价项，
-   不要因为来自不同 project 就重复计价。
-
-5. 将整理后的历史工程内容回查到输入 displays 和 practice_options：
-   - 最终只能选择输入中已有的 display_id 和 practice_option_id；
-   - 选择与历史做法和当前用户需求最匹配的 practice_option；
-   - 无法合理映射的历史项不要自行编造。
-
-6. 在方案组成确定后，再解释为什么采用该历史工程作为骨架、
-   合并了哪些其他历史案例内容，以及当前估价口径为什么适合本次需求。
-
-同一个 display 下存在多个彼此独立、且历史工程和当前需求都支持的具体做法时，
-可以选择多个不同的 practice_option。
-
-【任务】
-
-1. 根据用户需求和历史案例，决定生成一个或多个方案。
-
-2. 每个方案都应有明确的历史工程骨架，
-   并在此基础上完成相关历史清单的合并和当前候选映射。
-
-3. 生成简短明确的 scenario_name。
-
-4. 生成 scenario_summary，说明：
-   - 当前方案参考了哪个历史工程的整体清单结构；
-   - 从其他相似历史工程中合并或补充了哪些相关内容；
-   - 当前按什么工程范围进行估价；
-   - 当前没有纳入哪些明显属于扩大范围的内容；
-   - 哪些关键条件发生变化时，需要重新调整当前估价。
-
-5. 为每个 item 生成 item_explanation，说明：
-   - 该项在当前方案中的作用；
-   - 该项参考了哪个或哪些历史工程；
-   - 为什么选择当前 practice_option；
-   - 工程量的确定依据。
-
-6. 为每个 item 给出 quantity：
-   - 可以确定单一数值时使用 exact；
-   - 只能合理估计区间时使用 range。
-
-7. 按与用户需求的符合程度排列方案。
-
-【判断原则】
-
-1. 用户明确提出的维修对象、材料、规格、型号、施工方法和工程量优先于历史案例。
-
-2. 历史案例用于提供真实实施过的方案结构，
-   不要脱离历史工程自行构造一套全新的清单组合。
-
-3. 最终方案应尽量保持与参考历史工程相近的完整程度，
-   但应删除与当前需求明显无关的内容。
-
-4. 多个高相似历史工程中重复出现的相关项，
-   应优先保留或合并到当前方案中。
-
-5. 同一工作内容在多个历史工程中重复出现时，
-   应合并为一个当前估价项，不得因来源不同而重复计价。
-
-6. 结合 practice_description 判断不同候选项的施工及计价范围，
-   避免选择已被另一项明确包含的重复内容。
-
-7. 描述清单之间的施工关系时，
-   应以历史工程实际组合和 practice_description 为依据，
-   不得添加没有历史或输入依据的关系。
-
-8. 工程量应根据用户信息、历史工程的施工范围、清单单位和当前方案合理确定。
-   多个清单属于同一施工范围时，可以采用相同或相关工程量，
-   并在 item_explanation 中说明。
-
-9. 不得选择输入中不存在的 display_id 或 practice_option_id。
-
-10. 不得输出单价、合价或自行推算价格。
-
-11. 不得仅以“需要现场确认”回避形成当前方案。
-    应先依据最匹配的历史工程给出当前可执行的参考口径，
-    再说明会使该口径失效的关键条件。
-
-【quantity 格式】
-
-精确值：
-
-{{
-  "type": "exact",
-  "value": 100
-}}
-
-区间：
-
-{{
-  "type": "range",
-  "min": 80,
-  "max": 120
-}}
-
-【输出格式】
-
-{{
-  "scenarios": [
-    {{
-      "scenario_id": "S001",
-      "scenario_order": 1,
-      "scenario_name": "方案名称",
-      "scenario_summary": "说明历史工程骨架、合并内容、当前估价范围和失效条件",
-      "items": [
-        {{
-          "display_id": "D001",
-          "practice_option_id": "D001-O01",
-          "item_explanation": "说明该项的历史来源、用途、option选择和工程量依据",
-          "quantity": {{
-            "type": "exact",
-            "value": 100
-          }}
-        }}
-      ]
-    }}
-  ]
-}}
-
-【输出约束】
-
-- scenarios 必须为非空数组。
-- scenario_id 必须唯一。
-- scenario_order 从 1 开始连续递增。
-- 每个 scenario 至少包含一个 item。
-- 每个 display_id 必须存在于输入 displays。
-- 每个 practice_option_id 必须属于对应 display。
-- 同一 scenario 中不得重复相同的 display_id 和 practice_option_id。
-- scenario_name、scenario_summary 和 item_explanation 不得为空。
-- quantity.type 只能是 exact 或 range。
-- exact 必须包含非负 value。
-- range 必须包含非负 min 和 max，且 min 不得大于 max。
-- 不得输出未要求字段。
-
-【输入】
-
-{json_text({
-    "user_query": raw_text,
-    "displays": records,
-    "matched_project_examples": matched_project_examples,
-})}
-""".strip()
-    return prompt, records
-
-
-def display_option_maps(displays_with_options: pd.DataFrame) -> tuple[dict[str, pd.Series], dict[tuple[str, str], dict[str, Any]]]:
-    display_map = {cell_text(row.get("display_id")): row for _index, row in displays_with_options.iterrows()}
     option_map: dict[tuple[str, str], dict[str, Any]] = {}
     for display_id, row in display_map.items():
-        practice_options = row.get("practice_options") if isinstance(row.get("practice_options"), list) else []
-        for option in practice_options:
+        options = row.get("practice_options") if isinstance(row.get("practice_options"), list) else []
+        for option in options:
             if isinstance(option, dict):
                 option_map[(display_id, cell_text(option.get("practice_option_id")))] = option
     return display_map, option_map
@@ -2046,174 +1830,384 @@ def validate_quantity(value: Any) -> dict[str, Any]:
     raise ValueError("quantity.type 只能是 exact 或 range")
 
 
-def parse_scenario_generation_result(
-    result: dict[str, Any],
+def build_stable_sample_lookup(
+    samples: pd.DataFrame,
+    evidence_items: pd.DataFrame,
+    display_group_families: pd.DataFrame,
     displays_with_options: pd.DataFrame,
-    warnings: list[str] | None = None,
-) -> list[EstimateScenario]:
-    _ = warnings
-    allowed_scenario_keys = {"scenario_id", "scenario_order", "scenario_name", "scenario_summary", "items"}
-    allowed_item_keys = {"display_id", "practice_option_id", "item_explanation", "selection_reason", "quantity"}
-    raw_scenarios = result.get("scenarios")
-    if not isinstance(raw_scenarios, list) or not raw_scenarios:
-        raise ValueError("scenario_generation 输出缺少非空 scenarios list")
-    display_map, option_map = display_option_maps(displays_with_options)
-    available_display_ids = set(display_map)
-    scenarios: list[EstimateScenario] = []
-    scenario_ids: set[str] = set()
-    for expected_order, raw_scenario in enumerate(raw_scenarios, start=1):
-        if not isinstance(raw_scenario, dict):
-            raise ValueError("scenario 必须为 object")
-        extra_keys = set(raw_scenario) - allowed_scenario_keys
-        if extra_keys:
-            raise ValueError(f"scenario 包含未要求字段: {join_non_empty(sorted(extra_keys))}")
-        scenario_id = cell_text(raw_scenario.get("scenario_id"))
-        if not scenario_id:
-            raise ValueError("scenario_id 不得为空")
-        if scenario_id in scenario_ids:
-            raise ValueError(f"scenario_id 重复: {scenario_id}")
-        scenario_ids.add(scenario_id)
-        scenario_order = int(numeric_or_none(raw_scenario.get("scenario_order")) or 0)
-        if scenario_order != expected_order:
-            raise ValueError("scenario_order 必须从 1 开始连续递增")
-        scenario_name = cell_text(raw_scenario.get("scenario_name"))
-        scenario_summary = cell_text(raw_scenario.get("scenario_summary"))
-        if not scenario_name:
-            raise ValueError("scenario_name 不得为空")
-        if not scenario_summary:
-            raise ValueError("scenario_summary 不得为空")
-        raw_items = raw_scenario.get("items")
-        if not isinstance(raw_items, list) or not raw_items:
-            raise ValueError("每个 scenario 至少包含一个 item")
-        items: list[ScenarioItem] = []
-        seen_items: set[tuple[str, str]] = set()
-        for raw_item in raw_items:
-            if not isinstance(raw_item, dict):
-                raise ValueError("scenario item 必须为 object")
-            extra_item_keys = set(raw_item) - allowed_item_keys
-            if extra_item_keys:
-                raise ValueError(f"scenario item 包含未要求字段: {join_non_empty(sorted(extra_item_keys))}")
-            display_id = cell_text(raw_item.get("display_id"))
-            practice_option_id = cell_text(raw_item.get("practice_option_id"))
-            if display_id not in available_display_ids:
-                raise ValueError(f"scenario item 引用了无效 display_id: {display_id}")
-            if (display_id, practice_option_id) not in option_map:
-                raise ValueError(f"practice_option_id 不属于对应 display: {display_id}/{practice_option_id}")
-            item_key = (display_id, practice_option_id)
-            if item_key in seen_items:
-                raise ValueError(f"同一 scenario 中重复 display_id 和 practice_option_id: {display_id}/{practice_option_id}")
-            seen_items.add(item_key)
-            selection_reason = cell_text(raw_item.get("item_explanation")) or cell_text(raw_item.get("selection_reason"))
-            if not selection_reason:
-                raise ValueError("item_explanation 不得为空")
-            items.append(
-                ScenarioItem(
-                    display_id=display_id,
-                    practice_option_id=practice_option_id,
-                    selection_reason=selection_reason,
-                    quantity=validate_quantity(raw_item.get("quantity")),
-                )
-            )
-        scenarios.append(
-            EstimateScenario(
-                scenario_id=scenario_id,
-                scenario_order=scenario_order,
-                scenario_name=scenario_name,
-                scenario_summary=scenario_summary,
-                items=items,
-            )
+) -> dict[str, dict[str, Any]]:
+    stable_ids = samples.get("stable_sample_id", pd.Series(dtype=object)).map(cell_text)
+    if len(stable_ids) != len(samples) or stable_ids.eq("").any():
+        raise ValueError("samples 中 stable_sample_id 不得为空")
+    duplicate_ids = stable_ids[stable_ids.duplicated(keep=False)]
+    if not duplicate_ids.empty:
+        raise ValueError(f"stable_sample_id 必须全局唯一: {join_non_empty(duplicate_ids.tolist(), limit=10)}")
+
+    family_to_display: dict[str, str] = {}
+    for _index, row in display_group_families.iterrows():
+        family_id = cell_text(row.get("family_id"))
+        display_id = cell_text(row.get("display_id"))
+        if not family_id or not display_id:
+            raise ValueError("family/display 映射不得为空")
+        if family_id in family_to_display and family_to_display[family_id] != display_id:
+            raise ValueError(f"family_id 映射到多个 display: {family_id}")
+        family_to_display[family_id] = display_id
+
+    family_to_option: dict[str, str] = {}
+    for _index, display in displays_with_options.iterrows():
+        options = display.get("practice_options") if isinstance(display.get("practice_options"), list) else []
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            option_id = cell_text(option.get("practice_option_id"))
+            for family_value in option.get("family_ids") or []:
+                family_id = cell_text(family_value)
+                if family_id in family_to_option and family_to_option[family_id] != option_id:
+                    raise ValueError(f"family_id 映射到多个 practice option: {family_id}")
+                family_to_option[family_id] = option_id
+
+    lookup: dict[str, dict[str, Any]] = {}
+    for _index, row in evidence_items.iterrows():
+        stable_sample_id = cell_text(row.get("stable_sample_id"))
+        if not stable_sample_id:
+            raise ValueError("evidence item 缺少 stable_sample_id")
+        if stable_sample_id in lookup:
+            raise ValueError(f"evidence pool 中 stable_sample_id 重复: {stable_sample_id}")
+        family_id = cell_text(row.get("family_id"))
+        display_id = family_to_display.get(family_id, "")
+        practice_option_id = family_to_option.get(family_id, "")
+        if not display_id or not practice_option_id:
+            raise ValueError(f"stable_sample_id 无法映射到 display/option: {stable_sample_id}")
+        lookup[stable_sample_id] = {
+            **row.to_dict(),
+            "stable_sample_id": stable_sample_id,
+            "source_ref": cell_text(row.get("source_ref")),
+            "family_id": family_id,
+            "display_id": display_id,
+            "practice_option_id": practice_option_id,
+            "project_package_id": cell_text(row.get("project_package_id")),
+        }
+    return lookup
+
+
+def historical_display_records(displays_with_options: pd.DataFrame) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for _index, display in displays_with_options.iterrows():
+        options = display.get("practice_options") if isinstance(display.get("practice_options"), list) else []
+        records.append(
+            {
+                "display_id": cell_text(display.get("display_id")),
+                "display_name": cell_text(display.get("display_name")),
+                "unit": cell_text(display.get("unit")),
+                "practice_options": [
+                    {
+                        "practice_option_id": cell_text(option.get("practice_option_id")),
+                        "practice_description": cell_text(option.get("practice_description")),
+                    }
+                    for option in options
+                    if isinstance(option, dict)
+                ],
+            }
         )
-    return scenarios
+    return records
 
 
-def generate_estimate_scenarios(
+def historical_project_prompt_records(examples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for example in examples:
+        items = example.get("items") if isinstance(example.get("items"), list) else []
+        records.append(
+            {
+                "project_package_id": cell_text(example.get("project_package_id")),
+                "project_name": cell_text(example.get("project_name")) or cell_text(example.get("project_name_text")),
+                "package_query_similarity": example.get("package_query_similarity"),
+                "items": [
+                    {
+                        "item_order": index,
+                        "stable_sample_id": cell_text(item.get("stable_sample_id")),
+                        "source_ref": cell_text(item.get("source_ref")),
+                        "family_id": cell_text(item.get("family_id")),
+                        "display_id": cell_text(item.get("display_id")),
+                        "practice_option_id": cell_text(item.get("practice_option_id")),
+                        "cost_item_name": cell_text(item.get("cost_item_name")),
+                        "project_description": cell_text(item.get("project_description")),
+                        "unit": cell_text(item.get("unit")),
+                        "quantity": item.get("quantity"),
+                    }
+                    for index, item in enumerate(items, start=1)
+                    if isinstance(item, dict)
+                ],
+            }
+        )
+    return records
+
+
+def build_historical_plan_determination_prompt(
     raw_text: str,
-    scenario_displays: pd.DataFrame,
     matched_project_examples: list[dict[str, Any]],
-    warnings: list[str] | None = None,
-    all_candidate_display_count: int | None = None,
-    scenario_display_limit: int = SCENARIO_DISPLAY_LIMIT,
-) -> tuple[list[EstimateScenario], bool, bool, str, str, dict[str, Any]]:
-    prompt, records = build_scenario_generation_prompt(raw_text, scenario_displays, matched_project_examples)
-    max_tokens = 4096
-    scenario_practice_option_count = sum(len(record.get("practice_options") or []) for record in records)
-    matched_project_item_count = sum(
-        len(example.get("items") or [])
+    displays_with_options: pd.DataFrame,
+    core_display_id: str = "",
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    projects = historical_project_prompt_records(matched_project_examples)
+    displays = historical_display_records(displays_with_options)
+    prompt = f"""
+你需要从三个完整历史工程中选择一个最适合作为当前维修估价骨架的真实工程。
+
+只能选择输入中已有的 project_package_id 和该工程已有的 stable_sample_id。以所选历史工程完整清单为基础：
+- 保留与当前维修对象和范围相关的清单；
+- 剔除明显属于其他维修对象、其他系统或扩大工程范围的清单；
+- 不得从其他历史工程增加清单，不得生成新清单。
+
+对每个保留项：
+- 根据用户明确材料、规格、型号和工艺选择最终 practice_option_id；
+- practice_option_id 必须属于该历史项对应的同一 display；
+- 用户未明确工艺时优先保持历史项原 option；
+- 估计 exact 或 range quantity，用户明确工程量优先；
+- 同一施工范围的相关项可结合用户工程量，台、套、项、系统类可参考历史数量；
+- 不得机械照搬明显不适合当前范围的历史数量。
+
+不得输出价格、方案名称、方案说明或未要求字段。只输出以下 JSON：
+{{
+  "project_package_id": "输入中已有的真实ID",
+  "selected_items": [
+    {{
+      "stable_sample_id": "所选工程中的已有ID",
+      "practice_option_id": "同一display中的已有option",
+      "quantity": {{"type": "exact", "value": 500}},
+      "quantity_reason": "工程量和工艺选择依据"
+    }}
+  ]
+}}
+
+输入中的 core_display_id 是程序按 direct item 相似度确定的核心维修对象，最终至少保留一个该 display 的历史项。
+
+输入：
+{json_text({"user_query": raw_text, "core_display_id": core_display_id, "matched_project_examples": projects, "displays_with_options": displays})}
+""".strip()
+    return prompt, projects, displays
+
+
+def parse_historical_plan_determination_result(
+    result: dict[str, Any],
+    matched_project_examples: list[dict[str, Any]],
+    displays_with_options: pd.DataFrame,
+    sample_lookup: dict[str, dict[str, Any]],
+    core_display_id: str,
+) -> HistoricalPlan:
+    if not isinstance(result, dict) or set(result) != {"project_package_id", "selected_items"}:
+        raise ValueError("historical_plan_determination 顶层只允许 project_package_id 和 selected_items")
+    project_ids = {
+        cell_text(example.get("project_package_id"))
         for example in matched_project_examples
-        if isinstance(example, dict)
-    )
-    input_counts = {
-        "all_candidate_display_count": len(scenario_displays)
-        if all_candidate_display_count is None
-        else all_candidate_display_count,
-        "scenario_display_limit": scenario_display_limit,
-        "scenario_display_count": len(scenario_displays),
-        "scenario_practice_option_count": scenario_practice_option_count,
-        "matched_project_example_count": len(matched_project_examples),
-        "matched_project_item_count": matched_project_item_count,
+        if cell_text(example.get("project_package_id"))
     }
-    if scenario_displays.empty:
-        trace = trace_row(
-            "scenario_generation",
-            "根据 practice options 生成估价 scenarios",
-            True,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text({**input_counts, "scenario_count": 0, "scenario_item_count": 0}),
-            scenario_count=0,
-            scenario_item_count=0,
+    project_package_id = cell_text(result.get("project_package_id"))
+    if project_package_id not in project_ids:
+        raise ValueError(f"未知 project_package_id: {project_package_id}")
+    raw_items = result.get("selected_items")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise ValueError("selected_items 必须为非空 list")
+    _display_map, option_map = display_option_maps(displays_with_options)
+    seen_stable_ids: set[str] = set()
+    items: list[ScenarioItem] = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            raise ValueError("selected_item 必须为 object")
+        if set(raw_item) != {"stable_sample_id", "practice_option_id", "quantity", "quantity_reason"}:
+            raise ValueError("selected_item 只允许 stable_sample_id、practice_option_id、quantity、quantity_reason")
+        stable_sample_id = cell_text(raw_item.get("stable_sample_id"))
+        if stable_sample_id in seen_stable_ids:
+            raise ValueError(f"stable_sample_id 重复: {stable_sample_id}")
+        seen_stable_ids.add(stable_sample_id)
+        sample = sample_lookup.get(stable_sample_id)
+        if sample is None:
+            raise ValueError(f"未知 stable_sample_id: {stable_sample_id}")
+        if cell_text(sample.get("project_package_id")) != project_package_id:
+            raise ValueError(f"stable_sample_id 不属于所选 project: {stable_sample_id}")
+        display_id = cell_text(sample.get("display_id"))
+        practice_option_id = cell_text(raw_item.get("practice_option_id"))
+        if (display_id, practice_option_id) not in option_map:
+            raise ValueError(f"practice_option_id 不属于样本对应 display: {display_id}/{practice_option_id}")
+        quantity_reason = cell_text(raw_item.get("quantity_reason"))
+        if not quantity_reason:
+            raise ValueError("quantity_reason 不得为空")
+        items.append(
+            ScenarioItem(
+                project_package_id=project_package_id,
+                stable_sample_id=stable_sample_id,
+                source_ref=cell_text(sample.get("source_ref")),
+                display_id=display_id,
+                practice_option_id=practice_option_id,
+                selection_reason="",
+                quantity=validate_quantity(raw_item.get("quantity")),
+                quantity_reason=quantity_reason,
+            )
         )
-        return [], True, False, "", prompt, trace
+    if core_display_id and core_display_id not in {item.display_id for item in items}:
+        raise ValueError(f"selected_items 未覆盖用户核心维修对象 display: {core_display_id}")
+    return HistoricalPlan(project_package_id=project_package_id, items=items)
+
+
+def generate_historical_plan_determination(
+    raw_text: str,
+    matched_project_examples: list[dict[str, Any]],
+    displays_with_options: pd.DataFrame,
+    sample_lookup: dict[str, dict[str, Any]],
+    core_display_id: str,
+    warnings: list[str] | None = None,
+) -> tuple[HistoricalPlan | None, bool, str, str, dict[str, Any]]:
+    prompt, projects, displays = build_historical_plan_determination_prompt(
+        raw_text, matched_project_examples, displays_with_options, core_display_id
+    )
+    max_tokens = 8192
+    input_counts = {
+        "historical_project_count": len(projects),
+        "historical_item_count": sum(len(project.get("items") or []) for project in projects),
+        "display_count": len(displays),
+        "practice_option_count": sum(len(display.get("practice_options") or []) for display in displays),
+        "core_display_id": core_display_id,
+    }
+    if not projects:
+        raise ValueError("没有可供选择的完整历史工程")
     try:
         response = request_llm_json_with_usage(
-            prompt,
-            max_tokens=max_tokens,
+            prompt, max_tokens=max_tokens,
             system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
         )
-        scenarios = parse_scenario_generation_result(response.content, scenario_displays, warnings)
-        scenario_item_count = sum(len(scenario.items) for scenario in scenarios)
-        trace = trace_row(
-            "scenario_generation",
-            "根据 practice options 生成估价 scenarios",
-            True,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text(
-                {
-                    **input_counts,
-                    "scenario_count": len(scenarios),
-                    "scenario_item_count": scenario_item_count,
-                }
-            ),
-            usage=response.usage,
-            raw_response=getattr(response, "raw_content", ""),
-            scenario_count=len(scenarios),
-            scenario_item_count=scenario_item_count,
+        plan = parse_historical_plan_determination_result(
+            response.content, matched_project_examples, displays_with_options, sample_lookup, core_display_id
         )
-        return scenarios, True, False, "", prompt, trace
+        trace = trace_row(
+            "historical_plan_determination", "选择真实历史工程骨架、保留项、工艺和工程量", True,
+            prompt=prompt, max_tokens=max_tokens,
+            input_summary=json_text({**input_counts, "selected_project_package_id": plan.project_package_id, "selected_item_count": len(plan.items)}),
+            usage=response.usage, raw_response=getattr(response, "raw_content", ""),
+            scenario_count=1, scenario_item_count=len(plan.items),
+        )
+        return plan, True, "", prompt, trace
     except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-        append_warning(warnings, "scenario_generation_failed")
-        scenarios: list[EstimateScenario] = []
-        scenario_item_count = 0
+        append_warning(warnings, "historical_plan_determination_failed")
         trace = trace_row(
-            "scenario_generation",
-            "根据 practice options 生成估价 scenarios",
-            False,
-            error=str(exc),
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=json_text(
-                {
-                    **input_counts,
-                    "scenario_count": len(scenarios),
-                    "scenario_item_count": scenario_item_count,
-                    "fallback": False,
-                }
-            ),
-            scenario_count=len(scenarios),
-            scenario_item_count=scenario_item_count,
+            "historical_plan_determination", "选择真实历史工程骨架、保留项、工艺和工程量", False,
+            error=str(exc), prompt=prompt, max_tokens=max_tokens,
+            input_summary=json_text({**input_counts, "selected_item_count": 0}),
+            scenario_count=0, scenario_item_count=0,
         )
-        return scenarios, False, False, str(exc), prompt, trace
+        return None, False, str(exc), prompt, trace
+
+
+def scenario_from_historical_plan(plan: HistoricalPlan) -> EstimateScenario:
+    return EstimateScenario("S001", 1, "", "", plan.items)
+
+
+def build_final_explanation_prompt(
+    raw_text: str,
+    scenario: EstimateScenario,
+    estimate_scenarios: pd.DataFrame,
+    matched_project_examples: list[dict[str, Any]],
+) -> str:
+    selected_project = next(
+        (example for example in matched_project_examples if cell_text(example.get("project_package_id")) == scenario.items[0].project_package_id),
+        {},
+    )
+    item_columns = [
+        "stable_sample_id", "source_ref", "display_id", "清单名称", "选用工艺", "单位",
+        "工程量预估", "工程量依据", "综合单价最低值", "综合单价中位数", "综合单价最高值",
+        "合价最低值", "合价中位数", "合价最高值", "价格证据样本数",
+    ]
+    items = replace_nan_records(estimate_scenarios[item_columns])
+    return f"""
+清单、工艺、工程量、价格和金额均已由程序确定。你只能补充一个方案名称、整体说明和逐项说明。
+不得增加、删除或修改任何清单、ID、工艺、工程量或价格，不得输出未要求字段。
+
+item_explanations 必须对输入中的每个 stable_sample_id 恰好返回一次：
+{{
+  "scenario_name": "方案名称",
+  "scenario_summary": "方案整体说明",
+  "item_explanations": [
+    {{"stable_sample_id": "输入中的ID", "item_explanation": "逐项说明"}}
+  ]
+}}
+
+输入：
+{json_text({"user_query": raw_text, "selected_historical_project": selected_project, "final_items": items})}
+""".strip()
+
+
+def parse_final_explanation_result(result: dict[str, Any], scenario: EstimateScenario) -> EstimateScenario:
+    if not isinstance(result, dict) or set(result) != {"scenario_name", "scenario_summary", "item_explanations"}:
+        raise ValueError("final_explanation 顶层字段非法")
+    scenario_name = cell_text(result.get("scenario_name"))
+    scenario_summary = cell_text(result.get("scenario_summary"))
+    if not scenario_name or not scenario_summary:
+        raise ValueError("scenario_name 和 scenario_summary 不得为空")
+    raw_items = result.get("item_explanations")
+    if not isinstance(raw_items, list):
+        raise ValueError("item_explanations 必须为 list")
+    explanations: dict[str, str] = {}
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict) or set(raw_item) != {"stable_sample_id", "item_explanation"}:
+            raise ValueError("item_explanation 只允许 stable_sample_id 和 item_explanation")
+        stable_sample_id = cell_text(raw_item.get("stable_sample_id"))
+        explanation = cell_text(raw_item.get("item_explanation"))
+        if stable_sample_id in explanations:
+            raise ValueError(f"final_explanation stable_sample_id 重复: {stable_sample_id}")
+        if not explanation:
+            raise ValueError(f"item_explanation 不得为空: {stable_sample_id}")
+        explanations[stable_sample_id] = explanation
+    expected = {item.stable_sample_id for item in scenario.items}
+    if set(explanations) != expected:
+        missing = sorted(expected - set(explanations))
+        extra = sorted(set(explanations) - expected)
+        raise ValueError(f"item_explanations ID 集合不一致: missing={missing}, extra={extra}")
+    items = [
+        ScenarioItem(
+            project_package_id=item.project_package_id,
+            stable_sample_id=item.stable_sample_id,
+            source_ref=item.source_ref,
+            display_id=item.display_id,
+            practice_option_id=item.practice_option_id,
+            selection_reason=explanations[item.stable_sample_id],
+            quantity=item.quantity,
+            quantity_reason=item.quantity_reason,
+        )
+        for item in scenario.items
+    ]
+    return EstimateScenario("S001", 1, scenario_name, scenario_summary, items)
+
+
+def generate_final_explanation(
+    raw_text: str,
+    scenario: EstimateScenario,
+    estimate_scenarios: pd.DataFrame,
+    matched_project_examples: list[dict[str, Any]],
+    warnings: list[str] | None = None,
+) -> tuple[EstimateScenario, bool, str, str, dict[str, Any]]:
+    prompt = build_final_explanation_prompt(raw_text, scenario, estimate_scenarios, matched_project_examples)
+    max_tokens = 4096
+    try:
+        response = request_llm_json_with_usage(
+            prompt, max_tokens=max_tokens,
+            system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
+        )
+        explained = parse_final_explanation_result(response.content, scenario)
+        trace = trace_row(
+            "final_explanation", "补充唯一估价方案的整体和逐项说明", True,
+            prompt=prompt, max_tokens=max_tokens,
+            input_summary=json_text({"selected_project_package_id": scenario.items[0].project_package_id, "item_count": len(scenario.items)}),
+            usage=response.usage, raw_response=getattr(response, "raw_content", ""),
+            scenario_count=1, scenario_item_count=len(scenario.items),
+        )
+        return explained, True, "", prompt, trace
+    except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+        append_warning(warnings, "final_explanation_failed")
+        trace = trace_row(
+            "final_explanation", "补充唯一估价方案的整体和逐项说明", False,
+            error=str(exc), prompt=prompt, max_tokens=max_tokens,
+            input_summary=json_text({"selected_project_package_id": scenario.items[0].project_package_id, "item_count": len(scenario.items)}),
+            scenario_count=1, scenario_item_count=len(scenario.items),
+        )
+        return scenario, False, str(exc), prompt, trace
 
 
 def aggregate_price_from_evidence_items(evidence_items: pd.DataFrame, family_ids: list[str]) -> dict[str, Any]:
@@ -2287,6 +2281,16 @@ def price_stats_for_option(option: dict[str, Any], candidate_families: pd.DataFr
     return stats
 
 
+def validate_price_stats(price_stats: dict[str, Any], stable_sample_id: str, practice_option_id: str) -> None:
+    required = ["unit_price_min", "unit_price_median", "unit_price_max"]
+    missing = [key for key in required if numeric_or_none(price_stats.get(key)) is None]
+    if missing or int(numeric_or_none(price_stats.get("evidence_count")) or 0) <= 0:
+        raise ValueError(
+            f"价格回查失败: stable_sample_id={stable_sample_id}, "
+            f"practice_option_id={practice_option_id}, missing={missing}"
+        )
+
+
 def quantity_display(quantity: dict[str, Any]) -> Any:
     quantity_type = cell_text(quantity.get("type"))
     if quantity_type == "exact":
@@ -2343,7 +2347,7 @@ def build_scenario_outputs(
             display_row = display_map.get(item.display_id)
             option = option_map.get((item.display_id, item.practice_option_id))
             if display_row is None or option is None:
-                continue
+                raise ValueError(f"最终清单 display/option 回查失败: {item.stable_sample_id}")
             practice_options = display_row.get("practice_options") if isinstance(display_row.get("practice_options"), list) else []
             other_options = [
                 cell_text(other.get("practice_description"))
@@ -2351,6 +2355,7 @@ def build_scenario_outputs(
                 if isinstance(other, dict) and cell_text(other.get("practice_option_id")) != item.practice_option_id
             ]
             price_stats = price_stats_for_option(option, candidate_families, evidence_items)
+            validate_price_stats(price_stats, item.stable_sample_id, item.practice_option_id)
             amount_low, amount_mid, amount_high = quantity_amounts(item.quantity, price_stats)
             family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
             scenario_rows.append(
@@ -2358,6 +2363,9 @@ def build_scenario_outputs(
                     "方案顺序": scenario.scenario_order,
                     "方案编号": scenario.scenario_id,
                     "方案名称": scenario.scenario_name,
+                    "project_package_id": item.project_package_id,
+                    "stable_sample_id": item.stable_sample_id,
+                    "source_ref": item.source_ref,
                     "display_id": item.display_id,
                     "清单名称": cell_text(display_row.get("display_name")),
                     "单位": cell_text(display_row.get("unit")),
@@ -2365,6 +2373,7 @@ def build_scenario_outputs(
                     "其他可选工艺": "；".join([text for text in other_options if text]),
                     "项目说明": item.selection_reason,
                     "工程量预估": quantity_display(item.quantity),
+                    "工程量依据": item.quantity_reason,
                     "合价最低值": amount_low,
                     "合价中位数": amount_mid,
                     "合价最高值": amount_high,
@@ -2428,6 +2437,7 @@ TEXT_VALUE_COLUMNS = {
     "与其他方案的核心差异",
     "待现场确认事项",
     "项目说明",
+    "工程量依据",
     "来源样本",
     "价格证据family",
 }
@@ -2581,7 +2591,7 @@ def build_estimate_summary(
                 "是否推荐方案": "是" if numeric_or_none(scenario.get("方案顺序")) == first_order else "否",
                 "方案说明": scenario_summary,
                 "主要施工内容": join_non_empty([display_item_label(row) for _index, row in frame.iterrows()]),
-                "与其他方案的核心差异": scenario_summary,
+                "与其他方案的核心差异": "",
                 "计价项目数": int(len(frame)),
                 "合价最低值": amount_sum(frame, "合价最低值"),
                 "合价中位数": amount_sum(frame, "合价中位数"),
@@ -2615,23 +2625,21 @@ def build_parse_info(
     display_option_grouping_fallback: bool,
     display_option_grouping_error: str,
     display_option_grouping_meta: dict[str, Any],
-    scenario_count: int,
-    scenario_item_count: int,
-    scenario_exact_quantity_count: int,
-    scenario_range_quantity_count: int,
-    scenario_input_display_count: int,
-    scenario_input_practice_option_count: int,
-    scenario_input_historical_project_count: int,
-    scenario_input_historical_item_count: int,
-    scenario_generation_trace: dict[str, Any],
-    scenario_generation_fallback: bool,
-    scenario_generation_error: str,
+    selected_project_package_id: str,
+    selected_item_count: int,
+    selected_exact_quantity_count: int,
+    selected_range_quantity_count: int,
+    historical_plan_trace: dict[str, Any],
+    historical_plan_error: str,
+    final_explanation_trace: dict[str, Any],
+    final_explanation_error: str,
     output_path: Path | None,
     started_at: datetime,
     index_dir: Path,
     include_debug_text: bool,
     display_option_grouping_prompt: str,
-    scenario_generation_prompt: str,
+    historical_plan_prompt: str,
+    final_explanation_prompt: str,
     warnings: list[str] | None = None,
 ) -> pd.DataFrame:
     rows = [
@@ -2668,22 +2676,25 @@ def build_parse_info(
         ("display_option_grouping_prompt_chars", display_option_grouping_trace.get("prompt_chars", "")),
         ("display_option_grouping_prompt_tokens", display_option_grouping_trace.get("prompt_tokens") or display_option_grouping_trace.get("estimated_tokens", "")),
         ("display_option_grouping_completion_tokens", display_option_grouping_trace.get("completion_tokens", "")),
-        ("scenario_count", scenario_count),
-        ("scenario_item_count", scenario_item_count),
-        ("scenario_exact_quantity_count", scenario_exact_quantity_count),
-        ("scenario_range_quantity_count", scenario_range_quantity_count),
-        ("scenario_input_display_count", scenario_input_display_count),
-        ("scenario_input_practice_option_count", scenario_input_practice_option_count),
-        ("scenario_input_historical_project_count", scenario_input_historical_project_count),
-        ("scenario_input_historical_item_count", scenario_input_historical_item_count),
-        ("scenario_generation_status", "fallback" if scenario_generation_fallback else ("failed" if scenario_generation_error else "success")),
-        ("scenario_generation_prompt_chars", scenario_generation_trace.get("prompt_chars", "")),
-        ("scenario_generation_prompt_tokens", scenario_generation_trace.get("prompt_tokens") or scenario_generation_trace.get("estimated_tokens", "")),
-        ("scenario_generation_completion_tokens", scenario_generation_trace.get("completion_tokens", "")),
+        ("scenario_count", 1 if selected_item_count else 0),
+        ("scenario_item_count", selected_item_count),
+        ("scenario_exact_quantity_count", selected_exact_quantity_count),
+        ("scenario_range_quantity_count", selected_range_quantity_count),
+        ("historical_plan_input_project_count", matched_project_example_count),
+        ("historical_plan_input_item_count", matched_project_example_item_count),
+        ("selected_project_package_id", selected_project_package_id),
+        ("historical_plan_determination_status", "failed" if historical_plan_error else "success"),
+        ("historical_plan_determination_prompt_chars", historical_plan_trace.get("prompt_chars", "")),
+        ("historical_plan_determination_prompt_tokens", historical_plan_trace.get("prompt_tokens") or historical_plan_trace.get("estimated_tokens", "")),
+        ("historical_plan_determination_completion_tokens", historical_plan_trace.get("completion_tokens", "")),
+        ("final_explanation_status", "failed" if final_explanation_error else "success"),
+        ("final_explanation_prompt_chars", final_explanation_trace.get("prompt_chars", "")),
+        ("final_explanation_prompt_tokens", final_explanation_trace.get("prompt_tokens") or final_explanation_trace.get("estimated_tokens", "")),
+        ("final_explanation_completion_tokens", final_explanation_trace.get("completion_tokens", "")),
         ("是否 display_option_grouping fallback", "是" if display_option_grouping_fallback else "否"),
-        ("是否 scenario_generation fallback", "是" if scenario_generation_fallback else "否"),
         ("display_option_grouping LLM error", display_option_grouping_error),
-        ("scenario_generation LLM error", scenario_generation_error),
+        ("historical_plan_determination LLM error", historical_plan_error),
+        ("final_explanation LLM error", final_explanation_error),
         ("output_path", str(output_path or "")),
         ("运行时间", f"{(datetime.now() - started_at).total_seconds():.2f}s"),
         ("index_dir", str(index_dir)),
@@ -2693,7 +2704,8 @@ def build_parse_info(
     ]
     if include_debug_text:
         rows.append(("display_option_grouping_prompt_preview", display_option_grouping_prompt[:3000]))
-        rows.append(("scenario_generation_prompt_preview", scenario_generation_prompt[:3000]))
+        rows.append(("historical_plan_determination_prompt_preview", historical_plan_prompt[:3000]))
+        rows.append(("final_explanation_prompt_preview", final_explanation_prompt[:3000]))
     return pd.DataFrame(rows, columns=["字段", "值"])
 
 
@@ -2854,10 +2866,6 @@ def run_query(
         evidence_items,
         package_evidence_weights,
     )
-    matched_project_packages = matched_project_packages_for_output(matched_raw)
-    matched_project_examples = build_matched_project_examples(matched_project_packages, samples, limit=3)
-    matched_project_examples_output = matched_project_examples_frame(matched_project_examples)
-
     (
         displays_with_options,
         _display_option_grouping_success,
@@ -2873,39 +2881,62 @@ def run_query(
         candidate_families,
         warnings=warnings,
     )
-    scenario_displays = select_scenario_displays(
-        displays_with_options,
-        candidate_display_groups,
+    sample_lookup = build_stable_sample_lookup(samples, evidence_items, display_group_families, displays_with_options)
+    matched_project_packages = matched_project_packages_for_output(matched_raw)
+    matched_project_examples = build_matched_project_examples(
+        matched_project_packages, samples, sample_lookup, limit=3
     )
-    compact_examples = compact_matched_project_examples_for_scenario(matched_project_examples)
-    scenario_input_practice_option_count = sum(
-        len(options) if isinstance(options, list) else 0
-        for options in scenario_displays.get("practice_options", pd.Series(dtype=object)).tolist()
-    )
-    scenario_input_historical_item_count = sum(
-        len(example.get("items") or [])
-        for example in compact_examples
-        if isinstance(example, dict)
-    )
+    matched_project_examples_output = matched_project_examples_frame(matched_project_examples)
+    if candidate_display_groups.empty:
+        raise ValueError("没有可用于核心维修对象校验的 candidate display")
+    core_display_scores = pd.to_numeric(
+        candidate_display_groups["direct_item_similarity_max"], errors="coerce"
+    ).fillna(float("-inf"))
+    core_display_id = cell_text(candidate_display_groups.loc[core_display_scores.idxmax(), "display_id"])
     (
-        scenarios,
-        scenario_generation_success,
-        scenario_generation_fallback,
-        scenario_generation_error,
-        scenario_generation_prompt,
-        scenario_generation_trace,
-    ) = generate_estimate_scenarios(
+        historical_plan,
+        historical_plan_success,
+        historical_plan_error,
+        historical_plan_prompt,
+        historical_plan_trace,
+    ) = generate_historical_plan_determination(
         raw_text,
-        scenario_displays,
-        compact_examples,
-        all_candidate_display_count=len(candidate_display_groups),
+        matched_project_examples,
+        displays_with_options,
+        sample_lookup,
+        core_display_id,
         warnings=warnings,
     )
-    estimate_scenarios = build_scenario_outputs(scenarios, displays_with_options, candidate_families, evidence_items)
+    if not historical_plan_success or historical_plan is None:
+        raise ValueError(f"historical_plan_determination 失败: {historical_plan_error}")
+
+    scenario = scenario_from_historical_plan(historical_plan)
+    scenarios = [scenario]
+    estimate_scenarios = build_scenario_outputs(
+        scenarios, displays_with_options, candidate_families, evidence_items
+    )
+    (
+        scenario,
+        final_explanation_success,
+        final_explanation_error,
+        final_explanation_prompt,
+        final_explanation_trace,
+    ) = generate_final_explanation(
+        raw_text,
+        scenario,
+        estimate_scenarios,
+        matched_project_examples,
+        warnings=warnings,
+    )
+    scenarios = [scenario]
+    estimate_scenarios = build_scenario_outputs(
+        scenarios, displays_with_options, candidate_families, evidence_items
+    )
     estimate_summary = build_estimate_summary(scenarios, estimate_scenarios)
     if warnings:
         append_trace_warnings(display_option_grouping_trace, warnings)
-        append_trace_warnings(scenario_generation_trace, warnings)
+        append_trace_warnings(historical_plan_trace, warnings)
+        append_trace_warnings(final_explanation_trace, warnings)
     scenario_item_count = sum(len(scenario.items) for scenario in scenarios)
     scenario_exact_quantity_count = sum(1 for scenario in scenarios for item in scenario.items if cell_text(item.quantity.get("type")) == "exact")
     scenario_range_quantity_count = sum(1 for scenario in scenarios for item in scenario.items if cell_text(item.quantity.get("type")) == "range")
@@ -2932,30 +2963,29 @@ def run_query(
         display_option_grouping_fallback=display_option_grouping_fallback,
         display_option_grouping_error=display_option_grouping_error,
         display_option_grouping_meta=display_option_grouping_meta,
-        scenario_count=len(scenarios),
-        scenario_item_count=scenario_item_count,
-        scenario_exact_quantity_count=scenario_exact_quantity_count,
-        scenario_range_quantity_count=scenario_range_quantity_count,
-        scenario_input_display_count=len(scenario_displays),
-        scenario_input_practice_option_count=scenario_input_practice_option_count,
-        scenario_input_historical_project_count=len(compact_examples),
-        scenario_input_historical_item_count=scenario_input_historical_item_count,
-        scenario_generation_trace=scenario_generation_trace,
-        scenario_generation_fallback=scenario_generation_fallback,
-        scenario_generation_error=scenario_generation_error,
+        selected_project_package_id=historical_plan.project_package_id,
+        selected_item_count=scenario_item_count,
+        selected_exact_quantity_count=scenario_exact_quantity_count,
+        selected_range_quantity_count=scenario_range_quantity_count,
+        historical_plan_trace=historical_plan_trace,
+        historical_plan_error=historical_plan_error,
+        final_explanation_trace=final_explanation_trace,
+        final_explanation_error=final_explanation_error,
         output_path=output,
         started_at=started_at,
         index_dir=index_dir,
         include_debug_text=include_debug_text,
         display_option_grouping_prompt=display_option_grouping_prompt,
-        scenario_generation_prompt=scenario_generation_prompt,
+        historical_plan_prompt=historical_plan_prompt,
+        final_explanation_prompt=final_explanation_prompt,
         warnings=warnings,
     )
     llm_trace = pd.DataFrame(
         [
             rewrite_trace,
             display_option_grouping_trace,
-            scenario_generation_trace,
+            historical_plan_trace,
+            final_explanation_trace,
         ],
         columns=LLM_TRACE_COLUMNS,
     )
@@ -2974,6 +3004,8 @@ def run_query(
         evidence_items=evidence_items,
         parse_info=parse_info,
         llm_trace=llm_trace,
+        success=final_explanation_success,
+        error_message=final_explanation_error,
     )
     if output:
         write_query_result_workbook(output, result, display=display)
@@ -3033,6 +3065,9 @@ def main() -> int:
         return 1
 
     print_terminal_summary(result, output_path)
+    if not getattr(result, "success", True):
+        print(f"[ERROR] final_explanation 失败，已输出无说明估价: {getattr(result, 'error_message', '')}")
+        return 1
     return 0
 
 
