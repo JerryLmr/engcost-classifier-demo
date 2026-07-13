@@ -25,6 +25,7 @@ from classifier.llm_client import LLMServiceError, check_lmstudio_service, reque
 
 
 DEFAULT_PACKAGE_WEIGHT_TEMPERATURE = 0.10
+SCENARIO_DISPLAY_LIMIT = 60
 
 MATCHED_PROJECT_PACKAGE_COLUMNS = [
     "rank",
@@ -753,6 +754,34 @@ def matched_project_examples_frame(examples: list[dict[str, Any]]) -> pd.DataFra
                 }
             )
     return pd.DataFrame(rows, columns=MATCHED_PROJECT_EXAMPLE_COLUMNS)
+
+
+def compact_matched_project_examples_for_scenario(
+    matched_project_examples: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    compact_examples: list[dict[str, Any]] = []
+    for example in matched_project_examples:
+        if not isinstance(example, dict):
+            continue
+        raw_items = example.get("items") if isinstance(example.get("items"), list) else []
+        items = [
+            {
+                "cost_item_name": cell_text(item.get("cost_item_name")),
+                "project_description": cell_text(item.get("project_description")),
+                "unit": cell_text(item.get("unit")),
+                "quantity": numeric_or_none(item.get("quantity")),
+            }
+            for item in raw_items
+            if isinstance(item, dict)
+        ]
+        compact_examples.append(
+            {
+                "project_name": cell_text(example.get("project_name"))
+                or cell_text(example.get("project_name_text")),
+                "items": items,
+            }
+        )
+    return compact_examples
 
 
 def score_direct_items(samples: pd.DataFrame, item_query_similarities: np.ndarray, top_items: int) -> pd.DataFrame:
@@ -1750,14 +1779,49 @@ def format_number_cell(value: Any) -> str:
     return str(number)
 
 
+def select_scenario_displays(
+    displays_with_options: pd.DataFrame,
+    candidate_display_groups: pd.DataFrame,
+    limit: int = SCENARIO_DISPLAY_LIMIT,
+) -> pd.DataFrame:
+    if displays_with_options.empty or candidate_display_groups.empty or limit <= 0:
+        return displays_with_options.iloc[0:0].copy().reset_index(drop=True)
+
+    ranked = candidate_display_groups.copy()
+    ranked["_source_order"] = range(len(ranked))
+    ranked["_support_rank"] = pd.to_numeric(ranked.get("support_rank"), errors="coerce")
+    ranked = ranked.sort_values(
+        ["_support_rank", "_source_order"],
+        ascending=[True, True],
+        kind="stable",
+        na_position="last",
+    )
+    selected_display_ids = [
+        display_id
+        for display_id in ranked.get("display_id", pd.Series(dtype=object)).map(cell_text).tolist()
+        if display_id
+    ][:limit]
+    display_map = {
+        cell_text(row.get("display_id")): row.to_dict()
+        for _index, row in displays_with_options.iterrows()
+    }
+    selected_rows = [display_map[display_id] for display_id in selected_display_ids if display_id in display_map]
+    return pd.DataFrame(selected_rows, columns=displays_with_options.columns).reset_index(drop=True)
+
+
 def build_scenario_generation_prompt(
     raw_text: str,
-    displays_with_options: pd.DataFrame,
+    scenario_displays: pd.DataFrame,
     matched_project_examples: list[dict[str, Any]],
 ) -> tuple[str, list[dict[str, Any]]]:
     records: list[dict[str, Any]] = []
-    for _index, display in displays_with_options.iterrows():
-        practice_options = display.get("practice_options") if isinstance(display.get("practice_options"), list) else []
+
+    for _index, display in scenario_displays.iterrows():
+        practice_options = (
+            display.get("practice_options")
+            if isinstance(display.get("practice_options"), list)
+            else []
+        )
         records.append(
             {
                 "display_id": cell_text(display.get("display_id")),
@@ -1765,9 +1829,12 @@ def build_scenario_generation_prompt(
                 "unit": cell_text(display.get("unit")),
                 "practice_options": [
                     {
-                        "practice_option_id": cell_text(option.get("practice_option_id")),
-                        "practice_description": cell_text(option.get("practice_description")),
-                        "sample_count": int(numeric_or_none(option.get("sample_count")) or 0),
+                        "practice_option_id": cell_text(
+                            option.get("practice_option_id")
+                        ),
+                        "practice_description": cell_text(
+                            option.get("practice_description")
+                        ),
                     }
                     for option in practice_options
                     if isinstance(option, dict)
@@ -1775,77 +1842,48 @@ def build_scenario_generation_prompt(
             }
         )
     prompt = f"""
-你负责根据用户原始需求、候选 display 以及每个 display 下的全部 practice options，生成一个或多个完整的估价 scenario。
+你负责根据用户需求、候选清单及相似历史工程，生成一个或多个可实施的维修估价方案。
 
-上游已经完成：
-
-1. 检索并聚合可用的候选 display；
-2. 将每个候选 display 下的历史做法整理为若干 practice options。
-
-上游没有决定最终 scenario，也没有预先选定任何 practice option。
-
-输入中每个 practice option 包含：
-
-- practice_option_id
-- practice_description
-- sample_count
-
-sample_count 表示该 option 在当前历史样本中的支持数量，只作为判断信息之一。它不是价格、工程量或最终选择概率。
+候选 displays 已由检索结果整理完成。
+每个 display 下提供一个或多个 practice_options，代表不同的具体做法。
+你需要决定方案包含哪些 display，并为每个 display 选择一个 practice_option。
 
 【历史工程参考】
 
-matched_project_examples 是本次召回的相似历史工程。
-每个历史工程的 items 是该工程实际使用的清单组合。
+matched_project_examples 是本次召回的相似历史工程，
+其中 items 是各历史工程实际使用过的清单组合。
 
-请参考这些历史工程理解常见的施工链、设备组成和配套关系，
-但不要机械复制某个历史工程，也不要把历史工程中的所有 item
-无条件加入当前方案。
+请参考它们理解常见的施工链、设备组成和配套关系，
+但不要机械复制某个历史工程，也不要无条件纳入其中所有清单。
 
-历史工程只作为方案组织参考。
-最终 scenario 仍只能选择 displays 中已有的 display_id
+历史工程只用于帮助组织方案。
+最终只能选择 displays 中已有的 display_id，
 以及该 display 下已有的 practice_option_id。
 
-你的任务：
+【任务】
 
-1. 判断应生成一个 scenario，还是多个存在实质差异的 scenario。
-2. 决定每个 scenario 应包含哪些 display。
-3. 为每个被纳入的 display 选择对应的 practice_option_id。
-4. 为每个 scenario 生成 scenario_name。
-5. 为每个 scenario 生成 scenario_summary，说明该 scenario 的整体施工范围、施工链、适用现场条件和与其他 scenario 的实质差异。
-6. 为每个 scenario item 生成 item_explanation，说明当前 option 在本方案中的用途、施工环节、选用原因、工程量来源或继承逻辑。
-7. 为每个 scenario item 判断 quantity：
-   - 可以可靠确定单一数值时，输出 exact；
-   - 可以可靠确定一个范围时，输出 range。
-8. 按与用户原始需求的符合程度排列 scenario。
+1. 根据用户需求决定生成一个方案，或多个存在实质差异的方案。
+2. 为每个方案选择必要的 display 和对应 practice_option。
+3. 生成简短明确的 scenario_name。
+4. 生成 scenario_summary，说明整体施工范围、施工链、适用条件和关键取舍。
+5. 为每个 item 生成 item_explanation，说明其用途、施工环节、选用原因和工程量依据。
+6. 为每个 item 给出 quantity：
+   - 可以确定单一数值时使用 exact；
+   - 只能合理估计区间时使用 range。
+7. 按与用户需求的符合程度排列方案。
 
-判断原则：
+【判断原则】
 
-1. 优先依据用户原始输入中明确表达的维修内容、材料、规格、型号、性能、施工方法和工程量。
-2. 只有当不同 practice options 会形成实际不同的实施方案时，才需要生成不同 scenario。
-3. 不要为了覆盖所有 practice options 而机械生成大量 scenario。
-4. 不同 display 是否放入同一个 scenario，应根据用户需求和各 option 的实际描述判断。
-5. sample_count 只能作为历史支持程度的辅助信息，不能直接决定 option 必须被选择。
-6. 不得选择输入中不存在的 display_id 或 practice_option_id。
-7. 不得输出单价或合价。
-8. 不得根据 sample_count 推算工程量。
-9. 不得根据其他 item 的工程量推算当前 item 的工程量。
-10. scenario_summary 和 item_explanation 必须针对当前 scenario 的实际内容撰写，避免通用模板。
-11. practice_description 只描述工艺本身，不承担方案解释；不得用 scenario_summary 或 item_explanation 简单复述 practice_description。
+1. 优先依据用户明确提出的维修对象、材料、规格、型号、性能、施工方法和工程量。
+2. 只有实际做法、施工范围或适用条件存在明显差异时，才生成多个方案。
+3. 不要为了覆盖所有候选项而机械增加方案或清单。
+4. 可参考历史工程中的配套关系，但必须结合当前用户需求判断是否纳入。
+5. 不得选择输入中不存在的 display_id 或 practice_option_id。
+6. 不得输出单价、合价或自行推算价格。
+7. 不得凭其他 item 的工程量直接推算当前 item；存在同一施工范围继承关系时，应在 item_explanation 中说明。
+8. scenario_summary 和 item_explanation 必须针对当前方案，不要写成通用模板。
 
-scenario_summary 必须同时覆盖：
-
-1. 整体施工内容：说明该方案包含的主要施工范围和施工链。
-2. 适用条件：说明适合什么现场条件、基层状态或维修目标。
-3. 与其他方案的差异：如果存在多个 scenario，必须明确指出与其他方案不同的前置工序、拆除范围、基层处理或材料做法；如果只有一个 scenario，也要说明该方案的关键取舍。
-
-item_explanation 必须同时覆盖：
-
-1. 当前选用 option 的具体用途，不能只写“符合用户要求”“样本支持较多”或类似空泛理由。
-2. 该 item 在当前施工方案中的施工环节。
-3. 为什么选用该 practice option。
-4. 工程量来源或继承逻辑；如果工程量从同一施工范围继承，必须说明“按用户给出的同一施工面积暂估，最终以现场核定为准”。
-
-quantity 格式：
+【quantity 格式】
 
 精确值：
 
@@ -1862,7 +1900,7 @@ quantity 格式：
   "max": 120
 }}
 
-输出必须严格符合：
+【输出格式】
 
 {{
   "scenarios": [
@@ -1875,7 +1913,7 @@ quantity 格式：
         {{
           "display_id": "D001",
           "practice_option_id": "D001-O01",
-          "item_explanation": "当前项目说明，覆盖用途、施工环节、选用原因和工程量来源",
+          "item_explanation": "说明用途、施工环节、选用原因和工程量依据",
           "quantity": {{
             "type": "exact",
             "value": 100
@@ -1886,25 +1924,28 @@ quantity 格式：
   ]
 }}
 
-严格约束：
+【输出约束】
 
-1. scenarios 必须为非空数组。
-2. scenario_id 必须唯一。
-3. scenario_order 必须从 1 开始连续递增。
-4. 每个 scenario 至少包含一个 item。
-5. display_id 必须存在于输入中。
-6. practice_option_id 必须属于对应 display。
-7. 同一 scenario 中不得重复相同的 display_id 和 practice_option_id。
-8. scenario_name 不得为空。
-9. scenario_summary 不得为空。
-10. item_explanation 不得为空。
-11. quantity.type 只能是 exact 或 range。
-12. exact 必须包含非负 value。
-13. range 必须包含非负 min 和 max，且 min 不得大于 max。
-14. 不得输出单价、合价或其他未要求字段。
+- scenarios 必须为非空数组。
+- scenario_id 必须唯一。
+- scenario_order 从 1 开始连续递增。
+- 每个 scenario 至少包含一个 item。
+- 每个 display_id 必须存在于输入 displays。
+- 每个 practice_option_id 必须属于对应 display。
+- 同一 scenario 中不得重复相同的 display_id 和 practice_option_id。
+- scenario_name、scenario_summary 和 item_explanation 不得为空。
+- quantity.type 只能是 exact 或 range。
+- exact 必须包含非负 value。
+- range 必须包含非负 min 和 max，且 min 不得大于 max。
+- 不得输出未要求字段。
 
-输入：
-{json_text({"user_query": raw_text, "displays": records, "matched_project_examples": matched_project_examples})}
+【输入】
+
+{json_text({
+    "user_query": raw_text,
+    "displays": records,
+    "matched_project_examples": matched_project_examples,
+})}
 """.strip()
     return prompt, records
 
@@ -2028,20 +2069,38 @@ def parse_scenario_generation_result(
 
 def generate_estimate_scenarios(
     raw_text: str,
-    displays_with_options: pd.DataFrame,
+    scenario_displays: pd.DataFrame,
     matched_project_examples: list[dict[str, Any]],
     warnings: list[str] | None = None,
+    all_candidate_display_count: int | None = None,
+    scenario_display_limit: int = SCENARIO_DISPLAY_LIMIT,
 ) -> tuple[list[EstimateScenario], bool, bool, str, str, dict[str, Any]]:
-    prompt, records = build_scenario_generation_prompt(raw_text, displays_with_options, matched_project_examples)
+    prompt, records = build_scenario_generation_prompt(raw_text, scenario_displays, matched_project_examples)
     max_tokens = 4096
-    if displays_with_options.empty:
+    scenario_practice_option_count = sum(len(record.get("practice_options") or []) for record in records)
+    matched_project_item_count = sum(
+        len(example.get("items") or [])
+        for example in matched_project_examples
+        if isinstance(example, dict)
+    )
+    input_counts = {
+        "all_candidate_display_count": len(scenario_displays)
+        if all_candidate_display_count is None
+        else all_candidate_display_count,
+        "scenario_display_limit": scenario_display_limit,
+        "scenario_display_count": len(scenario_displays),
+        "scenario_practice_option_count": scenario_practice_option_count,
+        "matched_project_example_count": len(matched_project_examples),
+        "matched_project_item_count": matched_project_item_count,
+    }
+    if scenario_displays.empty:
         trace = trace_row(
             "scenario_generation",
             "根据 practice options 生成估价 scenarios",
             True,
             prompt=prompt,
             max_tokens=max_tokens,
-            input_summary=json_text({"display_ids": [], "matched_project_example_count": len(matched_project_examples), "scenario_count": 0}),
+            input_summary=json_text({**input_counts, "scenario_count": 0, "scenario_item_count": 0}),
             scenario_count=0,
             scenario_item_count=0,
         )
@@ -2052,7 +2111,7 @@ def generate_estimate_scenarios(
             max_tokens=max_tokens,
             system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
         )
-        scenarios = parse_scenario_generation_result(response.content, displays_with_options, warnings)
+        scenarios = parse_scenario_generation_result(response.content, scenario_displays, warnings)
         scenario_item_count = sum(len(scenario.items) for scenario in scenarios)
         trace = trace_row(
             "scenario_generation",
@@ -2062,8 +2121,7 @@ def generate_estimate_scenarios(
             max_tokens=max_tokens,
             input_summary=json_text(
                 {
-                    "display_ids": [record["display_id"] for record in records],
-                    "matched_project_example_count": len(matched_project_examples),
+                    **input_counts,
                     "scenario_count": len(scenarios),
                     "scenario_item_count": scenario_item_count,
                 }
@@ -2087,8 +2145,7 @@ def generate_estimate_scenarios(
             max_tokens=max_tokens,
             input_summary=json_text(
                 {
-                    "display_ids": [record["display_id"] for record in records],
-                    "matched_project_example_count": len(matched_project_examples),
+                    **input_counts,
                     "scenario_count": len(scenarios),
                     "scenario_item_count": scenario_item_count,
                     "fallback": False,
@@ -2503,6 +2560,10 @@ def build_parse_info(
     scenario_item_count: int,
     scenario_exact_quantity_count: int,
     scenario_range_quantity_count: int,
+    scenario_input_display_count: int,
+    scenario_input_practice_option_count: int,
+    scenario_input_historical_project_count: int,
+    scenario_input_historical_item_count: int,
     scenario_generation_trace: dict[str, Any],
     scenario_generation_fallback: bool,
     scenario_generation_error: str,
@@ -2552,6 +2613,10 @@ def build_parse_info(
         ("scenario_item_count", scenario_item_count),
         ("scenario_exact_quantity_count", scenario_exact_quantity_count),
         ("scenario_range_quantity_count", scenario_range_quantity_count),
+        ("scenario_input_display_count", scenario_input_display_count),
+        ("scenario_input_practice_option_count", scenario_input_practice_option_count),
+        ("scenario_input_historical_project_count", scenario_input_historical_project_count),
+        ("scenario_input_historical_item_count", scenario_input_historical_item_count),
         ("scenario_generation_status", "fallback" if scenario_generation_fallback else ("failed" if scenario_generation_error else "success")),
         ("scenario_generation_prompt_chars", scenario_generation_trace.get("prompt_chars", "")),
         ("scenario_generation_prompt_tokens", scenario_generation_trace.get("prompt_tokens") or scenario_generation_trace.get("estimated_tokens", "")),
@@ -2749,6 +2814,20 @@ def run_query(
         candidate_families,
         warnings=warnings,
     )
+    scenario_displays = select_scenario_displays(
+        displays_with_options,
+        candidate_display_groups,
+    )
+    compact_examples = compact_matched_project_examples_for_scenario(matched_project_examples)
+    scenario_input_practice_option_count = sum(
+        len(options) if isinstance(options, list) else 0
+        for options in scenario_displays.get("practice_options", pd.Series(dtype=object)).tolist()
+    )
+    scenario_input_historical_item_count = sum(
+        len(example.get("items") or [])
+        for example in compact_examples
+        if isinstance(example, dict)
+    )
     (
         scenarios,
         scenario_generation_success,
@@ -2758,8 +2837,9 @@ def run_query(
         scenario_generation_trace,
     ) = generate_estimate_scenarios(
         raw_text,
-        displays_with_options,
-        matched_project_examples,
+        scenario_displays,
+        compact_examples,
+        all_candidate_display_count=len(candidate_display_groups),
         warnings=warnings,
     )
     estimate_scenarios = build_scenario_outputs(scenarios, displays_with_options, candidate_families, evidence_items)
@@ -2797,6 +2877,10 @@ def run_query(
         scenario_item_count=scenario_item_count,
         scenario_exact_quantity_count=scenario_exact_quantity_count,
         scenario_range_quantity_count=scenario_range_quantity_count,
+        scenario_input_display_count=len(scenario_displays),
+        scenario_input_practice_option_count=scenario_input_practice_option_count,
+        scenario_input_historical_project_count=len(compact_examples),
+        scenario_input_historical_item_count=scenario_input_historical_item_count,
         scenario_generation_trace=scenario_generation_trace,
         scenario_generation_fallback=scenario_generation_fallback,
         scenario_generation_error=scenario_generation_error,

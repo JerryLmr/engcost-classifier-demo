@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import json
 import sys
 import tempfile
 import types
@@ -926,6 +927,54 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual([item["cost_item_name"] for item in examples[1]["items"]], ["P2-1", "P2-2"])
         self.assertEqual(sum(len(example["items"]) for example in examples), 6)
 
+    def test_compact_matched_project_examples_for_scenario_preserves_full_debug_data(self):
+        examples = [
+            {
+                "rank": 1,
+                "project_package_id": "P1",
+                "project_name": "",
+                "project_name_text": "历史消防工程",
+                "consultation_time": "2025-01",
+                "location": "上海",
+                "items": [
+                    {
+                        "cost_item_name": "报警主机",
+                        "project_description": "更换主机",
+                        "unit": "台",
+                        "quantity": 1,
+                        "unit_price": 1000,
+                        "total_price": 1000,
+                        "project_code": "X1",
+                        "family_id": "F001",
+                        "display_id": "D001",
+                    },
+                    {
+                        "cost_item_name": "系统调试",
+                        "project_description": "联动调试",
+                        "unit": "项",
+                        "quantity": 1,
+                        "unit_price": 200,
+                        "total_price": 200,
+                    },
+                ],
+            }
+        ]
+
+        compact = query_estimate_llm.compact_matched_project_examples_for_scenario(examples)
+        debug_frame = query_estimate_llm.matched_project_examples_frame(examples)
+
+        self.assertEqual(set(compact[0]), {"project_name", "items"})
+        self.assertEqual(compact[0]["project_name"], "历史消防工程")
+        self.assertEqual(len(compact[0]["items"]), 2)
+        self.assertEqual(
+            set(compact[0]["items"][0]),
+            {"cost_item_name", "project_description", "unit", "quantity"},
+        )
+        self.assertEqual(examples[0]["rank"], 1)
+        self.assertEqual(examples[0]["items"][0]["unit_price"], 1000)
+        self.assertEqual(debug_frame.loc[0, "unit_price"], 1000)
+        self.assertEqual(debug_frame.loc[0, "total_price"], 1000)
+
     def test_display_option_grouping_prompt_includes_family_coverage_contract(self):
         display_groups = pd.DataFrame([{"display_id": "D001", "display_name": "屋面卷材防水", "unit": "m²", "family_count": 2}])
         display_families = pd.DataFrame(
@@ -1316,20 +1365,20 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(trace.loc["F003", "practice_option_id"], "D001-O02")
 
     def test_scenario_generation_prompt_uses_only_display_options(self):
-        examples = [{"rank": 1, "project_package_id": "P1", "project_name": "历史屋面维修", "items": [{"cost_item_name": "基层处理"}]}]
+        examples = [{"project_name": "历史屋面维修", "items": [{"cost_item_name": "基层处理", "project_description": "清理基层", "unit": "m²", "quantity": 100}]}]
         prompt, records = query_estimate_llm.build_scenario_generation_prompt(
             "屋面漏水 100平", self.displays_with_options_fixture(), examples
         )
 
         self.assertEqual(set(records[0]), {"display_id", "display_name", "unit", "practice_options"})
-        self.assertEqual(set(records[0]["practice_options"][0]), {"practice_option_id", "practice_description", "sample_count"})
+        self.assertEqual(set(records[0]["practice_options"][0]), {"practice_option_id", "practice_description"})
+        self.assertNotIn("sample_count", prompt)
         self.assertIn("scenario_summary", prompt)
         self.assertIn("item_explanation", prompt)
-        self.assertIn("不得用 scenario_summary 或 item_explanation 简单复述 practice_description", prompt)
         self.assertNotIn("include", prompt)
         self.assertNotIn("amount", prompt)
         self.assertNotIn("unknown", prompt)
-        self.assertIn("按用户给出的同一施工面积暂估，最终以现场核定为准", prompt)
+        self.assertIn("存在同一施工范围继承关系时，应在 item_explanation 中说明", prompt)
         self.assertNotIn("project_package_query_text", prompt)
         self.assertNotIn("item_query_text", prompt)
         self.assertNotIn("family_ids", prompt)
@@ -1338,6 +1387,49 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertIn("matched_project_examples", prompt)
         self.assertIn("历史屋面维修", prompt)
         self.assertNotIn("已选 display", prompt)
+
+    def test_select_scenario_displays_applies_limit_and_support_rank_order(self):
+        displays = pd.DataFrame(
+            [
+                {
+                    "display_id": f"D{index:03d}",
+                    "display_name": f"清单{index}",
+                    "practice_options": [],
+                }
+                for index in range(1, 66)
+            ]
+        )
+        groups = pd.DataFrame(
+            [
+                {"display_id": f"D{index:03d}", "support_rank": 66 - index}
+                for index in range(1, 66)
+            ]
+        )
+
+        selected = query_estimate_llm.select_scenario_displays(displays, groups)
+
+        self.assertEqual(len(selected), query_estimate_llm.SCENARIO_DISPLAY_LIMIT)
+        self.assertEqual(selected["display_id"].tolist(), [f"D{index:03d}" for index in range(65, 5, -1)])
+
+    def test_select_scenario_displays_keeps_all_when_below_limit_and_stable_ties(self):
+        displays = pd.DataFrame(
+            [
+                {"display_id": "D001", "practice_options": []},
+                {"display_id": "D002", "practice_options": []},
+                {"display_id": "D003", "practice_options": []},
+            ]
+        )
+        groups = pd.DataFrame(
+            [
+                {"display_id": "D003", "support_rank": 1},
+                {"display_id": "D001", "support_rank": 2},
+                {"display_id": "D002", "support_rank": 2},
+            ]
+        )
+
+        selected = query_estimate_llm.select_scenario_displays(displays, groups)
+
+        self.assertEqual(selected["display_id"].tolist(), ["D003", "D001", "D002"])
 
     def valid_scenario_result(self):
         return {
@@ -1373,6 +1465,44 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(scenarios[0].scenario_order, 1)
         self.assertEqual(scenarios[0].scenario_summary, "采用卷材防水并包含拆除。")
         self.assertEqual(scenarios[0].items[0].quantity, {"type": "exact", "value": 100.0})
+
+    def test_scenario_parser_only_accepts_selected_scenario_displays(self):
+        scenario_displays = self.displays_with_options_fixture().iloc[[0]].copy()
+        result = self.valid_scenario_result()
+
+        with self.assertRaisesRegex(ValueError, "无效 display_id: D002"):
+            query_estimate_llm.parse_scenario_generation_result(result, scenario_displays)
+
+    def test_scenario_generation_trace_records_compact_input_counts_without_display_ids(self):
+        examples = [
+            {
+                "project_name": "历史项目",
+                "items": [
+                    {"cost_item_name": "基层处理", "project_description": "处理", "unit": "m²", "quantity": 100},
+                    {"cost_item_name": "防水施工", "project_description": "施工", "unit": "m²", "quantity": 100},
+                ],
+            }
+        ]
+        response = types.SimpleNamespace(content=self.valid_scenario_result(), usage={}, raw_content="{}")
+
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response):
+            scenarios, success, *_rest, trace = query_estimate_llm.generate_estimate_scenarios(
+                "屋面漏水 100平",
+                self.displays_with_options_fixture(),
+                examples,
+                all_candidate_display_count=75,
+            )
+
+        input_summary = json.loads(trace["input_summary"])
+        self.assertTrue(success)
+        self.assertEqual(len(scenarios), 1)
+        self.assertEqual(input_summary["all_candidate_display_count"], 75)
+        self.assertEqual(input_summary["scenario_display_limit"], 60)
+        self.assertEqual(input_summary["scenario_display_count"], 2)
+        self.assertEqual(input_summary["scenario_practice_option_count"], 3)
+        self.assertEqual(input_summary["matched_project_example_count"], 1)
+        self.assertEqual(input_summary["matched_project_item_count"], 2)
+        self.assertNotIn("display_ids", input_summary)
 
     def test_scenario_parser_rejects_invalid_references_and_fields(self):
         displays_with_options = self.displays_with_options_fixture()
@@ -1571,6 +1701,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             scenario_item_count=3,
             scenario_exact_quantity_count=1,
             scenario_range_quantity_count=2,
+            scenario_input_display_count=7,
+            scenario_input_practice_option_count=12,
+            scenario_input_historical_project_count=3,
+            scenario_input_historical_item_count=79,
             scenario_generation_trace={"prompt_chars": 120, "prompt_tokens": 50, "completion_tokens": 10},
             scenario_generation_fallback=False,
             scenario_generation_error="",
@@ -1588,6 +1722,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(values["matched_project_example_item_count"], 79)
         self.assertEqual(values["scenario_count"], 2)
         self.assertEqual(values["scenario_item_count"], 3)
+        self.assertEqual(values["scenario_input_display_count"], 7)
+        self.assertEqual(values["scenario_input_practice_option_count"], 12)
+        self.assertEqual(values["scenario_input_historical_project_count"], 3)
+        self.assertEqual(values["scenario_input_historical_item_count"], 79)
         self.assertNotIn("scenario_included_item_count", values)
         self.assertNotIn("scenario_amount_item_count", values)
         self.assertNotIn("scenario_unknown_quantity_count", values)
