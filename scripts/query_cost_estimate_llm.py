@@ -25,7 +25,7 @@ from classifier.llm_client import LLMServiceError, check_lmstudio_service, reque
 
 
 DEFAULT_PACKAGE_WEIGHT_TEMPERATURE = 0.10
-SCENARIO_DISPLAY_LIMIT = 60
+SCENARIO_DISPLAY_LIMIT = 100
 
 MATCHED_PROJECT_PACKAGE_COLUMNS = [
     "rank",
@@ -1842,46 +1842,105 @@ def build_scenario_generation_prompt(
             }
         )
     prompt = f"""
-你负责根据用户需求、候选清单及相似历史工程，生成一个或多个可实施的维修估价方案。
+你负责根据用户需求、候选清单及相似历史工程，生成一个或多个维修估价方案。
 
 候选 displays 已由检索结果整理完成。
-每个 display 下提供一个或多个 practice_options，代表不同的具体做法。
-你需要决定方案包含哪些 display，并为每个 display 选择一个 practice_option。
+每个 display 下提供一个或多个 practice_options，代表历史数据中不同的具体做法。
 
-【历史工程参考】
+matched_project_examples 是本次召回的相似历史工程。
+其中每个 project 都代表一个实际实施过的完整历史工程，
+items 是该工程实际使用过的清单组合。
 
-matched_project_examples 是本次召回的相似历史工程，
-其中 items 是各历史工程实际使用过的清单组合。
+本次任务不是从候选清单中自由拼装方案，
+而是以相似历史工程为基础形成当前估价方案。
 
-请参考它们理解常见的施工链、设备组成和配套关系，
-但不要机械复制某个历史工程，也不要无条件纳入其中所有清单。
+【方案形成方法】
 
-历史工程只用于帮助组织方案。
-最终只能选择 displays 中已有的 display_id，
-以及该 display 下已有的 practice_option_id。
+1. 先结合用户需求，从 matched_project_examples 中选择最适合作为参考骨架的历史工程。
+
+2. 以该历史工程中与当前用户需求相关的 items 作为方案主体。
+
+3. 再查看其他高相似历史工程：
+   - 将与方案主体相同或近似的历史项合并；
+   - 将多个高相似历史工程中重复出现、与当前需求相关但骨架中缺少的内容补入；
+   - 不纳入仅属于某个更大综合工程、且与当前需求明显无关的内容。
+
+4. 历史工程中的重复项或不同写法，应尽量合并为一个当前估价项，
+   不要因为来自不同 project 就重复计价。
+
+5. 将整理后的历史工程内容回查到输入 displays 和 practice_options：
+   - 最终只能选择输入中已有的 display_id 和 practice_option_id；
+   - 选择与历史做法和当前用户需求最匹配的 practice_option；
+   - 无法合理映射的历史项不要自行编造。
+
+6. 在方案组成确定后，再解释为什么采用该历史工程作为骨架、
+   合并了哪些其他历史案例内容，以及当前估价口径为什么适合本次需求。
+
+同一个 display 下存在多个彼此独立、且历史工程和当前需求都支持的具体做法时，
+可以选择多个不同的 practice_option。
 
 【任务】
 
-1. 根据用户需求决定生成一个方案，或多个存在实质差异的方案。
-2. 为每个方案选择必要的 display 和对应 practice_option。
+1. 根据用户需求和历史案例，决定生成一个或多个方案。
+
+2. 每个方案都应有明确的历史工程骨架，
+   并在此基础上完成相关历史清单的合并和当前候选映射。
+
 3. 生成简短明确的 scenario_name。
-4. 生成 scenario_summary，说明整体施工范围、施工链、适用条件和关键取舍。
-5. 为每个 item 生成 item_explanation，说明其用途、施工环节、选用原因和工程量依据。
+
+4. 生成 scenario_summary，说明：
+   - 当前方案参考了哪个历史工程的整体清单结构；
+   - 从其他相似历史工程中合并或补充了哪些相关内容；
+   - 当前按什么工程范围进行估价；
+   - 当前没有纳入哪些明显属于扩大范围的内容；
+   - 哪些关键条件发生变化时，需要重新调整当前估价。
+
+5. 为每个 item 生成 item_explanation，说明：
+   - 该项在当前方案中的作用；
+   - 该项参考了哪个或哪些历史工程；
+   - 为什么选择当前 practice_option；
+   - 工程量的确定依据。
+
 6. 为每个 item 给出 quantity：
    - 可以确定单一数值时使用 exact；
    - 只能合理估计区间时使用 range。
+
 7. 按与用户需求的符合程度排列方案。
 
 【判断原则】
 
-1. 优先依据用户明确提出的维修对象、材料、规格、型号、性能、施工方法和工程量。
-2. 只有实际做法、施工范围或适用条件存在明显差异时，才生成多个方案。
-3. 不要为了覆盖所有候选项而机械增加方案或清单。
-4. 可参考历史工程中的配套关系，但必须结合当前用户需求判断是否纳入。
-5. 不得选择输入中不存在的 display_id 或 practice_option_id。
-6. 不得输出单价、合价或自行推算价格。
-7. 不得凭其他 item 的工程量直接推算当前 item；存在同一施工范围继承关系时，应在 item_explanation 中说明。
-8. scenario_summary 和 item_explanation 必须针对当前方案，不要写成通用模板。
+1. 用户明确提出的维修对象、材料、规格、型号、施工方法和工程量优先于历史案例。
+
+2. 历史案例用于提供真实实施过的方案结构，
+   不要脱离历史工程自行构造一套全新的清单组合。
+
+3. 最终方案应尽量保持与参考历史工程相近的完整程度，
+   但应删除与当前需求明显无关的内容。
+
+4. 多个高相似历史工程中重复出现的相关项，
+   应优先保留或合并到当前方案中。
+
+5. 同一工作内容在多个历史工程中重复出现时，
+   应合并为一个当前估价项，不得因来源不同而重复计价。
+
+6. 结合 practice_description 判断不同候选项的施工及计价范围，
+   避免选择已被另一项明确包含的重复内容。
+
+7. 描述清单之间的施工关系时，
+   应以历史工程实际组合和 practice_description 为依据，
+   不得添加没有历史或输入依据的关系。
+
+8. 工程量应根据用户信息、历史工程的施工范围、清单单位和当前方案合理确定。
+   多个清单属于同一施工范围时，可以采用相同或相关工程量，
+   并在 item_explanation 中说明。
+
+9. 不得选择输入中不存在的 display_id 或 practice_option_id。
+
+10. 不得输出单价、合价或自行推算价格。
+
+11. 不得仅以“需要现场确认”回避形成当前方案。
+    应先依据最匹配的历史工程给出当前可执行的参考口径，
+    再说明会使该口径失效的关键条件。
 
 【quantity 格式】
 
@@ -1908,12 +1967,12 @@ matched_project_examples 是本次召回的相似历史工程，
       "scenario_id": "S001",
       "scenario_order": 1,
       "scenario_name": "方案名称",
-      "scenario_summary": "方案整体说明",
+      "scenario_summary": "说明历史工程骨架、合并内容、当前估价范围和失效条件",
       "items": [
         {{
           "display_id": "D001",
           "practice_option_id": "D001-O01",
-          "item_explanation": "说明用途、施工环节、选用原因和工程量依据",
+          "item_explanation": "说明该项的历史来源、用途、option选择和工程量依据",
           "quantity": {{
             "type": "exact",
             "value": 100
