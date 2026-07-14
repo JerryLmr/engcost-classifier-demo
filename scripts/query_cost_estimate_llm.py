@@ -3724,7 +3724,7 @@ def run_query(
     )
     scenarios = [scenario]
     estimate_scenarios = build_scenario_outputs(
-        scenarios, displays_with_options, candidate_families, samples
+        scenarios, displays_with_options, candidate_families, candidate_samples
     )
     (
         scenario,
@@ -3742,7 +3742,7 @@ def run_query(
     )
     scenarios = [scenario]
     estimate_scenarios = build_scenario_outputs(
-        scenarios, displays_with_options, candidate_families, samples
+        scenarios, displays_with_options, candidate_families, candidate_samples
     )
     estimate_summary = build_estimate_summary(scenarios, estimate_scenarios)
     if warnings:

@@ -1972,6 +1972,59 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             (1.0, 3.0, 5.0),
         )
 
+    def test_option_price_stats_expand_only_within_location_and_time_constraints(self):
+        option = {"practice_option_id": "D001-O01", "family_ids": ["F001"]}
+        families = pd.DataFrame([self.price_family("F001", "sig-1")])
+        samples = pd.DataFrame([
+            {
+                **self.price_sample("sid-1", "sig-1", 100, source_ref="inside-1"),
+                "location": "浙江省嘉兴市", "consultation_time": "2025-06-01",
+            },
+            {
+                **self.price_sample("sid-2", "sig-1", 200, source_ref="inside-2"),
+                "location": "浙江省嘉兴市", "consultation_time": "2025-12-31",
+            },
+            {
+                **self.price_sample("sid-3", "sig-1", 1000, source_ref="outside-location"),
+                "location": "上海市", "consultation_time": "2025-06-01",
+            },
+            {
+                **self.price_sample("sid-4", "sig-1", 2000, source_ref="outside-time"),
+                "location": "浙江省嘉兴市", "consultation_time": "2024-12-31",
+            },
+        ])
+        embeddings = np.zeros((len(samples), 1), dtype=np.float32)
+
+        constrained_mask = query_estimate_llm.build_constraint_mask(
+            samples, "浙江省嘉兴市", "2025-01-01", "2025-12-31"
+        )
+        candidate_samples, _candidate_embeddings = query_estimate_llm.filter_rows_and_embeddings(
+            samples, embeddings, constrained_mask, "清单样本"
+        )
+        constrained_stats = query_estimate_llm.price_stats_for_option(
+            option, pd.Series({"unit": "m²"}), families, candidate_samples
+        )
+
+        self.assertEqual(constrained_stats["evidence_count"], 2)
+        self.assertEqual(constrained_stats["source_refs"], "inside-1, inside-2")
+        self.assertEqual(
+            (constrained_stats["unit_price_min"], constrained_stats["unit_price_median"], constrained_stats["unit_price_max"]),
+            (100.0, 150.0, 200.0),
+        )
+
+        unconstrained_mask = query_estimate_llm.build_constraint_mask(samples, "", "", "")
+        all_candidate_samples, _all_candidate_embeddings = query_estimate_llm.filter_rows_and_embeddings(
+            samples, embeddings, unconstrained_mask, "清单样本"
+        )
+        unconstrained_stats = query_estimate_llm.price_stats_for_option(
+            option, pd.Series({"unit": "m²"}), families, all_candidate_samples
+        )
+
+        self.assertEqual(unconstrained_stats["evidence_count"], 4)
+        self.assertEqual(unconstrained_stats["unit_price_max"], 2000.0)
+        self.assertIn("outside-location", unconstrained_stats["source_refs"])
+        self.assertIn("outside-time", unconstrained_stats["source_refs"])
+
     def test_option_price_stats_expand_multiple_families(self):
         option = {"practice_option_id": "D001-O01", "family_ids": ["F001", "F002"]}
         families = pd.DataFrame([
