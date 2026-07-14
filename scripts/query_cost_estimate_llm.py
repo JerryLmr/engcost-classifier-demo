@@ -2906,12 +2906,82 @@ def generate_optional_final_explanation(
     )
 
 
-def aggregate_price_from_evidence_items(evidence_items: pd.DataFrame, family_ids: list[str]) -> dict[str, Any]:
-    evidence_family_ids = evidence_items.get("family_id", pd.Series(dtype=object)).map(cell_text)
-    evidence = evidence_items[evidence_family_ids.isin(family_ids)].copy()
-    unit_price = min_median_max(evidence, "unit_price")
-    labor_price = min_median_max(evidence, "labor_unit_price")
-    machinery_price = min_median_max(evidence, "machinery_unit_price")
+def price_stats_for_option(
+    option: dict[str, Any],
+    display: pd.Series,
+    candidate_families: pd.DataFrame,
+    samples: pd.DataFrame,
+) -> dict[str, Any]:
+    option_id = cell_text(option.get("practice_option_id")) or cell_text(option.get("option_id"))
+    family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
+    if not family_ids:
+        raise ValueError(f"Option 缺少 family_ids: option_id={option_id}")
+    if "normalized_signature" not in samples.columns:
+        raise ValueError(f"samples 缺少 normalized_signature: option_id={option_id}")
+
+    candidate_family_ids = candidate_families.get("family_id", pd.Series(dtype=object)).map(cell_text)
+    family_signatures: list[tuple[str, str]] = []
+    expected_units_by_signature: dict[str, set[str]] = {}
+    for family_id in family_ids:
+        family_rows = candidate_families[candidate_family_ids.eq(family_id)]
+        if len(family_rows) != 1:
+            raise ValueError(
+                f"Family 无法唯一映射 normalized_signature: option_id={option_id}, "
+                f"family_id={family_id}, matched_rows={len(family_rows)}"
+            )
+        family = family_rows.iloc[0]
+        signature = cell_text(family.get("normalized_signature"))
+        if not signature:
+            raise ValueError(
+                f"Family normalized_signature 为空: option_id={option_id}, family_id={family_id}"
+            )
+        family_signatures.append((family_id, signature))
+        expected_units_by_signature.setdefault(signature, set()).add(
+            normalized_unit(cell_text(family.get("unit_normalized")) or family.get("unit"))
+        )
+
+    selected_signatures = list(dict.fromkeys(signature for _family_id, signature in family_signatures))
+    sample_signatures = samples["normalized_signature"].map(cell_text)
+    expanded = samples[samples["normalized_signature"].isin(selected_signatures)].copy()
+    for family_id, signature in family_signatures:
+        if not sample_signatures.eq(signature).any():
+            raise ValueError(
+                f"Family normalized_signature 在全量 samples 中无匹配: option_id={option_id}, "
+                f"family_id={family_id}, normalized_signature={signature}"
+            )
+
+    stable_ids = expanded.get("stable_sample_id", pd.Series("", index=expanded.index)).map(cell_text)
+    if stable_ids.eq("").any():
+        raise ValueError(f"全库价格证据 stable_sample_id 为空: option_id={option_id}")
+    duplicate_ids = stable_ids[stable_ids.duplicated(keep=False)]
+    if not duplicate_ids.empty:
+        raise ValueError(
+            f"全库价格证据 stable_sample_id 重复: option_id={option_id}, "
+            f"stable_sample_id={join_non_empty(duplicate_ids.tolist(), limit=10)}"
+        )
+
+    display_unit = normalized_unit(display.get("unit"))
+    for row_index, row in expanded.iterrows():
+        signature = cell_text(row.get("normalized_signature"))
+        sample_unit = normalized_unit(cell_text(row.get("unit_normalized")) or row.get("unit"))
+        family_units = expected_units_by_signature.get(signature, set())
+        if not sample_unit or "" in family_units or sample_unit not in family_units or sample_unit != display_unit:
+            raise ValueError(
+                f"全库价格证据单位不兼容: option_id={option_id}, "
+                f"stable_sample_id={cell_text(row.get('stable_sample_id'))}, "
+                f"normalized_signature={signature}, sample_unit={sample_unit}, "
+                f"family_units={join_non_empty(sorted(family_units))}, display_unit={display_unit}, "
+                f"row_index={row_index}"
+            )
+
+    source_refs: list[str] = []
+    for _row_index, row in expanded.iterrows():
+        source_refs.append(cell_text(row.get("source_ref")) or source_identity_for_row(row)[2])
+    expanded["source_ref"] = source_refs
+
+    unit_price = min_median_max(expanded, "unit_price")
+    labor_price = min_median_max(expanded, "labor_unit_price")
+    machinery_price = min_median_max(expanded, "machinery_unit_price")
     return {
         "unit_price_min": unit_price[0],
         "unit_price_median": unit_price[1],
@@ -2922,59 +2992,9 @@ def aggregate_price_from_evidence_items(evidence_items: pd.DataFrame, family_ids
         "machinery_unit_price_min": machinery_price[0],
         "machinery_unit_price_median": machinery_price[1],
         "machinery_unit_price_max": machinery_price[2],
-        "source_refs": ordered_refs(evidence.get("source_ref", pd.Series(dtype=object)), limit=50),
-        "evidence_count": int(len(evidence)),
+        "source_refs": ordered_refs(expanded["source_ref"]),
+        "evidence_count": int(len(expanded)),
     }
-
-
-def median_or_none(values: pd.Series) -> float | None:
-    numeric = pd.to_numeric(values, errors="coerce").dropna()
-    if numeric.empty:
-        return None
-    return float(numeric.median())
-
-
-def min_or_none(values: pd.Series) -> float | None:
-    numeric = pd.to_numeric(values, errors="coerce").dropna()
-    if numeric.empty:
-        return None
-    return float(numeric.min())
-
-
-def max_or_none(values: pd.Series) -> float | None:
-    numeric = pd.to_numeric(values, errors="coerce").dropna()
-    if numeric.empty:
-        return None
-    return float(numeric.max())
-
-
-def fallback_price_stats_from_families(candidate_families: pd.DataFrame, family_ids: list[str]) -> dict[str, Any]:
-    family_rows = candidate_families[
-        candidate_families.get("family_id", pd.Series(dtype=object)).map(cell_text).isin(family_ids)
-    ].copy()
-    return {
-        "unit_price_min": min_or_none(family_rows.get("本次召回综合单价最低值", pd.Series(dtype=float))),
-        "unit_price_median": median_or_none(family_rows.get("本次召回综合单价中位数", pd.Series(dtype=float))),
-        "unit_price_max": max_or_none(family_rows.get("本次召回综合单价最高值", pd.Series(dtype=float))),
-        "labor_unit_price_min": min_or_none(family_rows.get("本次召回人工费单价最低值", pd.Series(dtype=float))),
-        "labor_unit_price_median": median_or_none(family_rows.get("本次召回人工费单价中位数", pd.Series(dtype=float))),
-        "labor_unit_price_max": max_or_none(family_rows.get("本次召回人工费单价最高值", pd.Series(dtype=float))),
-        "machinery_unit_price_min": min_or_none(family_rows.get("本次召回机械费单价最低值", pd.Series(dtype=float))),
-        "machinery_unit_price_median": median_or_none(family_rows.get("本次召回机械费单价中位数", pd.Series(dtype=float))),
-        "machinery_unit_price_max": max_or_none(family_rows.get("本次召回机械费单价最高值", pd.Series(dtype=float))),
-        "source_refs": ordered_refs(family_rows.get("source_refs", pd.Series(dtype=object)), limit=50),
-        "evidence_count": int(pd.to_numeric(family_rows.get("本次召回样本数", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not family_rows.empty else 0,
-    }
-
-
-def price_stats_for_option(option: dict[str, Any], candidate_families: pd.DataFrame, evidence_items: pd.DataFrame) -> dict[str, Any]:
-    family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
-    stats = aggregate_price_from_evidence_items(evidence_items, family_ids)
-    fallback_stats = fallback_price_stats_from_families(candidate_families, family_ids)
-    for key, value in fallback_stats.items():
-        if stats.get(key) in (None, ""):
-            stats[key] = value
-    return stats
 
 
 def validate_price_stats(price_stats: dict[str, Any], stable_sample_id: str, practice_option_id: str) -> None:
@@ -3034,7 +3054,7 @@ def build_scenario_outputs(
     scenarios: list[EstimateScenario],
     displays_with_options: pd.DataFrame,
     candidate_families: pd.DataFrame,
-    evidence_items: pd.DataFrame,
+    samples: pd.DataFrame,
 ) -> pd.DataFrame:
     display_map, option_map = display_option_maps(displays_with_options)
     family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
@@ -3048,7 +3068,7 @@ def build_scenario_outputs(
             representative = family_map.get(item.representative_family_id)
             if representative is None:
                 raise ValueError(f"代表 Family 回查失败: {item.representative_family_id}")
-            price_stats = price_stats_for_option(option, candidate_families, evidence_items)
+            price_stats = price_stats_for_option(option, display_row, candidate_families, samples)
             validate_price_stats(price_stats, item.stable_sample_id, item.practice_option_id)
             amount_low, amount_mid, amount_high = quantity_amounts(item.quantity, price_stats)
             family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
@@ -3690,7 +3710,7 @@ def run_query(
     )
     scenarios = [scenario]
     estimate_scenarios = build_scenario_outputs(
-        scenarios, displays_with_options, candidate_families, evidence_items
+        scenarios, displays_with_options, candidate_families, samples
     )
     (
         scenario,
@@ -3708,7 +3728,7 @@ def run_query(
     )
     scenarios = [scenario]
     estimate_scenarios = build_scenario_outputs(
-        scenarios, displays_with_options, candidate_families, evidence_items
+        scenarios, displays_with_options, candidate_families, samples
     )
     estimate_summary = build_estimate_summary(scenarios, estimate_scenarios)
     if warnings:

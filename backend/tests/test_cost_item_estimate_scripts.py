@@ -1869,6 +1869,156 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         generator.assert_called_once()
         self.assertEqual(actual, expected)
 
+    def price_family(self, family_id: str, signature: str, unit: str = "m²") -> dict[str, object]:
+        return {
+            "family_id": family_id,
+            "normalized_signature": signature,
+            "unit": unit,
+            "unit_normalized": unit,
+        }
+
+    def price_sample(
+        self,
+        stable_sample_id: str,
+        signature: str,
+        unit_price: object,
+        *,
+        unit: str = "m²",
+        source_ref: str = "",
+    ) -> dict[str, object]:
+        index = int(re.sub(r"\D", "", stable_sample_id) or 1)
+        return {
+            "stable_sample_id": stable_sample_id,
+            "normalized_signature": signature,
+            "unit": unit,
+            "unit_normalized": unit,
+            "unit_price": unit_price,
+            "labor_unit_price": index,
+            "machinery_unit_price": index * 2,
+            "source_ref": source_ref,
+            "project_key": f"project-{index}",
+            "item_row_id": f"row-{index}",
+        }
+
+    def test_option_price_stats_expand_single_family_from_all_samples(self):
+        option = {"practice_option_id": "D001-O01", "family_ids": ["F001"]}
+        families = pd.DataFrame([self.price_family("F001", "sig-1")])
+        samples = pd.DataFrame([
+            self.price_sample(f"sid-{index}", "sig-1", price, source_ref=f"ref-{index}")
+            for index, price in enumerate([10, 20, 30, 40, 50], start=1)
+        ])
+
+        stats = query_estimate_llm.price_stats_for_option(
+            option, pd.Series({"unit": "m²"}), families, samples
+        )
+
+        self.assertEqual(stats["evidence_count"], 5)
+        self.assertEqual(
+            (stats["unit_price_min"], stats["unit_price_median"], stats["unit_price_max"]),
+            (10.0, 30.0, 50.0),
+        )
+        self.assertEqual(
+            (stats["labor_unit_price_min"], stats["labor_unit_price_median"], stats["labor_unit_price_max"]),
+            (1.0, 3.0, 5.0),
+        )
+
+    def test_option_price_stats_expand_multiple_families(self):
+        option = {"practice_option_id": "D001-O01", "family_ids": ["F001", "F002"]}
+        families = pd.DataFrame([
+            self.price_family("F001", "sig-1"),
+            self.price_family("F002", "sig-2"),
+        ])
+        samples = pd.DataFrame([
+            self.price_sample(f"sid-{index}", "sig-1" if index <= 5 else "sig-2", index, source_ref=f"ref-{index}")
+            for index in range(1, 9)
+        ])
+
+        stats = query_estimate_llm.price_stats_for_option(
+            option, pd.Series({"unit": "m²"}), families, samples
+        )
+
+        self.assertEqual(stats["evidence_count"], 8)
+        self.assertEqual(stats["unit_price_median"], 4.5)
+
+    def test_option_price_stats_limit_sources_without_limiting_count_or_statistics(self):
+        option = {"practice_option_id": "D001-O01", "family_ids": ["F001"]}
+        families = pd.DataFrame([self.price_family("F001", "sig-1")])
+        samples = pd.DataFrame([
+            self.price_sample(f"sid-{index}", "sig-1", index, source_ref=f"ref-{index}")
+            for index in range(1, 16)
+        ])
+
+        stats = query_estimate_llm.price_stats_for_option(
+            option, pd.Series({"unit": "m²"}), families, samples
+        )
+
+        self.assertEqual(stats["evidence_count"], 15)
+        self.assertEqual(stats["unit_price_median"], 8.0)
+        self.assertEqual(stats["machinery_unit_price_max"], 30.0)
+        self.assertEqual(len(stats["source_refs"].split(", ")), 10)
+
+    def test_option_price_stats_deduplicate_shared_signature_and_preserve_or_generate_sources(self):
+        option = {"practice_option_id": "D001-O01", "family_ids": ["F001", "F002"]}
+        families = pd.DataFrame([
+            self.price_family("F001", "shared"),
+            self.price_family("F002", "shared"),
+        ])
+        samples = pd.DataFrame([
+            self.price_sample("sid-1", "shared", 10, source_ref="existing-ref"),
+            self.price_sample("sid-2", "shared", 20),
+        ])
+
+        stats = query_estimate_llm.price_stats_for_option(
+            option, pd.Series({"unit": "m²"}), families, samples
+        )
+
+        self.assertEqual(stats["evidence_count"], 2)
+        self.assertEqual(stats["source_refs"], "existing-ref, project-2::row-2")
+
+    def test_option_price_stats_reject_invalid_family_mappings_and_missing_signatures(self):
+        display = pd.Series({"unit": "m²"})
+        samples = pd.DataFrame([self.price_sample("sid-1", "sig-1", 10)])
+        cases = [
+            (pd.DataFrame([self.price_family("F002", "sig-1")]), "不存在"),
+            (pd.DataFrame([self.price_family("F001", "sig-1"), self.price_family("F001", "sig-1")]), "不唯一"),
+            (pd.DataFrame([self.price_family("F001", "")]), "为空"),
+            (pd.DataFrame([self.price_family("F001", "missing")]), "无匹配"),
+        ]
+        option = {"practice_option_id": "D001-O01", "family_ids": ["F001"]}
+        for families, expected in cases:
+            with self.subTest(expected=expected), self.assertRaisesRegex(ValueError, f"D001-O01.*F001|F001.*{expected}") as raised:
+                query_estimate_llm.price_stats_for_option(option, display, families, samples)
+            self.assertIn("F001", str(raised.exception))
+            self.assertIn("D001-O01", str(raised.exception))
+
+    def test_option_price_stats_reject_empty_or_duplicate_stable_ids_and_incompatible_units(self):
+        option = {"practice_option_id": "D001-O01", "family_ids": ["F001"]}
+        families = pd.DataFrame([self.price_family("F001", "sig-1")])
+        invalid_samples = [
+            ([self.price_sample("", "sig-1", 10)], "为空"),
+            ([self.price_sample("sid-1", "sig-1", 10), self.price_sample("sid-1", "sig-1", 20)], "重复"),
+            ([self.price_sample("sid-1", "sig-1", 10, unit="m")], "单位不兼容"),
+        ]
+        for rows, expected in invalid_samples:
+            with self.subTest(expected=expected), self.assertRaisesRegex(ValueError, expected):
+                query_estimate_llm.price_stats_for_option(
+                    option, pd.Series({"unit": "m²"}), families, pd.DataFrame(rows)
+                )
+
+    def test_option_price_stats_do_not_fallback_when_comprehensive_prices_are_empty(self):
+        option = {"practice_option_id": "D001-O01", "family_ids": ["F001"]}
+        families = pd.DataFrame([{
+            **self.price_family("F001", "sig-1"),
+            "本次召回综合单价中位数": 999,
+        }])
+        samples = pd.DataFrame([self.price_sample("sid-1", "sig-1", "")])
+
+        stats = query_estimate_llm.price_stats_for_option(
+            option, pd.Series({"unit": "m²"}), families, samples
+        )
+        with self.assertRaisesRegex(ValueError, "unit_price"):
+            query_estimate_llm.validate_price_stats(stats, "selected-id", "D001-O01")
+
     def test_quantity_validation(self):
         self.assertEqual(query_estimate_llm.validate_quantity({"type": "exact", "value": 10}), {"type": "exact", "value": 10.0})
         self.assertEqual(query_estimate_llm.validate_quantity({"type": "range", "min": 0, "max": 10}), {"type": "range", "min": 0.0, "max": 10.0})

@@ -9,7 +9,7 @@
 - 支持按批次导入 OCR Excel，独立生成 cleaned、removed、classified 和单批次 cost item samples。
 - 支持自动合并 `samples/*/cost_item_samples.xlsx` 为总样本，并使用不含 `project_code` / `batch_id` 的 `stable_sample_id` 去重。
 - 支持从总样本 `samples/cost_item_samples_all.xlsx` 构建 project package / item embedding 索引，保留样本明细、工程包明细、工程包向量、清单行向量和索引元数据。
-- 支持自然语言造价查询：确定性选工程包、展开完整清单并裁剪连续区间；最终项在 Display 内选现有 Option，用真实 Family 展示并按选中 Option 的全部 Family 汇总价格证据。
+- 支持自然语言造价查询：确定性选工程包、展开完整清单并裁剪连续区间；最终项在 Display 内选现有 Option，用代表 Family 展示项目特征，并按 Option 全部 Family 的 `normalized_signature` 从全量 samples 展开价格证据。
 
 ## Recent Changes
 - 新增 `scripts/merge_cost_item_sample_batches.py`，自动合并历史批次样本、追加 `batch_id` / `stable_sample_id`，并输出去重报告。
@@ -20,6 +20,7 @@
 - 删除旧 `historical_plan_determination` 自由选择链路，新增确定性工程包选择、完整工程展开、连续区间选择和独立 quantity determination。
 - 查询 CLI 新增 `--with-explanations`；项目级和清单级解释默认关闭，XLSX 仍保留既有结构和完整价格、工程量、来源及统计结果。
 - Option Grouping 延后至代表工程连续区间确定后，仅处理最终区间所需 Display；局部 sample lookup 只服务最终估价链路，完整历史工程展示直接读取 samples。
+- 最终价格统计改为按选中 Option 全部 Family 的 `normalized_signature` 精确展开全量 samples；完整证据参与计数和统计，来源样本仍稳定限量展示。
 
 ## Decisions
 - 当前阶段不引入数据库、Milvus 或 LangChain；样本合并后重建本地 parquet + npy 索引。
@@ -31,6 +32,7 @@
 - 工程包选择不调用 LLM：全部召回包参与平均清单数计算，最终候选仅限相似度前 5，距离相同时选择相似度排名更高者。
 - 连续区间和 quantity 使用完整工程包中的绝对 `item_position`；quantity 读取最终代表 Family 的真实清单名称、项目特征和单位。
 - Option 只是一组业务等价的 Family ID，不生成工艺摘要；不确定或选择失败时保留原 Option。
+- 最终价格证据只按 Option 全部 Family 的 `normalized_signature` 从全量 samples 精确匹配；不使用 embedding、不回退本次召回 evidence 或 Family 统计，缺失映射、样本 ID 异常和单位不兼容均直接报错。
 - selected items 必须通过 `stable_sample_id → family_id → display_id` 严格唯一映射；缺失或重复直接报错，不设置兼容 lookup 或旧流程 fallback。
 - 项目级和清单级解释只读取已经确定的工程、区间、quantity 和价格结果，不参与任何选择或计算。
 - dedup_selection 只抑制最终展示项，不创建新 family，不合并 source_refs、本次召回样本、工程量或价格区间。
