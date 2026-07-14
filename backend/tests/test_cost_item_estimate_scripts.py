@@ -1745,6 +1745,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         quantity_prompt = query_estimate_llm.build_quantity_determination_prompt("屋面维修", items)
         quantity_payload = json.loads(quantity_prompt.split("输入：\n", 1)[1])
+        self.assertEqual(set(quantity_payload), {"user_query", "items"})
+        self.assertNotIn("anchor", quantity_payload)
         self.assertEqual(quantity_payload["items"][0]["unit"], "平方米")
         self.assertEqual(quantity_payload["items"][0]["historical_quantity"], 100.0)
 
@@ -1771,21 +1773,164 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 self.assertTrue(meta["fallback"])
                 self.assertEqual(meta["range_selection_status"], "fallback_full_project")
 
-    def test_quantity_result_requires_exact_absolute_position_coverage(self):
-        items = pd.DataFrame([{"item_position": 3}, {"item_position": 4}])
-        valid = {"item_quantities": [
-            {"item_position": 3, "quantity": {"type": "exact", "value": 10}, "quantity_reason": "用户明确"},
-            {"item_position": 4, "quantity": {"type": "range", "min": 1, "max": 2}, "quantity_reason": "待复核"},
+    def quantity_rule_items(self):
+        return pd.DataFrame([
+            {"item_position": 0, "cost_item_name": "防水层拆除", "project_description": "", "unit": "m²", "quantity": 80},
+            {"item_position": 4, "cost_item_name": "屋面卷材防水", "project_description": "4mm SBS", "unit": "m²", "quantity": 100},
+            {"item_position": 6, "cost_item_name": "面层恢复", "project_description": "", "unit": "m²", "quantity": 60},
+        ])
+
+    def test_quantity_llm_selects_sbs_anchor_and_program_scales(self):
+        items = self.quantity_rule_items()
+        result = {
+            "anchor_item_position": 4,
+            "anchor_user_quantity": 500,
+            "item_quantity_rules": [
+                {"item_position": 0, "rule": "scale_with_anchor"},
+                {"item_position": 4, "rule": "use_user_exact"},
+                {"item_position": 6, "rule": "scale_with_anchor"},
+            ],
+        }
+        anchor, rules = query_estimate_llm.parse_quantity_determination_result(result, items)
+        self.assertEqual(anchor["item_position"], 4)
+        self.assertEqual(anchor["user_quantity"], 500.0)
+        quantities = query_estimate_llm.calculate_quantities(items, anchor, rules)
+        self.assertEqual(quantities[4][0], {"type": "exact", "value": 500.0})
+        self.assertEqual(quantities[0][0], {"type": "exact", "value": 400.0})
+        self.assertEqual(quantities[6][0], {"type": "exact", "value": 300.0})
+
+    def test_quantity_missing_anchor_rule_is_auto_filled_and_scaled(self):
+        items = self.quantity_rule_items()
+        result = {
+            "anchor_item_position": 4,
+            "anchor_user_quantity": 500,
+            "item_quantity_rules": [
+                {"item_position": 0, "rule": "scale_with_anchor"},
+                {"item_position": 6, "rule": "scale_with_anchor"},
+            ],
+        }
+        normalization_warnings = []
+        anchor, rules = query_estimate_llm.validate_quantity_rule_result(
+            result, items, normalization_warnings
+        )
+        self.assertEqual(rules[4], "use_user_exact")
+        self.assertEqual(normalization_warnings, ["quantity_anchor_rule_auto_filled:4"])
+        quantities = query_estimate_llm.calculate_quantities(items, anchor, rules)
+        self.assertEqual(quantities[4][0]["value"], 500.0)
+        self.assertEqual(quantities[0][0]["value"], 400.0)
+        self.assertEqual(quantities[6][0]["value"], 300.0)
+
+    def test_quantity_auto_fill_is_successful_normalization_in_trace(self):
+        items = self.quantity_rule_items().copy()
+        items["stable_sample_id"] = ["s0", "s4", "s6"]
+        lookup = {
+            stable_id: {
+                "project_package_id": "P1", "source_ref": stable_id, "display_id": stable_id,
+                "practice_option_id": stable_id, "family_id": stable_id,
+            }
+            for stable_id in items["stable_sample_id"]
+        }
+        response = types.SimpleNamespace(content={
+            "anchor_item_position": 4,
+            "anchor_user_quantity": 500,
+            "item_quantity_rules": [
+                {"item_position": 0, "rule": "scale_with_anchor"},
+                {"item_position": 6, "rule": "scale_with_anchor"},
+            ],
+        }, usage={}, raw_content="{}")
+        warnings = []
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response):
+            scenario, _prompt, trace = query_estimate_llm.generate_quantity_determination(
+                "4mm SBS防水，面积500平", "P1", items, lookup, warnings
+            )
+        self.assertEqual(trace["parsed_status"], "success")
+        self.assertEqual(trace["error_message"], "")
+        self.assertTrue(trace["normalization_applied"])
+        self.assertFalse(trace["fallback"])
+        self.assertIn("quantity_anchor_rule_auto_filled:4", warnings)
+        self.assertEqual(next(item.quantity["value"] for item in scenario.items if item.item_position == 4), 500.0)
+
+    def test_quantity_llm_may_fallback_to_first_input_item(self):
+        items = self.quantity_rule_items()
+        result = {
+            "anchor_item_position": 0,
+            "anchor_user_quantity": 200,
+            "item_quantity_rules": [
+                {"item_position": 0, "rule": "use_user_exact"},
+                {"item_position": 4, "rule": "scale_with_anchor"},
+                {"item_position": 6, "rule": "scale_with_anchor"},
+            ],
+        }
+        anchor, rules = query_estimate_llm.validate_quantity_rule_result(result, items)
+        self.assertEqual(anchor["item_position"], int(items.iloc[0]["item_position"]))
+        self.assertEqual(query_estimate_llm.calculate_quantities(items, anchor, rules)[4][0]["value"], 250.0)
+
+    def test_quantity_null_anchor_requires_all_keep_historical(self):
+        items = self.quantity_rule_items()
+        valid = {
+            "anchor_item_position": None,
+            "anchor_user_quantity": None,
+            "item_quantity_rules": [
+                {"item_position": position, "rule": "keep_historical"}
+                for position in items["item_position"].tolist()
+            ],
+        }
+        anchor, rules = query_estimate_llm.validate_quantity_rule_result(valid, items)
+        self.assertIsNone(anchor)
+        self.assertEqual(set(rules.values()), {"keep_historical"})
+        invalid = {**valid, "item_quantity_rules": [
+            {"item_position": 0, "rule": "scale_with_anchor"},
+            *valid["item_quantity_rules"][1:],
         ]}
-        parsed = query_estimate_llm.parse_quantity_determination_result(valid, items)
-        self.assertEqual(set(parsed), {3, 4})
-        for invalid in [
-            {"item_quantities": valid["item_quantities"][:1]},
-            {"item_quantities": [*valid["item_quantities"], valid["item_quantities"][0]]},
-            {"item_quantities": [{**valid["item_quantities"][0], "item_position": True}, valid["item_quantities"][1]]},
-        ]:
-            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
-                query_estimate_llm.parse_quantity_determination_result(invalid, items)
+        with self.assertRaisesRegex(ValueError, "anchor 为 null"):
+            query_estimate_llm.validate_quantity_rule_result(invalid, items)
+
+    def test_quantity_anchor_and_rule_strict_validation(self):
+        items = self.quantity_rule_items()
+        valid_rules = [
+            {"item_position": 0, "rule": "keep_historical"},
+            {"item_position": 4, "rule": "use_user_exact"},
+            {"item_position": 6, "rule": "keep_historical"},
+        ]
+        invalid_results = [
+            {"anchor_item_position": 4, "anchor_user_quantity": 500, "item_quantity_rules": valid_rules, "extra": 1},
+            {"anchor_item_position": 4, "anchor_user_quantity": None, "item_quantity_rules": valid_rules},
+            {"anchor_item_position": 99, "anchor_user_quantity": 500, "item_quantity_rules": valid_rules},
+            {"anchor_item_position": 4, "anchor_user_quantity": 0, "item_quantity_rules": valid_rules},
+            {"anchor_item_position": 4, "anchor_user_quantity": 500, "item_quantity_rules": valid_rules[:2]},
+            {"anchor_item_position": 4, "anchor_user_quantity": 500, "item_quantity_rules": [*valid_rules, valid_rules[0]]},
+            {"anchor_item_position": 4, "anchor_user_quantity": 500, "item_quantity_rules": [{"item_position": 99, "rule": "keep_historical"}, *valid_rules[1:]]},
+            {"anchor_item_position": 4, "anchor_user_quantity": 500, "item_quantity_rules": [{"item_position": 0, "rule": "use_user_exact"}, *valid_rules[1:]]},
+            {"anchor_item_position": 4, "anchor_user_quantity": 500, "item_quantity_rules": [valid_rules[0], {"item_position": 4, "rule": "keep_historical"}, valid_rules[2]]},
+            {"anchor_item_position": 4, "anchor_user_quantity": 500, "item_quantity_rules": [{"item_position": 0, "rule": "unknown"}, *valid_rules[1:]]},
+        ]
+        for result in invalid_results:
+            with self.subTest(result=result), self.assertRaises(ValueError):
+                query_estimate_llm.validate_quantity_rule_result(result, items)
+
+    def test_quantity_llm_failure_keeps_all_historical_without_anchor(self):
+        items = pd.DataFrame([
+            {"item_position": 0, "stable_sample_id": "s0", "cost_item_name": "屋面卷材防水", "unit": "m²", "quantity": 100},
+            {"item_position": 1, "stable_sample_id": "s1", "cost_item_name": "防水层拆除", "unit": "m²", "quantity": 80},
+        ])
+        lookup = {
+            f"s{position}": {
+                "project_package_id": "P1", "source_ref": f"r{position}", "display_id": f"D{position}",
+                "practice_option_id": f"O{position}", "family_id": f"F{position}",
+            }
+            for position in range(2)
+        }
+        warnings = []
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage", side_effect=RuntimeError("down")):
+            scenario, prompt, trace = query_estimate_llm.generate_quantity_determination(
+                "4mm SBS防水，面积500平", "P1", items, lookup, warnings
+            )
+        payload = json.loads(prompt.split("输入：\n", 1)[1])
+        self.assertNotIn("anchor", payload)
+        self.assertEqual([item.quantity["value"] for item in scenario.items], [100.0, 80.0])
+        self.assertEqual(trace["parsed_status"], "failed")
+        self.assertTrue(trace["fallback"])
+        self.assertIn("quantity_determination_fallback_keep_historical", warnings)
 
     def test_build_scenario_from_plan_preserves_historical_practice_option(self):
         plan_items = pd.DataFrame([{"item_position": 5, "stable_sample_id": "sid"}])
@@ -2262,8 +2407,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_quantity_validation(self):
         self.assertEqual(query_estimate_llm.validate_quantity({"type": "exact", "value": 10}), {"type": "exact", "value": 10.0})
-        self.assertEqual(query_estimate_llm.validate_quantity({"type": "range", "min": 0, "max": 10}), {"type": "range", "min": 0.0, "max": 10.0})
         for quantity in [
+            {"type": "exact", "value": 0},
             {"type": "exact", "value": -1},
             {"type": "range", "min": 20, "max": 10},
             {"type": "unknown"},
@@ -2271,7 +2416,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             with self.assertRaises(ValueError):
                 query_estimate_llm.validate_quantity(quantity)
 
-    def test_parse_info_records_range_quantity_and_explanation_config(self):
+    def test_parse_info_records_exact_only_quantity_and_explanation_config(self):
+        self.assertEqual(query_estimate_llm.quantity_determination_status({"error_message": ""}), "success")
+        self.assertEqual(query_estimate_llm.quantity_determination_status({"error_message": "invalid"}), "failed")
+        self.assertEqual(
+            query_estimate_llm.quantity_determination_status({"error_message": "invalid", "fallback": True}),
+            "fallback",
+        )
         trace = {"prompt_chars": 10, "prompt_tokens": 4, "completion_tokens": 2}
         parse_info = query_estimate_llm.build_parse_info(
             rewrite=query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", "浙江省嘉兴市", "2025-01-01", "2025-12-31", [], True),
@@ -2305,7 +2456,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             selected_project_package_id="PKG-1",
             selected_item_count=2,
             selected_exact_quantity_count=1,
-            selected_range_quantity_count=1,
+            selected_range_quantity_count=0,
             range_selection_trace=trace,
             range_selection_error="fallback reason",
             quantity_trace=trace,
