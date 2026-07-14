@@ -37,6 +37,25 @@ MATCHED_PROJECT_PACKAGE_COLUMNS = [
     "location",
     "cache_subject",
     "item_count",
+    "item_count_average",
+    "is_top5_similarity",
+    "item_count_distance_to_average",
+    "project_selection_rank",
+    "is_selected_package",
+]
+
+RANGE_SELECTION_TRACE_COLUMNS = [
+    "project_package_id",
+    "工程名称",
+    "project_item_count",
+    "start_item_position",
+    "end_item_position",
+    "selected_item_count",
+    "range_selection_status",
+    "fallback",
+    "error_message",
+    "prompt",
+    "raw_response",
 ]
 
 MATCHED_PROJECT_EXAMPLE_COLUMNS = [
@@ -264,12 +283,6 @@ class ScenarioItem:
 
 
 @dataclass(frozen=True)
-class HistoricalPlan:
-    project_package_id: str
-    items: list[ScenarioItem]
-
-
-@dataclass(frozen=True)
 class EstimateScenario:
     scenario_id: str
     scenario_order: int
@@ -290,6 +303,7 @@ class QueryResult:
     display_group_families: pd.DataFrame
     display_option_grouping_trace: pd.DataFrame
     matched_project_examples: pd.DataFrame
+    range_selection: pd.DataFrame
     evidence_items: pd.DataFrame
     parse_info: pd.DataFrame
     llm_trace: pd.DataFrame
@@ -307,6 +321,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite", action="store_true", help="若输出文件已存在则覆盖")
     parser.add_argument("--include-debug-text", action="store_true", help="在 parse_info 中保留 LLM 调试文本摘要")
     parser.add_argument("--display", action="store_true", help="输出时将部分数值格式化为易读文本")
+    parser.add_argument(
+        "--with-explanations",
+        action="store_true",
+        help="生成项目级和清单级 LLM 解释，默认关闭",
+    )
     parser.add_argument(
         "--llm-check-timeout",
         type=float,
@@ -695,6 +714,50 @@ def matched_project_packages_for_output(matched: pd.DataFrame) -> pd.DataFrame:
     return output[MATCHED_PROJECT_PACKAGE_COLUMNS].fillna("")
 
 
+def select_representative_project_package(
+    matched_project_packages: pd.DataFrame,
+) -> tuple[pd.Series, pd.DataFrame]:
+    if matched_project_packages.empty:
+        raise ValueError("matched_project_packages 为空，无法选择历史工程包")
+    required = {"package_query_similarity", "item_count", "project_package_id"}
+    missing = sorted(required - set(matched_project_packages.columns))
+    if missing:
+        raise ValueError(f"matched_project_packages 缺少字段: {', '.join(missing)}")
+
+    ranked = matched_project_packages.copy()
+    ranked["_recall_order"] = range(len(ranked))
+    ranked["package_query_similarity"] = pd.to_numeric(
+        ranked["package_query_similarity"], errors="raise"
+    )
+    ranked["item_count"] = pd.to_numeric(ranked["item_count"], errors="raise")
+    if ranked["item_count"].isna().any():
+        raise ValueError("matched_project_packages.item_count 不得为空")
+    ranked = ranked.sort_values(
+        ["package_query_similarity", "_recall_order"],
+        ascending=[False, True],
+        kind="stable",
+    ).reset_index(drop=True)
+    average_item_count = float(ranked["item_count"].mean())
+    ranked["item_count_average"] = average_item_count
+    ranked["project_selection_rank"] = range(1, len(ranked) + 1)
+    ranked["is_top5_similarity"] = ranked.index < 5
+    ranked["item_count_distance_to_average"] = (
+        ranked["item_count"].astype(float) - average_item_count
+    ).abs()
+    top_five = ranked.head(5)
+    selected_index = min(
+        range(len(top_five)),
+        key=lambda index: (
+            float(top_five.iloc[index]["item_count_distance_to_average"]),
+            index,
+        ),
+    )
+    ranked["is_selected_package"] = False
+    ranked.loc[selected_index, "is_selected_package"] = True
+    selected_package = ranked.iloc[selected_index].copy()
+    return selected_package, ranked.drop(columns=["_recall_order"])
+
+
 def item_row_numeric_order(value: Any) -> float | None:
     text = cell_text(value)
     if not text:
@@ -719,6 +782,127 @@ def ordered_project_items(samples: pd.DataFrame, project_package_id: str) -> pd.
         ascending=[True, True, True],
         kind="stable",
     ).drop(columns=["_source_order", "_item_row_order", "_seq_order", "_preferred_order", "_missing_order"])
+
+
+def expand_selected_project_items(
+    samples: pd.DataFrame,
+    selected_package: pd.Series,
+) -> pd.DataFrame:
+    project_package_id = cell_text(selected_package.get("project_package_id"))
+    selected_items = ordered_project_items(samples, project_package_id)
+    if selected_items.empty:
+        raise ValueError(f"所选工程包没有清单: {project_package_id}")
+    expected_count = numeric_or_none(selected_package.get("item_count"))
+    if expected_count is None or not float(expected_count).is_integer():
+        raise ValueError(f"所选工程包 item_count 非法: {selected_package.get('item_count')!r}")
+    if len(selected_items) != int(expected_count):
+        raise ValueError(
+            f"所选工程包完整清单数量与 item_count 不一致: "
+            f"project_package_id={project_package_id}, expected={int(expected_count)}, "
+            f"actual={len(selected_items)}"
+        )
+    selected_items = selected_items.reset_index(drop=True)
+    selected_items["item_position"] = range(len(selected_items))
+    return selected_items
+
+
+def range_selection_item_records(selected_items: pd.DataFrame) -> list[dict[str, Any]]:
+    return [
+        {
+            "item_position": int(row["item_position"]),
+            "cost_item_name": cell_text(row.get("cost_item_name")),
+            "project_description": cell_text(row.get("project_description")),
+            "unit": cell_text(row.get("unit")) or cell_text(row.get("unit_normalized")),
+            "historical_quantity": numeric_or_none(row.get("quantity")),
+        }
+        for _index, row in selected_items.iterrows()
+    ]
+
+
+def build_contiguous_item_range_prompt(
+    raw_query: str,
+    selected_project_name: str,
+    selected_items: pd.DataFrame,
+) -> str:
+    return f"""
+你会收到一个已经由程序选定的真实历史工程，以及该工程按原始顺序排列的全部清单。
+
+请根据用户原始需求，在该工程中选择一个最适合作为当前方案骨架的连续清单区间。
+
+规则：
+1. start_item_position 和 end_item_position 均为 0-based，并且包含边界。
+2. 必须选择一个连续区间，不得返回多个区间。
+3. 区间应尽量保留完整的相关施工内容，避免只选择用户直接提到的单个主体项。
+4. 工程名称和清单原始顺序是重要参考。
+5. 无法明确缩小时，选择完整工程。
+6. 本阶段不判断工程量、不修改工艺、不生成价格。
+
+只输出：
+{{
+  "start_item_position": 0,
+  "end_item_position": 5
+}}
+
+输入：
+{json_text({"user_query": raw_query, "selected_project_name": selected_project_name, "items": range_selection_item_records(selected_items)})}
+""".strip()
+
+
+def validate_contiguous_range(result: Any, item_count: int) -> tuple[int, int]:
+    if not isinstance(result, dict):
+        raise ValueError("区间结果必须是 object")
+    if set(result) != {"start_item_position", "end_item_position"}:
+        raise ValueError("区间结果必须且只能包含 start_item_position 和 end_item_position")
+    start = result["start_item_position"]
+    end = result["end_item_position"]
+    if isinstance(start, bool) or not isinstance(start, int):
+        raise ValueError("start_item_position 必须是整数")
+    if isinstance(end, bool) or not isinstance(end, int):
+        raise ValueError("end_item_position 必须是整数")
+    if start < 0 or end >= item_count:
+        raise ValueError("区间位置越界")
+    if start > end:
+        raise ValueError("区间起点不得大于终点")
+    return start, end
+
+
+def select_contiguous_item_range(
+    raw_query: str,
+    selected_project_name: str,
+    selected_items: pd.DataFrame,
+) -> tuple[int, int, dict[str, Any]]:
+    if selected_items.empty:
+        raise ValueError("所选工程包没有清单，不执行连续区间选择")
+    prompt = build_contiguous_item_range_prompt(raw_query, selected_project_name, selected_items)
+    fallback_start, fallback_end = 0, len(selected_items) - 1
+    raw_response = ""
+    usage: dict[str, Any] = {}
+    try:
+        response = request_llm_json_with_usage(
+            prompt,
+            max_tokens=256,
+            system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
+        )
+        raw_response = cell_text(getattr(response, "raw_content", ""))
+        usage = getattr(response, "usage", {}) or {}
+        start, end = validate_contiguous_range(response.content, len(selected_items))
+        return start, end, {
+            "range_selection_status": "ok",
+            "fallback": False,
+            "error_message": "",
+            "prompt": prompt,
+            "raw_response": raw_response,
+            "usage": usage,
+        }
+    except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+        return fallback_start, fallback_end, {
+            "range_selection_status": "fallback_full_project",
+            "fallback": True,
+            "error_message": str(exc),
+            "prompt": prompt,
+            "raw_response": raw_response,
+            "usage": usage,
+        }
 
 
 def build_matched_project_examples(
@@ -1865,6 +2049,137 @@ def validate_quantity(value: Any) -> dict[str, Any]:
     raise ValueError("quantity.type 只能是 exact 或 range")
 
 
+def build_quantity_determination_prompt(raw_text: str, plan_items: pd.DataFrame) -> str:
+    items = [
+        {
+            "item_position": int(row["item_position"]),
+            "cost_item_name": cell_text(row.get("cost_item_name")),
+            "project_description": cell_text(row.get("project_description")),
+            "unit": cell_text(row.get("unit")) or cell_text(row.get("unit_normalized")),
+            "historical_quantity": numeric_or_none(row.get("quantity")),
+        }
+        for _index, row in plan_items.iterrows()
+    ]
+    return f"""
+最终方案清单已经确定。只为每个清单确定工程量，不得增加、删除、重排清单，不得修改工艺或生成价格。
+
+规则：
+1. 必须覆盖输入中的每个 item_position，且每个位置只出现一次。
+2. item_position 是完整历史工程包中的 0-based 绝对位置，不得重新编号。
+3. quantity 只能是 exact 或 range；优先采用用户明确工程量，避免照搬明显不适合的历史数量。
+4. quantity_reason 必须非空，并简要说明依据。
+
+只输出：
+{{
+  "item_quantities": [
+    {{
+      "item_position": 0,
+      "quantity": {{"type": "exact", "value": 500}},
+      "quantity_reason": "工程量确定依据"
+    }}
+  ]
+}}
+
+输入：
+{json_text({"user_query": raw_text, "items": items})}
+""".strip()
+
+
+def parse_quantity_determination_result(
+    result: Any,
+    plan_items: pd.DataFrame,
+) -> dict[int, tuple[dict[str, Any], str]]:
+    if not isinstance(result, dict) or set(result) != {"item_quantities"}:
+        raise ValueError("quantity determination 顶层必须且只能包含 item_quantities")
+    raw_entries = result.get("item_quantities")
+    if not isinstance(raw_entries, list):
+        raise ValueError("item_quantities 必须是数组")
+    expected_positions = {int(value) for value in plan_items["item_position"].tolist()}
+    parsed: dict[int, tuple[dict[str, Any], str]] = {}
+    for entry in raw_entries:
+        if not isinstance(entry, dict) or set(entry) != {"item_position", "quantity", "quantity_reason"}:
+            raise ValueError("item_quantity 字段非法")
+        position = entry.get("item_position")
+        if isinstance(position, bool) or not isinstance(position, int):
+            raise ValueError("quantity item_position 必须是整数")
+        if position in parsed:
+            raise ValueError(f"quantity item_position 重复: {position}")
+        reason = cell_text(entry.get("quantity_reason"))
+        if not reason:
+            raise ValueError(f"quantity_reason 不得为空: item_position={position}")
+        parsed[position] = (validate_quantity(entry.get("quantity")), reason)
+    actual_positions = set(parsed)
+    if actual_positions != expected_positions:
+        raise ValueError("quantity 必须覆盖选定区间内全部清单")
+    return parsed
+
+
+def build_scenario_from_plan_items(
+    project_package_id: str,
+    plan_items: pd.DataFrame,
+    sample_lookup: dict[str, dict[str, Any]],
+    quantities: dict[int, tuple[dict[str, Any], str]],
+) -> EstimateScenario:
+    items: list[ScenarioItem] = []
+    for _index, row in plan_items.iterrows():
+        position = int(row["item_position"])
+        stable_sample_id = cell_text(row.get("stable_sample_id"))
+        sample = sample_lookup.get(stable_sample_id)
+        if sample is None:
+            raise ValueError(f"最终清单无法回查证据: item_position={position}, stable_sample_id={stable_sample_id}")
+        if cell_text(sample.get("project_package_id")) != project_package_id:
+            raise ValueError(f"最终清单工程包映射不一致: item_position={position}")
+        quantity, quantity_reason = quantities[position]
+        items.append(
+            ScenarioItem(
+                project_package_id=project_package_id,
+                stable_sample_id=stable_sample_id,
+                source_ref=cell_text(sample.get("source_ref")),
+                display_id=cell_text(sample.get("display_id")),
+                practice_option_id=cell_text(sample.get("practice_option_id")),
+                selection_reason="",
+                quantity=quantity,
+                quantity_reason=quantity_reason,
+            )
+        )
+    return EstimateScenario("S001", 1, "", "", items)
+
+
+def generate_quantity_determination(
+    raw_text: str,
+    project_package_id: str,
+    plan_items: pd.DataFrame,
+    sample_lookup: dict[str, dict[str, Any]],
+) -> tuple[EstimateScenario, str, dict[str, Any]]:
+    prompt = build_quantity_determination_prompt(raw_text, plan_items)
+    max_tokens = 4096
+    response = request_llm_json_with_usage(
+        prompt,
+        max_tokens=max_tokens,
+        system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
+    )
+    quantities = parse_quantity_determination_result(response.content, plan_items)
+    scenario = build_scenario_from_plan_items(
+        project_package_id, plan_items, sample_lookup, quantities
+    )
+    trace = trace_row(
+        "quantity_determination",
+        "确定最终连续区间内全部清单的工程量",
+        True,
+        prompt=prompt,
+        max_tokens=max_tokens,
+        input_summary=json_text({
+            "selected_project_package_id": project_package_id,
+            "expected_item_positions": plan_items["item_position"].tolist(),
+        }),
+        usage=response.usage,
+        raw_response=getattr(response, "raw_content", ""),
+        scenario_count=1,
+        scenario_item_count=len(scenario.items),
+    )
+    return scenario, prompt, trace
+
+
 def build_stable_sample_lookup(
     samples: pd.DataFrame,
     evidence_items: pd.DataFrame,
@@ -1923,434 +2238,6 @@ def build_stable_sample_lookup(
             "project_package_id": cell_text(row.get("project_package_id")),
         }
     return lookup
-
-
-def historical_project_records(
-    examples: list[dict[str, Any]],
-    sample_lookup: dict[str, dict[str, Any]],
-) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for example in examples:
-        project_package_id = cell_text(example.get("project_package_id"))
-        items = example.get("items") if isinstance(example.get("items"), list) else []
-        item_records: list[dict[str, Any]] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            stable_sample_id = cell_text(item.get("stable_sample_id"))
-            sample = sample_lookup.get(stable_sample_id)
-            if sample is None:
-                raise ValueError(f"历史工程样本未映射到 sample_lookup: {stable_sample_id}")
-            if cell_text(sample.get("project_package_id")) != project_package_id:
-                raise ValueError(f"历史工程样本 project_package_id 不一致: {stable_sample_id}")
-            item_records.append(
-                {
-                    "stable_sample_id": stable_sample_id,
-                    "source_ref": cell_text(sample.get("source_ref")),
-                    "family_id": cell_text(sample.get("family_id")),
-                    "display_id": cell_text(sample.get("display_id")),
-                    "practice_option_id": cell_text(sample.get("practice_option_id")),
-                    "cost_item_name": cell_text(item.get("cost_item_name")),
-                    "project_description": cell_text(item.get("project_description")),
-                    "unit": cell_text(item.get("unit")),
-                    "quantity": item.get("quantity"),
-                }
-            )
-        records.append(
-            {
-                "project_package_id": project_package_id,
-                "project_name": cell_text(example.get("project_name")) or cell_text(example.get("project_name_text")),
-                "items": item_records,
-            }
-        )
-    return records
-
-
-def historical_project_prompt_records(
-    historical_projects: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    return [
-        {
-            "project_name": cell_text(project.get("project_name")),
-            "items": [
-                {
-                    "display_id": cell_text(item.get("display_id")),
-                    "practice_option_id": cell_text(item.get("practice_option_id")),
-                    "cost_item_name": cell_text(item.get("cost_item_name")),
-                    "project_description": cell_text(item.get("project_description")),
-                    "unit": cell_text(item.get("unit")),
-                    "quantity": item.get("quantity"),
-                }
-                for item in (project.get("items") if isinstance(project.get("items"), list) else [])
-                if isinstance(item, dict)
-            ],
-        }
-        for project in historical_projects
-    ]
-
-
-def historical_display_options(
-    historical_projects: list[dict[str, Any]],
-    displays_with_options: pd.DataFrame,
-    model: Any,
-    item_query_embedding: np.ndarray,
-    max_alternatives: int = 5,
-) -> dict[str, list[dict[str, str]]]:
-    display_map, _option_map = display_option_maps(displays_with_options)
-    display_ids: list[str] = []
-    original_option_ids: dict[str, list[str]] = {}
-    for project in historical_projects:
-        for item in project.get("items") or []:
-            if not isinstance(item, dict):
-                continue
-            display_id = cell_text(item.get("display_id"))
-            practice_option_id = cell_text(item.get("practice_option_id"))
-            if display_id not in original_option_ids:
-                display_ids.append(display_id)
-                original_option_ids[display_id] = []
-            if practice_option_id and practice_option_id not in original_option_ids[display_id]:
-                original_option_ids[display_id].append(practice_option_id)
-
-    options_by_display: dict[str, list[dict[str, str]]] = {}
-    alternative_options_by_display: dict[str, list[dict[str, str]]] = {}
-    unique_descriptions: list[str] = []
-    seen_descriptions: set[str] = set()
-    for display_id in display_ids:
-        display = display_map.get(display_id)
-        if display is None:
-            raise ValueError(f"历史工程 display 无法回查: {display_id}")
-        raw_options = display.get("practice_options") if isinstance(display.get("practice_options"), list) else []
-        option_records: list[dict[str, str]] = []
-        seen_option_ids: set[str] = set()
-        for option in raw_options:
-            if not isinstance(option, dict):
-                continue
-            practice_option_id = cell_text(option.get("practice_option_id"))
-            if not practice_option_id or practice_option_id in seen_option_ids:
-                continue
-            seen_option_ids.add(practice_option_id)
-            option_records.append(
-                {
-                    "practice_option_id": practice_option_id,
-                    "practice_description": cell_text(option.get("practice_description")),
-                }
-            )
-        option_by_id = {option["practice_option_id"]: option for option in option_records}
-        missing_originals = [
-            option_id
-            for option_id in original_option_ids.get(display_id, [])
-            if option_id not in option_by_id
-        ]
-        if missing_originals:
-            raise ValueError(
-                f"历史工程原 practice option 无法回查: {display_id}/{join_non_empty(missing_originals)}"
-            )
-        if len(option_records) <= 1:
-            continue
-        original_records = [option_by_id[option_id] for option_id in original_option_ids[display_id]]
-        original_id_set = set(original_option_ids[display_id])
-        alternatives = [
-            option for option in option_records if option["practice_option_id"] not in original_id_set
-        ]
-        options_by_display[display_id] = original_records
-        alternative_options_by_display[display_id] = alternatives
-        for option in alternatives:
-            description = option["practice_description"]
-            if description not in seen_descriptions:
-                seen_descriptions.add(description)
-                unique_descriptions.append(description)
-
-    description_scores: dict[str, float] = {}
-    if unique_descriptions:
-        description_embeddings = encode_texts(model, unique_descriptions)
-        query_embedding = np.asarray(item_query_embedding, dtype=np.float32).reshape(-1)
-        if description_embeddings.shape[1] != query_embedding.shape[0]:
-            raise ValueError("practice description embedding 维度与 item query embedding 不一致")
-        similarities = description_embeddings @ query_embedding
-        description_scores = {
-            description: float(similarities[index])
-            for index, description in enumerate(unique_descriptions)
-        }
-
-    output: dict[str, list[dict[str, str]]] = {}
-    alternative_limit = min(5, max(1, int(max_alternatives)))
-    for display_id in display_ids:
-        if display_id not in options_by_display:
-            continue
-        ranked_alternatives = sorted(
-            alternative_options_by_display[display_id],
-            key=lambda option: -description_scores.get(option["practice_description"], float("-inf")),
-        )
-        output[display_id] = [
-            *options_by_display[display_id],
-            *ranked_alternatives[:alternative_limit],
-        ]
-    return output
-
-
-def build_historical_plan_determination_prompt(
-    raw_text: str,
-    matched_project_examples: list[dict[str, Any]],
-    displays_with_options: pd.DataFrame,
-    sample_lookup: dict[str, dict[str, Any]],
-    model: Any,
-    item_query_embedding: np.ndarray,
-) -> tuple[str, list[dict[str, Any]], dict[str, list[dict[str, str]]]]:
-    projects = historical_project_records(matched_project_examples, sample_lookup)
-    prompt_projects = historical_project_prompt_records(projects)
-    display_options = historical_display_options(
-        projects, displays_with_options, model, item_query_embedding
-    )
-    prompt = f"""
-比较三个完整真实历史工程，选择一个作为当前方案骨架，不能固定选择第一项。
-
-选择优先级：
-1. 直接维修对象匹配优先于工程整体纯度；
-2. 再比较对象层级、维修范围和维修动作。不得用下一级部件替代完整对象，不得用单个设备替代整体系统，不得用附属构件替代主体项目，不得用局部维修替代整体更换，也不得混淆新增、更换、维修或拆除；
-3. 只有对象、层级、范围和动作基本匹配时，才比较工程整体纯度、无关清单数量、施工链完整性和需要删除的无关项数量。文字相似不能覆盖上述层级不一致。
-
-所选工程的清单默认保留。仅当清单明确属于其他维修对象、另一个独立范围、与用户要求冲突、属于用户已明确选择之外的互斥做法，或是无关的独立附加项目时删除。
-- 用户没有逐项提到某个施工层，不构成删除理由；
-- 同一对象下已有的拆除、基层处理、主体施工层、保护层、运输、脚手架及措施项目等施工链应整体保留；
-- 同一工程同时存在的多个施工层默认属于完整施工链；无法确认是否相关时优先保留；
-- 不得为缩短输出压缩清单，不得从其他工程补项或创建新清单。
-
-工艺与工程量：
-- historical item 的 practice_option_id 是原工艺；用户明确材料、厚度、型号或工艺且同一 display 的 display_options 有匹配项时才改选；未明确或无匹配项时沿用原工艺；
-- 不得选择该 display 候选之外的工艺，不得跨 display；工艺变化不得改变维修对象、层级、范围或动作；
-- 为每个保留项给出 exact 或 range quantity 和非空 quantity_reason，优先采用用户明确工程量，避免照搬明显不适合的历史数量。
-
-只输出最终保留项，不得输出删除项。selected_project_position 是 historical_projects 的 0-based 位置；item_position 是所选工程 items 数组中的 0-based 位置，必须引用该工程现有 item，不得从其他工程补项。item_position 的含义始终对应原 items 数组位置，kept_items 按 item_position 升序输出。不得生成价格、金额、方案名称、说明或其他字段。只输出：
-{{
-  "selected_project_position": 0,
-  "kept_items": [
-    {{
-      "item_position": 12,
-      "practice_option_id": "原工艺或同一display候选中的已有ID",
-      "quantity": {{"type": "exact", "value": 500}},
-      "quantity_reason": "工程量确定依据"
-    }}
-  ]
-}}
-
-输入：
-{json_text({"user_query": raw_text, "historical_projects": prompt_projects, "display_options": display_options})}
-""".strip()
-    return prompt, projects, display_options
-
-
-def parse_historical_plan_determination_result(
-    result: dict[str, Any],
-    historical_projects: list[dict[str, Any]],
-    display_options: dict[str, list[dict[str, str]]],
-    displays_with_options: pd.DataFrame,
-    sample_lookup: dict[str, dict[str, Any]],
-) -> HistoricalPlan:
-    expected_top_fields = {"selected_project_position", "kept_items"}
-    if not isinstance(result, dict):
-        raise ValueError(
-            f"historical_plan_determination 顶层必须为 object: expected={sorted(expected_top_fields)}, "
-            f"actual_type={type(result).__name__}"
-        )
-    if set(result) != expected_top_fields:
-        raise ValueError(
-            f"historical_plan_determination 顶层字段非法: expected={sorted(expected_top_fields)}, "
-            f"actual={sorted(result)}"
-        )
-    selected_project_position = result.get("selected_project_position")
-    project_position_max = len(historical_projects) - 1
-    if not isinstance(selected_project_position, int) or isinstance(selected_project_position, bool):
-        raise ValueError(
-            "selected_project_position 类型非法: "
-            f"expected=integer in [0, {project_position_max}], "
-            f"actual={selected_project_position!r} ({type(selected_project_position).__name__})"
-        )
-    if not 0 <= selected_project_position < len(historical_projects):
-        raise ValueError(
-            "selected_project_position 越界: "
-            f"expected=integer in [0, {project_position_max}], actual={selected_project_position}"
-        )
-    selected_project = historical_projects[selected_project_position]
-    project_package_id = cell_text(selected_project.get("project_package_id"))
-    historical_items = selected_project.get("items") if isinstance(selected_project.get("items"), list) else []
-    raw_items = result.get("kept_items")
-    if not isinstance(raw_items, list):
-        raise ValueError(
-            f"kept_items 类型非法: expected=list with at least 1 item, actual_type={type(raw_items).__name__}"
-        )
-    if not raw_items:
-        raise ValueError("kept_items 不得为空: expected_count>=1, actual_count=0")
-
-    expected_item_fields = {"item_position", "practice_option_id", "quantity", "quantity_reason"}
-    item_position_max = len(historical_items) - 1
-    seen_item_positions: dict[int, int] = {}
-    positioned_items: list[tuple[int, dict[str, Any]]] = []
-    for kept_index, raw_item in enumerate(raw_items):
-        if not isinstance(raw_item, dict):
-            raise ValueError(
-                f"kept_item 必须为 object: kept_index={kept_index}, expected=object, "
-                f"actual_type={type(raw_item).__name__}"
-            )
-        if set(raw_item) != expected_item_fields:
-            raise ValueError(
-                f"kept_item 字段非法: kept_index={kept_index}, expected={sorted(expected_item_fields)}, "
-                f"actual={sorted(raw_item)}"
-            )
-        item_position = raw_item.get("item_position")
-        if not isinstance(item_position, int) or isinstance(item_position, bool):
-            raise ValueError(
-                f"item_position 类型非法: kept_index={kept_index}, "
-                f"expected=integer in [0, {item_position_max}], "
-                f"actual={item_position!r} ({type(item_position).__name__})"
-            )
-        if not 0 <= item_position < len(historical_items):
-            raise ValueError(
-                f"item_position 越界: kept_index={kept_index}, "
-                f"expected=integer in [0, {item_position_max}], actual={item_position}"
-            )
-        if item_position in seen_item_positions:
-            raise ValueError(
-                f"item_position 重复: expected=unique, actual={item_position}, "
-                f"first_kept_index={seen_item_positions[item_position]}, duplicate_kept_index={kept_index}"
-            )
-        seen_item_positions[item_position] = kept_index
-        positioned_items.append((item_position, raw_item))
-
-    _display_map, full_option_map = display_option_maps(displays_with_options)
-    items: list[ScenarioItem] = []
-    for item_position, raw_item in sorted(positioned_items, key=lambda entry: entry[0]):
-        historical_item = historical_items[item_position]
-        stable_sample_id = cell_text(historical_item.get("stable_sample_id"))
-        sample = sample_lookup.get(stable_sample_id)
-        if sample is None:
-            raise ValueError(
-                f"所选工程 item 无法按位置回查: item_position={item_position}, "
-                f"expected_stable_sample_id={stable_sample_id!r}, actual_sample=None"
-            )
-        if cell_text(sample.get("project_package_id")) != project_package_id:
-            raise ValueError(
-                f"所选工程 item 内部映射不一致: item_position={item_position}, "
-                f"expected_project_package_id={project_package_id!r}, "
-                f"actual_project_package_id={cell_text(sample.get('project_package_id'))!r}"
-            )
-        display_id = cell_text(sample.get("display_id"))
-        original_practice_option_id = cell_text(sample.get("practice_option_id"))
-        if (
-            cell_text(historical_item.get("display_id")) != display_id
-            or cell_text(historical_item.get("practice_option_id")) != original_practice_option_id
-        ):
-            raise ValueError(
-                f"historical item 与 sample_lookup 不一致: item_position={item_position}, "
-                f"stable_sample_id={stable_sample_id}, "
-                f"expected_display_option={(cell_text(historical_item.get('display_id')), cell_text(historical_item.get('practice_option_id')))!r}, "
-                f"actual_display_option={(display_id, original_practice_option_id)!r}"
-            )
-        practice_option_id = cell_text(raw_item.get("practice_option_id"))
-        if display_id in display_options:
-            allowed_practice_option_ids = {
-                cell_text(option.get("practice_option_id"))
-                for option in display_options.get(display_id) or []
-                if isinstance(option, dict) and cell_text(option.get("practice_option_id"))
-            }
-        else:
-            allowed_practice_option_ids = {original_practice_option_id}
-        if (
-            practice_option_id not in allowed_practice_option_ids
-            or (display_id, practice_option_id) not in full_option_map
-        ):
-            raise ValueError(
-                "practice_option_id 不属于该位置的 display_options: "
-                f"item_position={item_position}, display_id={display_id}, "
-                f"expected={sorted(allowed_practice_option_ids)}, actual={practice_option_id!r}"
-            )
-        quantity_reason = cell_text(raw_item.get("quantity_reason"))
-        if not quantity_reason:
-            raise ValueError(
-                f"quantity_reason 不得为空: item_position={item_position}, expected=non-empty string, "
-                f"actual={raw_item.get('quantity_reason')!r}"
-            )
-        try:
-            quantity = validate_quantity(raw_item.get("quantity"))
-        except (ValueError, TypeError) as exc:
-            raise ValueError(
-                f"quantity 非法: item_position={item_position}, actual={raw_item.get('quantity')!r}, error={exc}"
-            ) from exc
-        items.append(
-            ScenarioItem(
-                project_package_id=project_package_id,
-                stable_sample_id=stable_sample_id,
-                source_ref=cell_text(sample.get("source_ref")),
-                display_id=display_id,
-                practice_option_id=practice_option_id,
-                selection_reason="",
-                quantity=quantity,
-                quantity_reason=quantity_reason,
-            )
-        )
-    if not items:
-        raise ValueError("kept_items 不得为空: expected_count>=1, actual_count=0")
-    return HistoricalPlan(project_package_id=project_package_id, items=items)
-
-
-def generate_historical_plan_determination(
-    raw_text: str,
-    matched_project_examples: list[dict[str, Any]],
-    displays_with_options: pd.DataFrame,
-    sample_lookup: dict[str, dict[str, Any]],
-    model: Any,
-    item_query_embedding: np.ndarray,
-    warnings: list[str] | None = None,
-) -> tuple[HistoricalPlan | None, bool, str, str, dict[str, Any]]:
-    prompt, projects, display_options = build_historical_plan_determination_prompt(
-        raw_text,
-        matched_project_examples,
-        displays_with_options,
-        sample_lookup,
-        model,
-        item_query_embedding,
-    )
-    max_tokens = 4096
-    input_counts = {
-        "historical_project_count": len(projects),
-        "historical_item_count": sum(len(project.get("items") or []) for project in projects),
-        "historical_display_option_count": sum(len(options) for options in display_options.values()),
-    }
-    if not projects:
-        raise ValueError("没有可供选择的完整历史工程")
-    try:
-        response = request_llm_json_with_usage(
-            prompt, max_tokens=max_tokens,
-            system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
-        )
-        plan = parse_historical_plan_determination_result(
-            response.content, projects, display_options, displays_with_options, sample_lookup
-        )
-        trace = trace_row(
-            "historical_plan_determination", "选择真实历史工程骨架、保留项、工艺和工程量", True,
-            prompt=prompt, max_tokens=max_tokens,
-            input_summary=json_text({
-                **input_counts,
-                "selected_project_package_id": plan.project_package_id,
-                "selected_stable_sample_ids": [item.stable_sample_id for item in plan.items],
-                "selected_item_count": len(plan.items),
-            }),
-            usage=response.usage, raw_response=getattr(response, "raw_content", ""),
-            scenario_count=1, scenario_item_count=len(plan.items),
-        )
-        return plan, True, "", prompt, trace
-    except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-        append_warning(warnings, "historical_plan_determination_failed")
-        trace = trace_row(
-            "historical_plan_determination", "选择真实历史工程骨架、保留项、工艺和工程量", False,
-            error=str(exc), prompt=prompt, max_tokens=max_tokens,
-            input_summary=json_text({**input_counts, "selected_item_count": 0}),
-            scenario_count=0, scenario_item_count=0,
-        )
-        return None, False, str(exc), prompt, trace
-
-
-def scenario_from_historical_plan(plan: HistoricalPlan) -> EstimateScenario:
-    return EstimateScenario("S001", 1, "", "", plan.items)
 
 
 def build_final_explanation_prompt(
@@ -2464,6 +2351,28 @@ def generate_final_explanation(
             scenario_count=1, scenario_item_count=len(scenario.items),
         )
         return scenario, False, str(exc), prompt, trace
+
+
+def generate_optional_final_explanation(
+    with_explanations: bool,
+    raw_text: str,
+    scenario: EstimateScenario,
+    estimate_scenarios: pd.DataFrame,
+    matched_project_examples: list[dict[str, Any]],
+    warnings: list[str] | None = None,
+) -> tuple[EstimateScenario, bool, str, str, dict[str, Any]]:
+    if with_explanations:
+        return generate_final_explanation(
+            raw_text, scenario, estimate_scenarios, matched_project_examples, warnings=warnings
+        )
+    return scenario, True, "", "", trace_row(
+        "final_explanation",
+        "项目级和清单级解释已按运行配置跳过",
+        True,
+        input_summary=json_text({"with_explanations": False}),
+        scenario_count=1,
+        scenario_item_count=len(scenario.items),
+    )
 
 
 def aggregate_price_from_evidence_items(evidence_items: pd.DataFrame, family_ids: list[str]) -> dict[str, Any]:
@@ -2885,8 +2794,9 @@ def build_parse_info(
     selected_item_count: int,
     selected_exact_quantity_count: int,
     selected_range_quantity_count: int,
-    historical_plan_trace: dict[str, Any],
-    historical_plan_error: str,
+    range_selection_trace: dict[str, Any],
+    range_selection_error: str,
+    quantity_trace: dict[str, Any],
     final_explanation_trace: dict[str, Any],
     final_explanation_error: str,
     output_path: Path | None,
@@ -2894,8 +2804,10 @@ def build_parse_info(
     index_dir: Path,
     include_debug_text: bool,
     display_option_grouping_prompt: str,
-    historical_plan_prompt: str,
+    range_selection_prompt: str,
+    quantity_prompt: str,
     final_explanation_prompt: str,
+    with_explanations: bool,
     warnings: list[str] | None = None,
 ) -> pd.DataFrame:
     rows = [
@@ -2936,20 +2848,23 @@ def build_parse_info(
         ("scenario_item_count", selected_item_count),
         ("scenario_exact_quantity_count", selected_exact_quantity_count),
         ("scenario_range_quantity_count", selected_range_quantity_count),
-        ("historical_plan_input_project_count", matched_project_example_count),
-        ("historical_plan_input_item_count", matched_project_example_item_count),
         ("selected_project_package_id", selected_project_package_id),
-        ("historical_plan_determination_status", "failed" if historical_plan_error else "success"),
-        ("historical_plan_determination_prompt_chars", historical_plan_trace.get("prompt_chars", "")),
-        ("historical_plan_determination_prompt_tokens", historical_plan_trace.get("prompt_tokens") or historical_plan_trace.get("estimated_tokens", "")),
-        ("historical_plan_determination_completion_tokens", historical_plan_trace.get("completion_tokens", "")),
-        ("final_explanation_status", "failed" if final_explanation_error else "success"),
+        ("range_selection_status", "fallback_full_project" if range_selection_error else "ok"),
+        ("range_selection_prompt_chars", range_selection_trace.get("prompt_chars", "")),
+        ("range_selection_prompt_tokens", range_selection_trace.get("prompt_tokens") or range_selection_trace.get("estimated_tokens", "")),
+        ("range_selection_completion_tokens", range_selection_trace.get("completion_tokens", "")),
+        ("quantity_determination_status", "success"),
+        ("quantity_determination_prompt_chars", quantity_trace.get("prompt_chars", "")),
+        ("quantity_determination_prompt_tokens", quantity_trace.get("prompt_tokens") or quantity_trace.get("estimated_tokens", "")),
+        ("quantity_determination_completion_tokens", quantity_trace.get("completion_tokens", "")),
+        ("with_explanations", with_explanations),
+        ("final_explanation_status", "skipped" if not with_explanations else ("failed" if final_explanation_error else "success")),
         ("final_explanation_prompt_chars", final_explanation_trace.get("prompt_chars", "")),
         ("final_explanation_prompt_tokens", final_explanation_trace.get("prompt_tokens") or final_explanation_trace.get("estimated_tokens", "")),
         ("final_explanation_completion_tokens", final_explanation_trace.get("completion_tokens", "")),
         ("是否 display_option_grouping fallback", "是" if display_option_grouping_fallback else "否"),
         ("display_option_grouping LLM error", display_option_grouping_error),
-        ("historical_plan_determination LLM error", historical_plan_error),
+        ("range_selection LLM error", range_selection_error),
         ("final_explanation LLM error", final_explanation_error),
         ("output_path", str(output_path or "")),
         ("运行时间", f"{(datetime.now() - started_at).total_seconds():.2f}s"),
@@ -2960,7 +2875,8 @@ def build_parse_info(
     ]
     if include_debug_text:
         rows.append(("display_option_grouping_prompt_preview", display_option_grouping_prompt[:3000]))
-        rows.append(("historical_plan_determination_prompt_preview", historical_plan_prompt[:3000]))
+        rows.append(("range_selection_prompt_preview", range_selection_prompt[:3000]))
+        rows.append(("quantity_determination_prompt_preview", quantity_prompt[:3000]))
         rows.append(("final_explanation_prompt_preview", final_explanation_prompt[:3000]))
     return pd.DataFrame(rows, columns=["字段", "值"])
 
@@ -2993,6 +2909,11 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
         display_frame(result.matched_project_examples, display).to_excel(
             writer,
             sheet_name="matched_project_examples",
+            index=False,
+        )
+        display_frame(result.range_selection, display).to_excel(
+            writer,
+            sheet_name="range_selection",
             index=False,
         )
         display_frame(result.package_evidence_weights, display).to_excel(
@@ -3067,6 +2988,7 @@ def run_query(
     package_weight_temperature: float = DEFAULT_PACKAGE_WEIGHT_TEMPERATURE,
     include_debug_text: bool = False,
     display: bool = False,
+    with_explanations: bool = False,
 ) -> QueryResult:
     if package_weight_temperature <= 0:
         raise ValueError("package weight temperature 必须大于 0")
@@ -3140,35 +3062,66 @@ def run_query(
         warnings=warnings,
     )
     sample_lookup = build_stable_sample_lookup(samples, evidence_items, display_group_families, displays_with_options)
-    matched_project_packages = matched_project_packages_for_output(matched_raw)
+    release_embedding_model(model)
+    del model
+    gc.collect()
+
+    selected_package, ranked_packages = select_representative_project_package(matched_raw)
+    matched_project_packages = matched_project_packages_for_output(ranked_packages)
+    selected_project_package_id = cell_text(selected_package.get("project_package_id"))
+    selected_project_name = cell_text(selected_package.get("工程名称")) or cell_text(
+        selected_package.get("project_name_text")
+    )
+    selected_items = expand_selected_project_items(samples, selected_package)
     matched_project_examples = build_matched_project_examples(
-        matched_project_packages, samples, sample_lookup, limit=3
+        matched_project_packages, samples, sample_lookup, limit=5
     )
     matched_project_examples_output = matched_project_examples_frame(matched_project_examples)
-    try:
-        (
-            historical_plan,
-            historical_plan_success,
-            historical_plan_error,
-            historical_plan_prompt,
-            historical_plan_trace,
-        ) = generate_historical_plan_determination(
-            raw_text,
-            matched_project_examples,
-            displays_with_options,
-            sample_lookup,
-            model,
-            item_query_embedding,
-            warnings=warnings,
-        )
-    finally:
-        release_embedding_model(model)
-        del model
-        gc.collect()
-    if not historical_plan_success or historical_plan is None:
-        raise ValueError(f"historical_plan_determination 失败: {historical_plan_error}")
-
-    scenario = scenario_from_historical_plan(historical_plan)
+    start, end, range_meta = select_contiguous_item_range(
+        raw_text, selected_project_name, selected_items
+    )
+    if range_meta["fallback"]:
+        append_warning(warnings, "range_selection_fallback_full_project")
+    plan_items = selected_items.iloc[start : end + 1].copy()
+    range_selection = pd.DataFrame(
+        [{
+            "project_package_id": selected_project_package_id,
+            "工程名称": selected_project_name,
+            "project_item_count": len(selected_items),
+            "start_item_position": start,
+            "end_item_position": end,
+            "selected_item_count": len(plan_items),
+            "range_selection_status": range_meta["range_selection_status"],
+            "fallback": range_meta["fallback"],
+            "error_message": range_meta["error_message"],
+            "prompt": range_meta["prompt"],
+            "raw_response": range_meta["raw_response"],
+        }],
+        columns=RANGE_SELECTION_TRACE_COLUMNS,
+    )
+    range_selection_trace = trace_row(
+        "range_selection",
+        "在确定性选中的完整历史工程内选择连续清单区间",
+        not range_meta["fallback"],
+        error=range_meta["error_message"],
+        prompt=range_meta["prompt"],
+        max_tokens=256,
+        input_summary=json_text({
+            "selected_project_package_id": selected_project_package_id,
+            "project_item_count": len(selected_items),
+            "start_item_position": start,
+            "end_item_position": end,
+            "selected_item_count": len(plan_items),
+            "fallback": range_meta["fallback"],
+        }),
+        usage=range_meta["usage"],
+        raw_response=range_meta["raw_response"],
+        scenario_count=1,
+        scenario_item_count=len(plan_items),
+    )
+    scenario, quantity_prompt, quantity_trace = generate_quantity_determination(
+        raw_text, selected_project_package_id, plan_items, sample_lookup
+    )
     scenarios = [scenario]
     estimate_scenarios = build_scenario_outputs(
         scenarios, displays_with_options, candidate_families, evidence_items
@@ -3179,7 +3132,8 @@ def run_query(
         final_explanation_error,
         final_explanation_prompt,
         final_explanation_trace,
-    ) = generate_final_explanation(
+    ) = generate_optional_final_explanation(
+        with_explanations,
         raw_text,
         scenario,
         estimate_scenarios,
@@ -3193,7 +3147,8 @@ def run_query(
     estimate_summary = build_estimate_summary(scenarios, estimate_scenarios)
     if warnings:
         append_trace_warnings(display_option_grouping_trace, warnings)
-        append_trace_warnings(historical_plan_trace, warnings)
+        append_trace_warnings(range_selection_trace, warnings)
+        append_trace_warnings(quantity_trace, warnings)
         append_trace_warnings(final_explanation_trace, warnings)
     scenario_item_count = sum(len(scenario.items) for scenario in scenarios)
     scenario_exact_quantity_count = sum(1 for scenario in scenarios for item in scenario.items if cell_text(item.quantity.get("type")) == "exact")
@@ -3221,12 +3176,13 @@ def run_query(
         display_option_grouping_fallback=display_option_grouping_fallback,
         display_option_grouping_error=display_option_grouping_error,
         display_option_grouping_meta=display_option_grouping_meta,
-        selected_project_package_id=historical_plan.project_package_id,
+        selected_project_package_id=selected_project_package_id,
         selected_item_count=scenario_item_count,
         selected_exact_quantity_count=scenario_exact_quantity_count,
         selected_range_quantity_count=scenario_range_quantity_count,
-        historical_plan_trace=historical_plan_trace,
-        historical_plan_error=historical_plan_error,
+        range_selection_trace=range_selection_trace,
+        range_selection_error=range_meta["error_message"],
+        quantity_trace=quantity_trace,
         final_explanation_trace=final_explanation_trace,
         final_explanation_error=final_explanation_error,
         output_path=output,
@@ -3234,15 +3190,18 @@ def run_query(
         index_dir=index_dir,
         include_debug_text=include_debug_text,
         display_option_grouping_prompt=display_option_grouping_prompt,
-        historical_plan_prompt=historical_plan_prompt,
+        range_selection_prompt=range_meta["prompt"],
+        quantity_prompt=quantity_prompt,
         final_explanation_prompt=final_explanation_prompt,
+        with_explanations=with_explanations,
         warnings=warnings,
     )
     llm_trace = pd.DataFrame(
         [
             rewrite_trace,
             display_option_grouping_trace,
-            historical_plan_trace,
+            range_selection_trace,
+            quantity_trace,
             final_explanation_trace,
         ],
         columns=LLM_TRACE_COLUMNS,
@@ -3259,6 +3218,7 @@ def run_query(
         display_group_families=display_group_families,
         display_option_grouping_trace=display_option_grouping_trace_frame,
         matched_project_examples=matched_project_examples_output,
+        range_selection=range_selection,
         evidence_items=evidence_items,
         parse_info=parse_info,
         llm_trace=llm_trace,
@@ -3317,6 +3277,7 @@ def main() -> int:
             package_weight_temperature=args.package_weight_temperature,
             include_debug_text=args.include_debug_text,
             display=args.display,
+            with_explanations=args.with_explanations,
         )
     except (RuntimeError, ValueError) as exc:
         print(f"[ERROR] {exc}")

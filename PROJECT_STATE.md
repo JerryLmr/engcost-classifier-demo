@@ -9,15 +9,15 @@
 - 支持按批次导入 OCR Excel，独立生成 cleaned、removed、classified 和单批次 cost item samples。
 - 支持自动合并 `samples/*/cost_item_samples.xlsx` 为总样本，并使用不含 `project_code` / `batch_id` 的 `stable_sample_id` 去重。
 - 支持从总样本 `samples/cost_item_samples_all.xlsx` 构建 project package / item embedding 索引，保留样本明细、工程包明细、工程包向量、清单行向量和索引元数据。
-- 支持自然语言造价查询：比较前三个完整真实历史工程，优先按直接维修对象、对象层级、范围和动作选择唯一方案骨架并保守删除明确无关项；通过已有 `display_id` 统一提供有限工艺候选，价格和金额从 top 20 工程包与 top 300 直接清单形成的完整证据池回填。
+- 支持自然语言造价查询：对召回工程包稳定排序，在相似度前 5 中确定性选择清单数最接近本轮全部召回包平均值的工程，展开完整原始清单后由 LLM 只裁剪一个连续区间；区间失败自动回退完整工程，quantity 覆盖最终区间，价格和金额从完整证据池确定性回填。
 
 ## Recent Changes
 - 新增 `scripts/merge_cost_item_sample_batches.py`，自动合并历史批次样本、追加 `batch_id` / `stable_sample_id`，并输出去重报告。
 - `build_cost_item_embedding_index.py` 默认读取 `samples/cost_item_samples_all.xlsx`，输出 project package / item embedding 索引。
 - 自然语言造价查询的召回证据层次统一为 `matched_project_packages` / `direct_item_hits` → `retrieved_evidence_items` → `candidate_families` → `candidate_display_groups`。
 - 删除 display 预筛选 LLM；`display_option_grouping` 全量处理 candidate displays，单 family 由程序生成 option，多 family 合并为一次 LLM 调用。
-- 估价方案生成重构为 `historical_plan_determination` 与 `final_explanation` 两阶段：程序只生成 `S001`，清单、工艺、工程量和价格在说明生成前锁定。
-- `historical_plan_determination` 使用稀疏位置协议，只返回所选工程及保留项的 0-based 数组位置；真实 ID 仅在程序侧恢复，`final_explanation` 不读取被删除清单。
+- 删除旧 `historical_plan_determination` 自由选择链路，新增确定性工程包选择、完整工程展开、连续区间选择和独立 quantity determination。
+- 查询 CLI 新增 `--with-explanations`；项目级和清单级解释默认关闭，XLSX 仍保留既有结构和完整价格、工程量、来源及统计结果。
 
 ## Decisions
 - 当前阶段不引入数据库、Milvus 或 LangChain；样本合并后重建本地 parquet + npy 索引。
@@ -26,8 +26,9 @@
 - `batch_id` 只负责来源追踪；`stable_sample_id` 负责样本去重，且不包含 `project_code` 或 `batch_id`。
 - 索引构建阶段不再调用 LLM 清洗工程名称，只读取 batch 分类产出的 `project_name_text`；为空时 warning 并回退原始工程名称。
 - 查询阶段 LLM 不生成清单名称、项目特征、单位、单价、来源或金额；价格和金额由程序按同一 `fine_signature` 历史样本确定性回填和计算。
-- 前三个历史工程只用于选择真实方案骨架；最终 option 价格仍使用 top 20 工程包与 top 300 直接清单形成的完整证据池。
-- `project_package_id` 与 `stable_sample_id` 不暴露给方案 LLM；程序按输入工程和清单数组位置恢复，再通过原始记录回查 `source_ref`、`family_id`、`display_id` 和原 `practice_option_id`。相同 display 的候选统一传递一次，包含三个工程实际原工艺及最多 5 个与 `item_query_text` 最相关的替代工艺；允许 `source_ref` 重复。
+- 工程包选择不调用 LLM：全部召回包参与平均清单数计算，最终候选仅限相似度前 5，距离相同时选择相似度排名更高者。
+- 连续区间和 quantity 使用完整工程包中的绝对 `item_position`；最终项沿用历史样本原 `practice_option_id`，不由区间或 quantity 阶段修改工艺。
+- 项目级和清单级解释只读取已经确定的工程、区间、quantity 和价格结果，不参与任何选择或计算。
 - dedup_selection 只抑制最终展示项，不创建新 family，不合并 source_refs、本次召回样本、工程量或价格区间。
 
 ## Known Limitations
@@ -44,4 +45,4 @@
 - 使用真实新增 OCR 批次验证批次导入、样本去重报告和索引重建流程。
 - 根据样本规模增长情况，再评估是否引入 FAISS 或其它向量索引。
 - 与业务方确认剩余分类边界后，再决定是否调整分类体系或继续细化目录。
-- 使用屋面 3mm SBS、消防报警主机等真实查询回归验证历史骨架裁剪、同 display 工艺替换和说明失败降级语义。
+- 使用屋面 3mm SBS、消防报警主机等真实查询回归验证确定性工程选择、连续区间回退、quantity 全覆盖和解释开关。
