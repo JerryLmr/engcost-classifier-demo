@@ -185,40 +185,42 @@ DISPLAY_OPTION_GROUPING_TRACE_COLUMNS = [
     "unit_price_min",
     "unit_price_median",
     "unit_price_max",
+    "option_sample_count",
+    "option_package_count",
+    "is_original_option",
+    "is_selected_option",
+    "option_selection_decision",
+    "option_selection_reason",
+    "is_original_family",
+    "is_representative_family",
+    "representative_selection_reason",
 ]
 
 OPTION_SELECTION_TRACE_COLUMNS = [
     "final_item_position", "display_id", "original_option_id", "selected_option_id",
     "original_family_id", "representative_family_id", "candidate_option_count",
-    "whether_replaced", "selection_reason",
+    "whether_replaced", "selection_reason", "option_selection_decision",
+    "representative_selection_reason",
 ]
 
 ESTIMATE_SCENARIO_COLUMNS = [
-    "方案顺序",
-    "方案编号",
-    "方案名称",
-    "project_package_id",
-    "stable_sample_id",
-    "source_ref",
-    "display_id",
     "清单名称",
     "项目特征",
     "单位",
-    "项目说明",
     "工程量预估",
     "工程量依据",
-    "合价最低值",
+    "合价P10",
     "合价中位数",
-    "合价最高值",
-    "综合单价最低值",
+    "合价P90",
+    "综合单价P10",
     "综合单价中位数",
-    "综合单价最高值",
-    "其中包含人工费单价最低值",
+    "综合单价P90",
+    "其中包含人工费单价P10",
     "其中包含人工费单价中位数",
-    "其中包含人工费单价最高值",
-    "其中包含机械费单价最低值",
+    "其中包含人工费单价P90",
+    "其中包含机械费单价P10",
     "其中包含机械费单价中位数",
-    "其中包含机械费单价最高值",
+    "其中包含机械费单价P90",
     "价格证据样本数",
     "来源样本",
     "practice_option_id",
@@ -226,21 +228,26 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "original_family_id",
     "representative_family_id",
     "价格证据family",
+    "display_id",
 ]
 
 ESTIMATE_SUMMARY_COLUMNS = [
-    "方案顺序",
-    "方案编号",
     "方案名称",
-    "是否推荐方案",
     "方案说明",
     "主要施工内容",
-    "与其他方案的核心差异",
     "计价项目数",
-    "合价最低值",
+    "合价P10",
     "合价中位数",
-    "合价最高值",
+    "合价P90",
     "待现场确认事项",
+]
+
+PRICE_EVIDENCE_ITEM_COLUMNS = [
+    "final_item_position", "清单名称", "display_id", "practice_option_id",
+    "family_id", "normalized_signature", "stable_sample_id", "project_key",
+    "source_ref", "工程名称", "location", "consultation_time", "cost_item_name",
+    "project_description", "unit", "quantity", "unit_price", "labor_unit_price",
+    "machinery_unit_price",
 ]
 
 LLM_TRACE_COLUMNS = [
@@ -287,6 +294,7 @@ class ScenarioItem:
     selection_reason: str
     quantity: dict[str, Any]
     quantity_reason: str
+    item_position: int = 0
 
 
 @dataclass(frozen=True)
@@ -312,6 +320,7 @@ class QueryResult:
     option_selection_trace: pd.DataFrame
     matched_project_examples: pd.DataFrame
     evidence_items: pd.DataFrame
+    price_evidence_items: pd.DataFrame
     parse_info: pd.DataFrame
     llm_trace: pd.DataFrame
     success: bool = True
@@ -1314,6 +1323,17 @@ def min_median_max(frame: pd.DataFrame, column: str) -> tuple[float | None, floa
     return float(values.min()), float(values.median()), float(values.max())
 
 
+def p10_median_p90(frame: pd.DataFrame, column: str) -> tuple[float | None, float | None, float | None]:
+    values = numeric_values(frame, column)
+    if values.empty:
+        return None, None, None
+    return (
+        float(values.quantile(0.10, interpolation="nearest")),
+        float(values.median()),
+        float(values.quantile(0.90, interpolation="nearest")),
+    )
+
+
 def max_numeric_or_zero(frame: pd.DataFrame, column: str) -> float:
     values = numeric_values(frame, column)
     if values.empty:
@@ -2107,6 +2127,15 @@ def build_display_option_grouping_trace_frame(
                         "unit_price_min": candidate.get("本次召回综合单价最低值", ""),
                         "unit_price_median": candidate.get("本次召回综合单价中位数", ""),
                         "unit_price_max": candidate.get("本次召回综合单价最高值", ""),
+                        "option_sample_count": int(option.get("option_sample_count") or 0),
+                        "option_package_count": int(option.get("option_package_count") or 0),
+                        "is_original_option": False,
+                        "is_selected_option": False,
+                        "option_selection_decision": "",
+                        "option_selection_reason": "",
+                        "is_original_family": False,
+                        "is_representative_family": False,
+                        "representative_selection_reason": "",
                     }
                 )
     frame = pd.DataFrame(rows, columns=DISPLAY_OPTION_GROUPING_TRACE_COLUMNS)
@@ -2385,6 +2414,54 @@ def display_option_maps(
     return display_map, option_map
 
 
+def attach_option_support_counts(
+    displays_with_options: pd.DataFrame,
+    evidence_items: pd.DataFrame,
+) -> pd.DataFrame:
+    output = displays_with_options.copy(deep=True)
+    evidence_family_ids = evidence_items.get("family_id", pd.Series(dtype=object)).map(cell_text)
+    for index, display in output.iterrows():
+        options = display.get("practice_options") if isinstance(display.get("practice_options"), list) else []
+        supported_options: list[dict[str, Any]] = []
+        for raw_option in options:
+            option = dict(raw_option)
+            family_ids = {cell_text(value) for value in option.get("family_ids", []) if cell_text(value)}
+            evidence = evidence_items[evidence_family_ids.isin(family_ids)]
+            package_ids = evidence.get("project_package_id", pd.Series(dtype=object)).map(cell_text)
+            option["option_sample_count"] = int(len(evidence))
+            option["option_package_count"] = int(package_ids[package_ids.ne("")].nunique())
+            supported_options.append(option)
+        output.at[index, "practice_options"] = supported_options
+    return output
+
+
+def apply_option_selection_to_grouping_trace(
+    trace: pd.DataFrame,
+    option_selection_trace: pd.DataFrame,
+) -> pd.DataFrame:
+    output = trace.copy()
+    if output.empty or option_selection_trace.empty:
+        return output
+    selection_by_display = {
+        cell_text(row.get("display_id")): row
+        for _index, row in option_selection_trace.iterrows()
+    }
+    for index, row in output.iterrows():
+        selection = selection_by_display.get(cell_text(row.get("display_id")))
+        if selection is None:
+            continue
+        option_id = cell_text(row.get("practice_option_id"))
+        family_id = cell_text(row.get("family_id"))
+        output.at[index, "is_original_option"] = option_id == cell_text(selection.get("original_option_id"))
+        output.at[index, "is_selected_option"] = option_id == cell_text(selection.get("selected_option_id"))
+        output.at[index, "option_selection_decision"] = cell_text(selection.get("option_selection_decision"))
+        output.at[index, "option_selection_reason"] = cell_text(selection.get("selection_reason"))
+        output.at[index, "is_original_family"] = family_id == cell_text(selection.get("original_family_id"))
+        output.at[index, "is_representative_family"] = family_id == cell_text(selection.get("representative_family_id"))
+        output.at[index, "representative_selection_reason"] = cell_text(selection.get("representative_selection_reason"))
+    return output[DISPLAY_OPTION_GROUPING_TRACE_COLUMNS]
+
+
 def family_payload(family_id: str, family_map: dict[str, pd.Series]) -> dict[str, Any]:
     row = family_map.get(family_id, pd.Series(dtype=object))
     return {
@@ -2407,21 +2484,63 @@ def option_selection_family_payload(family_id: str, family_map: dict[str, pd.Ser
 
 def choose_representative_family(
     option: dict[str, Any], original_family_id: str, family_map: dict[str, pd.Series]
-) -> str:
+) -> tuple[str, str]:
     family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
-    if original_family_id in family_ids:
-        return original_family_id
     ranked = sorted(
         family_ids,
         key=lambda family_id: (
             -int(numeric_or_none(family_map.get(family_id, pd.Series(dtype=object)).get("本次召回样本数")) or 0),
-            0 if cell_text(family_map.get(family_id, pd.Series(dtype=object)).get("representative_project_description")) else 1,
+            -int(numeric_or_none(family_map.get(family_id, pd.Series(dtype=object)).get("本次召回工程包数")) or 0),
+            0 if family_id == original_family_id else 1,
             family_id,
         ),
     )
     if not ranked:
         raise ValueError("selected option 不得缺少 family")
-    return ranked[0]
+    selected = ranked[0]
+    rows = {family_id: family_map.get(family_id, pd.Series(dtype=object)) for family_id in family_ids}
+    max_samples = max(int(numeric_or_none(row.get("本次召回样本数")) or 0) for row in rows.values())
+    sample_tied = [fid for fid, row in rows.items() if int(numeric_or_none(row.get("本次召回样本数")) or 0) == max_samples]
+    if len(sample_tied) == 1:
+        reason = "selected_option_family_sample_count_max"
+    else:
+        max_packages = max(int(numeric_or_none(rows[fid].get("本次召回工程包数")) or 0) for fid in sample_tied)
+        package_tied = [fid for fid in sample_tied if int(numeric_or_none(rows[fid].get("本次召回工程包数")) or 0) == max_packages]
+        if len(package_tied) == 1:
+            reason = "selected_option_family_package_count_max"
+        elif original_family_id in package_tied:
+            reason = "support_tie_original_family"
+        else:
+            reason = "stable_family_id_tiebreak"
+    return selected, reason
+
+
+def choose_most_supported_option(
+    options: list[dict[str, Any]], original_option_id: str,
+) -> tuple[str, str]:
+    if not options:
+        raise ValueError("Display 不得缺少 Option")
+    ranked = sorted(options, key=lambda option: (
+        -int(option.get("option_sample_count") or 0),
+        -int(option.get("option_package_count") or 0),
+        0 if cell_text(option.get("practice_option_id")) == original_option_id else 1,
+        cell_text(option.get("practice_option_id")),
+    ))
+    selected = ranked[0]
+    max_samples = int(selected.get("option_sample_count") or 0)
+    sample_tied = [option for option in options if int(option.get("option_sample_count") or 0) == max_samples]
+    if len(sample_tied) == 1:
+        reason = "no_explicit_match_selected_by_sample_count"
+    else:
+        max_packages = int(selected.get("option_package_count") or 0)
+        package_tied = [option for option in sample_tied if int(option.get("option_package_count") or 0) == max_packages]
+        if len(package_tied) == 1:
+            reason = "no_explicit_match_selected_by_package_count"
+        elif any(cell_text(option.get("practice_option_id")) == original_option_id for option in package_tied):
+            reason = "support_tie_original_option"
+        else:
+            reason = "stable_option_id_tiebreak"
+    return cell_text(selected.get("practice_option_id")), reason
 
 
 def select_final_options(
@@ -2431,7 +2550,11 @@ def select_final_options(
     displays_with_options: pd.DataFrame,
     candidate_families: pd.DataFrame,
     warnings: list[str] | None = None,
+    evidence_items: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
+    displays_with_options = attach_option_support_counts(
+        displays_with_options, evidence_items if evidence_items is not None else pd.DataFrame()
+    )
     display_map, option_map = display_option_maps(displays_with_options)
     family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
     selected_rows: list[dict[str, Any]] = []
@@ -2448,6 +2571,8 @@ def select_final_options(
         display = display_map.get(display_id)
         options = display.get("practice_options") if display is not None and isinstance(display.get("practice_options"), list) else []
         selected_option_id = original_option_id
+        decision = "no_explicit_match"
+        selection_reason = "single_option"
         prompt = ""
         response = None
         error_message = ""
@@ -2456,7 +2581,6 @@ def select_final_options(
                 "raw_query": raw_text,
                 "display_id": display_id,
                 "original_option_id": original_option_id,
-                "original_family": option_selection_family_payload(original_family_id, family_map),
                 "options": [{
                     "option_id": cell_text(option.get("practice_option_id")),
                     "families": [
@@ -2466,39 +2590,46 @@ def select_final_options(
                 } for option in options],
             }
             prompt = f"""
-从同一 Display 的现有 Options 中选择最终 Option。
+你只负责判断用户是否明确提出了足以区分当前 Options 的条件。
 
-- raw_query 是用户需求的唯一依据。
-- original_option_id 是历史工程原 Option；无替换条件时保留。
-- original_family 是历史工程事实，不代表用户要求。
-- 只能返回 options 中已有的 option_id。
-- family_id 只是内部编号，不参与判断。
+raw_query 是用户原始需求。
+original_option_id 是参考历史工程中的原 Option。
+options 是当前同一 Display 下可选的所有 Option。
 
-注意 OCR/序号粘连：
-“1.5层楼垂直运输费”“1.2层垂直运输费”“1.1层垂直运输费”
-可能分别表示序号“1.”后接“5层”“2层”“1层”，不是小数层数；
-“1.垂直运输费”表示“垂直运输费”。
-但“1.5mm厚”“1.2mm厚”仍是真实厚度。
+判断规则：
 
-只在两种情况下替换：
+1. 只有当 raw_query 明确提到能够区分 Options 的材料、工艺、规格、厚度、楼层、层数、部位或其他限定条件时，才返回 explicit_match。
 
-1. raw_query 明确指定不同的材料、工艺、规格、厚度、层数或部位，
-   original Option 不符合，而某个候选明确符合时，选择该候选。
-   例如原始是“1.5mm聚氨酯防水涂料”，用户明确要求
-   “2mm水泥基渗透结晶型防水涂料”，且存在该候选时，必须替换。
+2. 用户只是提到当前清单对象本身，不算明确区分条件。
+   例如用户只说“需要垂直运输”“需要脚手架”，而不同 Options 的差异在楼层或具体部位时，不得据此选择某个带限定的 Option。
 
-2. original_family.project_description 含有 raw_query 未指定的层数、
-   部位或其他限定，且某个候选保持同一清单对象和主要工艺，
-   只是去掉该限定时，必须选择该候选。
-   例如原始是“5层楼垂直运输费”，用户未说明楼层，
-   候选中有“垂直运输费”，必须替换。
+3. 用户没有提到楼层、层数或高度时，不得根据参考历史工程中的楼层限定推断用户需要该限定。
+   例如：
+   - “1层楼垂直运输费”
+   - “垂直运输费”
+   用户未说明楼层时，返回 no_explicit_match。
 
-不得仅因描述更短而改变主要材料、厚度、规格或施工工艺。
-除以上两种情况外，保留 original_option_id。
-不得按价格、样本数、相似度、文字长度、Option顺序或编号选择。
+4. 用户没有提到厚度、材料、规格、部位或施工方法时，不得根据 original_option_id、original_family 或历史工程内容补充这些条件。
 
-只输出：
-{{"selected_option_id":"..."}}
+5. original_option_id 只是历史参考，不是用户要求。
+
+6. 不得根据样本数、价格、相似度、Option 顺序、Option 编号、Family 数量或历史出现频率判断 explicit_match。
+
+7. 只有当用户明确条件能够唯一对应某个现有 Option 时，才能返回 explicit_match。
+
+8. 如果用户表达模糊、没有明确区分条件，或者多个 Options 都可能符合，必须返回 no_explicit_match。
+
+9. selected_option_id 只能是 options 中已有的 option_id。
+
+10. 不得新增 Option，不得修改 Option，不得解释，不得输出思考过程。
+
+输出格式只能是以下两种之一：
+
+{{"decision":"explicit_match","selected_option_id":"..."}}
+
+或：
+
+{{"decision":"no_explicit_match","selected_option_id":""}}
 
 输入：
 {json_text(payload)}
@@ -2506,19 +2637,31 @@ def select_final_options(
             try:
                 response = request_llm_json_with_usage(
                     prompt, max_tokens=128,
-                    system_prompt="只输出 selected_option_id 单字段 JSON object。",
+                    system_prompt="只输出 decision 和 selected_option_id 两字段 JSON object。",
                 )
                 result = response.content
                 allowed_ids = {cell_text(option.get("practice_option_id")) for option in options}
-                if not isinstance(result, dict) or set(result) != {"selected_option_id"}:
-                    raise ValueError("option selection 只允许 selected_option_id")
+                if not isinstance(result, dict) or set(result) != {"decision", "selected_option_id"}:
+                    raise ValueError("option selection 只允许 decision 和 selected_option_id")
+                decision = cell_text(result.get("decision"))
                 candidate = cell_text(result.get("selected_option_id"))
-                if candidate not in allowed_ids:
-                    raise ValueError("option selection 返回非候选 Option ID")
-                selected_option_id = candidate
+                if decision == "explicit_match":
+                    if not candidate or candidate not in allowed_ids:
+                        raise ValueError("explicit_match 必须返回现有非空 Option ID")
+                    selected_option_id = candidate
+                    selection_reason = "user_explicit_match"
+                elif decision == "no_explicit_match":
+                    if candidate:
+                        raise ValueError("no_explicit_match 的 selected_option_id 必须为空")
+                    selected_option_id, selection_reason = choose_most_supported_option(options, original_option_id)
+                else:
+                    raise ValueError("option selection decision 非法")
             except (RuntimeError, ValueError) as exc:
                 error_message = str(exc)
-                append_warning(warnings, f"option_selection_fallback_original:{position}")
+                decision = "no_explicit_match"
+                selected_option_id, _support_reason = choose_most_supported_option(options, original_option_id)
+                selection_reason = "llm_failed_selected_by_support"
+                append_warning(warnings, f"option_selection_llm_failed_selected_by_support:{position}")
             llm_traces.append(trace_row(
                 "option_selection", f"为最终清单 {position} 选择现有 Option", not error_message,
                 error=error_message, prompt=prompt, max_tokens=128,
@@ -2528,7 +2671,7 @@ def select_final_options(
         selected_option = option_map.get((display_id, selected_option_id))
         if selected_option is None:
             raise ValueError(f"最终 Option 回查失败: {display_id}/{selected_option_id}")
-        representative_family_id = choose_representative_family(selected_option, original_family_id, family_map)
+        representative_family_id, representative_selection_reason = choose_representative_family(selected_option, original_family_id, family_map)
         representative = family_payload(representative_family_id, family_map)
         selected_rows.append({
             **item.to_dict(), "display_id": display_id,
@@ -2543,7 +2686,9 @@ def select_final_options(
             "original_option_id": original_option_id, "selected_option_id": selected_option_id,
             "original_family_id": original_family_id, "representative_family_id": representative_family_id,
             "candidate_option_count": len(options), "whether_replaced": selected_option_id != original_option_id,
-            "selection_reason": "",
+            "selection_reason": selection_reason,
+            "option_selection_decision": decision,
+            "representative_selection_reason": representative_selection_reason,
         })
     return pd.DataFrame(selected_rows), pd.DataFrame(trace_rows, columns=OPTION_SELECTION_TRACE_COLUMNS), llm_traces
 
@@ -2556,25 +2701,105 @@ def validate_quantity(value: Any) -> dict[str, Any]:
         if set(value) != {"type", "value"}:
             raise ValueError("exact quantity 只能包含 type 和 value")
         number = numeric_or_none(value.get("value"))
-        if number is None or number < 0:
-            raise ValueError("exact quantity value 必须为非负数")
+        if number is None or number <= 0:
+            raise ValueError("exact quantity value 必须大于 0")
         return {"type": "exact", "value": number}
-    if quantity_type == "range":
-        if set(value) != {"type", "min", "max"}:
-            raise ValueError("range quantity 只能包含 type、min 和 max")
-        minimum = numeric_or_none(value.get("min"))
-        maximum = numeric_or_none(value.get("max"))
-        if minimum is None or maximum is None:
-            raise ValueError("range quantity 必须包含 min 和 max")
-        if minimum < 0 or maximum < 0:
-            raise ValueError("range quantity min/max 必须为非负数")
-        if minimum > maximum:
-            raise ValueError("range quantity min 不得大于 max")
-        return {"type": "range", "min": minimum, "max": maximum}
-    raise ValueError("quantity.type 只能是 exact 或 range")
+    raise ValueError("quantity.type 只能是 exact")
 
 
-def build_quantity_determination_prompt(raw_text: str, plan_items: pd.DataFrame) -> str:
+QUANTITY_MENTION_PATTERN = re.compile(
+    r"(?<![\d.])(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>平方米|平方|平米|m²|㎡|m2|套|台|个|只|樘|项|次|米|延米|m|kg|千克|吨|t)(?![a-zA-Z\u4e00-\u9fff])",
+    re.IGNORECASE,
+)
+
+
+def quantity_unit_key(value: Any) -> str:
+    text = normalized_unit(value).lower()
+    aliases = {
+        "平方米": "m²", "平方": "m²", "平米": "m²", "㎡": "m²", "m2": "m²",
+        "套": "套", "台": "台", "个": "个", "只": "个", "樘": "樘", "项": "项", "次": "次",
+        "米": "m", "延米": "m", "千克": "kg", "kg": "kg", "吨": "t",
+    }
+    return aliases.get(text, text)
+
+
+def extract_user_quantity_mentions(raw_text: str) -> list[dict[str, Any]]:
+    mentions: list[dict[str, Any]] = []
+    for match in QUANTITY_MENTION_PATTERN.finditer(unicodedata.normalize("NFKC", raw_text)):
+        value = numeric_or_none(match.group("value"))
+        if value is None or value <= 0:
+            continue
+        mentions.append({
+            "value": value,
+            "unit": quantity_unit_key(match.group("unit")),
+            "start": match.start(),
+            "context": raw_text[max(0, match.start() - 40):min(len(raw_text), match.end() + 12)],
+        })
+    return mentions
+
+
+def quantity_match_score(context: str, row: pd.Series) -> int:
+    normalized_context = normalize_dedupe_text(context)
+    name = normalize_dedupe_text(row.get("cost_item_name"))
+    description = normalize_dedupe_text(row.get("project_description"))
+    if name and name in normalized_context:
+        return 2
+    if description and len(description) >= 4 and description in normalized_context:
+        return 1
+    return 0
+
+
+def determine_quantity_anchor(
+    raw_text: str,
+    plan_items: pd.DataFrame,
+) -> tuple[dict[str, Any] | None, dict[int, float]]:
+    if plan_items.empty:
+        raise ValueError("最终清单为空，无法确定工程量")
+    mentions = extract_user_quantity_mentions(raw_text)
+    if not mentions:
+        return None, {}
+    user_quantities: dict[int, float] = {}
+    matched_mentions: list[tuple[int, int, float]] = []
+    for mention in mentions:
+        scored: list[tuple[int, int]] = []
+        for _index, row in plan_items.iterrows():
+            item_unit = quantity_unit_key(cell_text(row.get("unit")) or cell_text(row.get("unit_normalized")))
+            if item_unit and item_unit != mention["unit"]:
+                continue
+            score = quantity_match_score(mention["context"], row)
+            if score:
+                scored.append((score, int(row["item_position"])))
+        if scored:
+            best_score = max(score for score, _position in scored)
+            best_positions = [position for score, position in scored if score == best_score]
+            if len(best_positions) == 1:
+                position = best_positions[0]
+                user_quantities[position] = float(mention["value"])
+                matched_mentions.append((int(mention["start"]), position, float(mention["value"])))
+    if matched_mentions:
+        _start, anchor_position, anchor_user_quantity = min(matched_mentions)
+        source = "explicit_item_match"
+    else:
+        anchor_position = int(plan_items.iloc[0]["item_position"])
+        anchor_user_quantity = float(mentions[0]["value"])
+        user_quantities[anchor_position] = anchor_user_quantity
+        source = "fallback_first_item"
+    anchor_row = plan_items[plan_items["item_position"].astype(int).eq(anchor_position)].iloc[0]
+    historical_quantity = numeric_or_none(anchor_row.get("quantity"))
+    if historical_quantity is None or historical_quantity <= 0:
+        raise ValueError(f"anchor_historical_quantity 必须大于 0: item_position={anchor_position}")
+    return {
+        "item_position": anchor_position,
+        "cost_item_name": cell_text(anchor_row.get("cost_item_name")),
+        "project_description": cell_text(anchor_row.get("project_description")),
+        "unit": cell_text(anchor_row.get("unit")) or cell_text(anchor_row.get("unit_normalized")),
+        "user_quantity": anchor_user_quantity,
+        "historical_quantity": historical_quantity,
+        "source": source,
+    }, user_quantities
+
+
+def quantity_rule_payload(raw_text: str, plan_items: pd.DataFrame, anchor: dict[str, Any] | None) -> dict[str, Any]:
     items = [
         {
             "item_position": int(row["item_position"]),
@@ -2585,68 +2810,137 @@ def build_quantity_determination_prompt(raw_text: str, plan_items: pd.DataFrame)
         }
         for _index, row in plan_items.iterrows()
     ]
+    return {"user_query": raw_text, "anchor": anchor, "items": items}
+
+
+def build_quantity_determination_prompt(
+    raw_text: str, plan_items: pd.DataFrame, anchor: dict[str, Any] | None = None,
+) -> str:
+    payload = quantity_rule_payload(raw_text, plan_items, anchor)
     return f"""
-最终方案清单已经确定。只为每个清单确定工程量，不得增加、删除、重排清单，不得修改工艺或生成价格。
+你只判断每个清单应采用哪种工程量规则，不得计算或输出最终工程量。
 
-这些清单来自同一个参考历史工程案例。即使部分清单名称或施工对象不同，也可能在同一工程中配套出现，因此不得判断某项不应存在。
+可选规则：
 
-规则：
-1. 必须覆盖输入中的每个 item_position，且每个位置只出现一次。
-2. item_position 是完整历史工程包中的 0-based 绝对位置，不得重新编号。
-3. quantity 只能使用 exact。
-4. 不得输出 0。
-5. 用户明确提供且能直接对应当前清单的工程量时，优先采用用户工程量。
-6. 用户没有明确提供当前清单工程量时，采用 historical_quantity。
-7. 不得把用户对某一清单的数量自动传播给明显不同计量对象的其他清单。
-8. 不得重新判断清单是否必要、重复、互斥或应取消。
-9. quantity_reason 必须非空，只写一句简短、确定的依据，不得输出分析过程或自我质疑。
+- use_user_exact：
+  用户明确给出了当前清单自身数量。
+  anchor 自身必须使用此规则。
 
-quantity 格式：
-{{"type":"exact","value":数值}}
+- scale_with_anchor：
+  当前清单与 anchor 属于同一施工范围，且历史工程量可按相同比例随主体规模变化。
+  常见于同一维修范围内的拆除、基层处理、防水、恢复等面积型工序。
+
+- keep_historical：
+  当前清单与 anchor 不存在可靠同比例关系，保留历史工程量。
+  设备台数、套数、按钮、模块、探测器、系统、项、次等通常使用此规则。
+
+判断要求：
+
+1. 不得仅因单位相同、位于同一历史工程或名称相似就使用 scale_with_anchor。
+2. 垂直运输、脚手架只有在确实随同一主体施工范围变化时才可缩放。
+3. anchor.source 为 fallback_first_item 时，仍不得把所有清单自动判为 scale_with_anchor。
+4. anchor 为 null 时，所有清单必须使用 keep_historical。
+5. 必须覆盖每个 item_position，且不得重复、遗漏或重新编号。
+6. 不得输出解释或其他字段。
 
 只输出：
+
 {{
-  "item_quantities": [
+  "item_quantity_rules": [
     {{
       "item_position": 0,
-      "quantity": {{"type":"exact","value":1}},
-      "quantity_reason": "工程量确定依据"
+      "rule": "scale_with_anchor"
     }}
   ]
 }}
 
 输入：
-{json_text({"user_query": raw_text, "items": items})}
+{json_text(payload)}
 """.strip()
 
 
 def parse_quantity_determination_result(
     result: Any,
     plan_items: pd.DataFrame,
-) -> dict[int, tuple[dict[str, Any], str]]:
-    if not isinstance(result, dict) or set(result) != {"item_quantities"}:
-        raise ValueError("quantity determination 顶层必须且只能包含 item_quantities")
-    raw_entries = result.get("item_quantities")
+) -> dict[int, str]:
+    return validate_quantity_rule_result(result, plan_items, None, {})
+
+
+def validate_quantity_rule_result(
+    result: Any, plan_items: pd.DataFrame, anchor: dict[str, Any] | None,
+    user_quantities: dict[int, float],
+) -> dict[int, str]:
+    if not isinstance(result, dict) or set(result) != {"item_quantity_rules"}:
+        raise ValueError("quantity determination 顶层必须且只能包含 item_quantity_rules")
+    raw_entries = result.get("item_quantity_rules")
     if not isinstance(raw_entries, list):
-        raise ValueError("item_quantities 必须是数组")
+        raise ValueError("item_quantity_rules 必须是数组")
     expected_positions = {int(value) for value in plan_items["item_position"].tolist()}
-    parsed: dict[int, tuple[dict[str, Any], str]] = {}
+    historical = {int(row["item_position"]): numeric_or_none(row.get("quantity")) for _index, row in plan_items.iterrows()}
+    parsed: dict[int, str] = {}
     for entry in raw_entries:
-        if not isinstance(entry, dict) or set(entry) != {"item_position", "quantity", "quantity_reason"}:
-            raise ValueError("item_quantity 字段非法")
+        if not isinstance(entry, dict) or set(entry) != {"item_position", "rule"}:
+            raise ValueError("item_quantity_rule 字段非法")
         position = entry.get("item_position")
         if isinstance(position, bool) or not isinstance(position, int):
             raise ValueError("quantity item_position 必须是整数")
         if position in parsed:
             raise ValueError(f"quantity item_position 重复: {position}")
-        reason = cell_text(entry.get("quantity_reason"))
-        if not reason:
-            raise ValueError(f"quantity_reason 不得为空: item_position={position}")
-        parsed[position] = (validate_quantity(entry.get("quantity")), reason)
+        rule = cell_text(entry.get("rule"))
+        if rule not in {"use_user_exact", "scale_with_anchor", "keep_historical"}:
+            raise ValueError(f"quantity rule 非法: item_position={position}")
+        if rule == "use_user_exact" and position not in user_quantities:
+            raise ValueError(f"use_user_exact 缺少用户明确数量: item_position={position}")
+        if rule in {"scale_with_anchor", "keep_historical"} and (historical.get(position) is None or historical[position] <= 0):
+            raise ValueError(f"historical_quantity 必须大于 0: item_position={position}")
+        parsed[position] = rule
     actual_positions = set(parsed)
     if actual_positions != expected_positions:
         raise ValueError("quantity 必须覆盖选定区间内全部清单")
+    if anchor is None and set(parsed.values()) != {"keep_historical"}:
+        raise ValueError("anchor 为 null 时全部清单必须 keep_historical")
+    if anchor is not None and parsed.get(int(anchor["item_position"])) != "use_user_exact":
+        raise ValueError("anchor 必须使用 use_user_exact")
+    for position in user_quantities:
+        if parsed.get(position) != "use_user_exact":
+            raise ValueError(f"用户明确数量项必须使用 use_user_exact: item_position={position}")
     return parsed
+
+
+QUANTITY_REASONS = {
+    "use_user_exact": "采用用户明确工程量",
+    "scale_with_anchor": "按历史工程量比例随主体规模缩放",
+    "keep_historical": "用户未明确该项数量，保留参考工程历史工程量",
+}
+
+
+def calculate_quantities(
+    plan_items: pd.DataFrame, anchor: dict[str, Any] | None,
+    user_quantities: dict[int, float], rules: dict[int, str],
+) -> dict[int, tuple[dict[str, Any], str]]:
+    scale_factor = None if anchor is None else float(anchor["user_quantity"]) / float(anchor["historical_quantity"])
+    quantities: dict[int, tuple[dict[str, Any], str]] = {}
+    for _index, row in plan_items.iterrows():
+        position = int(row["item_position"])
+        rule = rules[position]
+        historical = numeric_or_none(row.get("quantity"))
+        if rule == "use_user_exact":
+            value = user_quantities.get(position)
+        elif rule == "scale_with_anchor":
+            value = None if historical is None or scale_factor is None else historical * scale_factor
+        else:
+            value = historical
+        rounded = None if value is None else round(float(value), 4)
+        if rounded is None or rounded <= 0:
+            raise ValueError(f"最终工程量必须大于 0: item_position={position}")
+        quantities[position] = ({"type": "exact", "value": rounded}, QUANTITY_REASONS[rule])
+    if anchor is not None:
+        anchor_position = int(anchor["item_position"])
+        quantities[anchor_position] = (
+            {"type": "exact", "value": float(anchor["user_quantity"])},
+            QUANTITY_REASONS["use_user_exact"],
+        )
+    return quantities
 
 
 def build_scenario_from_plan_items(
@@ -2678,6 +2972,7 @@ def build_scenario_from_plan_items(
                 selection_reason="",
                 quantity=quantity,
                 quantity_reason=quantity_reason,
+                item_position=position,
             )
         )
     return EstimateScenario("S001", 1, "", "", items)
@@ -2688,30 +2983,46 @@ def generate_quantity_determination(
     project_package_id: str,
     plan_items: pd.DataFrame,
     sample_lookup: dict[str, dict[str, Any]],
+    warnings: list[str] | None = None,
 ) -> tuple[EstimateScenario, str, dict[str, Any]]:
-    prompt = build_quantity_determination_prompt(raw_text, plan_items)
+    anchor, user_quantities = determine_quantity_anchor(raw_text, plan_items)
+    prompt = build_quantity_determination_prompt(raw_text, plan_items, anchor)
     max_tokens = 4096
-    response = request_llm_json_with_usage(
-        prompt,
-        max_tokens=max_tokens,
-        system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
-    )
-    quantities = parse_quantity_determination_result(response.content, plan_items)
+    response = None
+    error_message = ""
+    try:
+        response = request_llm_json_with_usage(
+            prompt,
+            max_tokens=max_tokens,
+            system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
+        )
+        rules = validate_quantity_rule_result(response.content, plan_items, anchor, user_quantities)
+    except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+        error_message = str(exc)
+        rules = {
+            int(row["item_position"]): (
+                "use_user_exact" if int(row["item_position"]) in user_quantities else "keep_historical"
+            )
+            for _index, row in plan_items.iterrows()
+        }
+        append_warning(warnings, "quantity_determination_fallback_keep_historical")
+    quantities = calculate_quantities(plan_items, anchor, user_quantities, rules)
     scenario = build_scenario_from_plan_items(
         project_package_id, plan_items, sample_lookup, quantities
     )
     trace = trace_row(
         "quantity_determination",
         "确定最终连续区间内全部清单的工程量",
-        True,
+        not error_message,
+        error=error_message,
         prompt=prompt,
         max_tokens=max_tokens,
         input_summary=json_text({
             "selected_project_package_id": project_package_id,
             "expected_item_positions": plan_items["item_position"].tolist(),
         }),
-        usage=response.usage,
-        raw_response=getattr(response, "raw_content", ""),
+        usage=response.usage if response is not None else None,
+        raw_response=getattr(response, "raw_content", "") if response is not None else "",
         scenario_count=1,
         scenario_item_count=len(scenario.items),
     )
@@ -2793,8 +3104,8 @@ def build_final_explanation_prompt(
     )
     item_columns = [
         "清单名称", "项目特征", "单位",
-        "工程量预估", "工程量依据", "综合单价最低值", "综合单价中位数", "综合单价最高值",
-        "合价最低值", "合价中位数", "合价最高值", "价格证据样本数",
+        "工程量预估", "工程量依据", "综合单价P10", "综合单价中位数", "综合单价P90",
+        "合价P10", "合价中位数", "合价P90", "价格证据样本数",
     ]
     items = replace_nan_records(estimate_scenarios[item_columns])
     return f"""
@@ -2846,6 +3157,7 @@ def parse_final_explanation_result(result: dict[str, Any], scenario: EstimateSce
             selection_reason=explanations[position],
             quantity=item.quantity,
             quantity_reason=item.quantity_reason,
+            item_position=item.item_position,
         )
         for position, item in enumerate(scenario.items)
     ]
@@ -2989,26 +3301,34 @@ def price_stats_for_option(
         source_refs.append(cell_text(row.get("source_ref")) or source_identity_for_row(row)[2])
     expanded["source_ref"] = source_refs
 
-    unit_price = min_median_max(expanded, "unit_price")
-    labor_price = min_median_max(expanded, "labor_unit_price")
-    machinery_price = min_median_max(expanded, "machinery_unit_price")
+    signature_family = {}
+    for family_id, signature in family_signatures:
+        signature_family.setdefault(signature, family_id)
+    expanded["family_id"] = expanded["normalized_signature"].map(
+        lambda value: signature_family[cell_text(value)]
+    )
+
+    unit_price = p10_median_p90(expanded, "unit_price")
+    labor_price = p10_median_p90(expanded, "labor_unit_price")
+    machinery_price = p10_median_p90(expanded, "machinery_unit_price")
     return {
-        "unit_price_min": unit_price[0],
+        "unit_price_p10": unit_price[0],
         "unit_price_median": unit_price[1],
-        "unit_price_max": unit_price[2],
-        "labor_unit_price_min": labor_price[0],
+        "unit_price_p90": unit_price[2],
+        "labor_unit_price_p10": labor_price[0],
         "labor_unit_price_median": labor_price[1],
-        "labor_unit_price_max": labor_price[2],
-        "machinery_unit_price_min": machinery_price[0],
+        "labor_unit_price_p90": labor_price[2],
+        "machinery_unit_price_p10": machinery_price[0],
         "machinery_unit_price_median": machinery_price[1],
-        "machinery_unit_price_max": machinery_price[2],
+        "machinery_unit_price_p90": machinery_price[2],
         "source_refs": ordered_refs(expanded["source_ref"]),
         "evidence_count": int(len(expanded)),
+        "expanded_evidence": expanded,
     }
 
 
 def validate_price_stats(price_stats: dict[str, Any], stable_sample_id: str, practice_option_id: str) -> None:
-    required = ["unit_price_min", "unit_price_median", "unit_price_max"]
+    required = ["unit_price_p10", "unit_price_median", "unit_price_p90"]
     missing = [key for key in required if numeric_or_none(price_stats.get(key)) is None]
     if missing or int(numeric_or_none(price_stats.get("evidence_count")) or 0) <= 0:
         raise ValueError(
@@ -3044,18 +3364,18 @@ def quantity_amounts(quantity: dict[str, Any], price_stats: dict[str, Any]) -> t
     if quantity_type == "exact":
         value = quantity.get("value")
         return (
-            calc_amount(value, price_stats.get("unit_price_min")),
+            calc_amount(value, price_stats.get("unit_price_p10")),
             calc_amount(value, price_stats.get("unit_price_median")),
-            calc_amount(value, price_stats.get("unit_price_max")),
+            calc_amount(value, price_stats.get("unit_price_p90")),
         )
     if quantity_type == "range":
         minimum = numeric_or_none(quantity.get("min"))
         maximum = numeric_or_none(quantity.get("max"))
         midpoint = None if minimum is None or maximum is None else (minimum + maximum) / 2
         return (
-            calc_amount(minimum, price_stats.get("unit_price_min")),
+            calc_amount(minimum, price_stats.get("unit_price_p10")),
             calc_amount(midpoint, price_stats.get("unit_price_median")),
-            calc_amount(maximum, price_stats.get("unit_price_max")),
+            calc_amount(maximum, price_stats.get("unit_price_p90")),
         )
     raise ValueError("quantity.type 只能是 exact 或 range")
 
@@ -3065,10 +3385,11 @@ def build_scenario_outputs(
     displays_with_options: pd.DataFrame,
     candidate_families: pd.DataFrame,
     samples: pd.DataFrame,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     display_map, option_map = display_option_maps(displays_with_options)
     family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
     scenario_rows: list[dict[str, Any]] = []
+    price_evidence_rows: list[dict[str, Any]] = []
     for scenario in scenarios:
         for item in scenario.items:
             display_row = display_map.get(item.display_id)
@@ -3084,35 +3405,50 @@ def build_scenario_outputs(
                 continue
             price_stats = price_stats_for_option(option, display_row, candidate_families, samples)
             validate_price_stats(price_stats, item.stable_sample_id, item.practice_option_id)
-            amount_low, amount_mid, amount_high = quantity_amounts(item.quantity, price_stats)
+            amount_p10, amount_mid, amount_p90 = quantity_amounts(item.quantity, price_stats)
             family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
+            expanded_evidence = price_stats["expanded_evidence"]
+            for _evidence_index, evidence in expanded_evidence.iterrows():
+                price_evidence_rows.append({
+                    "final_item_position": item.item_position,
+                    "清单名称": cell_text(representative.get("representative_cost_item_name")),
+                    "display_id": item.display_id,
+                    "practice_option_id": item.practice_option_id,
+                    "family_id": cell_text(evidence.get("family_id")),
+                    "normalized_signature": cell_text(evidence.get("normalized_signature")),
+                    "stable_sample_id": cell_text(evidence.get("stable_sample_id")),
+                    "project_key": cell_text(evidence.get("project_key")),
+                    "source_ref": cell_text(evidence.get("source_ref")),
+                    "工程名称": cell_text(evidence.get("工程名称")) or cell_text(evidence.get("来源工程名称")) or cell_text(evidence.get("project_name_text")),
+                    "location": cell_text(evidence.get("location")),
+                    "consultation_time": cell_text(evidence.get("consultation_time")),
+                    "cost_item_name": cell_text(evidence.get("cost_item_name")),
+                    "project_description": cell_text(evidence.get("project_description")),
+                    "unit": cell_text(evidence.get("unit")),
+                    "quantity": evidence.get("quantity", ""),
+                    "unit_price": evidence.get("unit_price", ""),
+                    "labor_unit_price": evidence.get("labor_unit_price", ""),
+                    "machinery_unit_price": evidence.get("machinery_unit_price", ""),
+                })
             scenario_rows.append(
                 {
-                    "方案顺序": scenario.scenario_order,
-                    "方案编号": scenario.scenario_id,
-                    "方案名称": scenario.scenario_name,
-                    "project_package_id": item.project_package_id,
-                    "stable_sample_id": item.stable_sample_id,
-                    "source_ref": item.source_ref,
-                    "display_id": item.display_id,
                     "清单名称": cell_text(representative.get("representative_cost_item_name")),
                     "项目特征": cell_text(representative.get("representative_project_description")),
                     "单位": cell_text(representative.get("unit_normalized")) or cell_text(representative.get("unit")),
-                    "项目说明": item.selection_reason,
                     "工程量预估": quantity_display(item.quantity),
                     "工程量依据": item.quantity_reason,
-                    "合价最低值": amount_low,
+                    "合价P10": amount_p10,
                     "合价中位数": amount_mid,
-                    "合价最高值": amount_high,
-                    "综合单价最低值": price_stats.get("unit_price_min"),
+                    "合价P90": amount_p90,
+                    "综合单价P10": price_stats.get("unit_price_p10"),
                     "综合单价中位数": price_stats.get("unit_price_median"),
-                    "综合单价最高值": price_stats.get("unit_price_max"),
-                    "其中包含人工费单价最低值": price_stats.get("labor_unit_price_min"),
+                    "综合单价P90": price_stats.get("unit_price_p90"),
+                    "其中包含人工费单价P10": price_stats.get("labor_unit_price_p10"),
                     "其中包含人工费单价中位数": price_stats.get("labor_unit_price_median"),
-                    "其中包含人工费单价最高值": price_stats.get("labor_unit_price_max"),
-                    "其中包含机械费单价最低值": price_stats.get("machinery_unit_price_min"),
+                    "其中包含人工费单价P90": price_stats.get("labor_unit_price_p90"),
+                    "其中包含机械费单价P10": price_stats.get("machinery_unit_price_p10"),
                     "其中包含机械费单价中位数": price_stats.get("machinery_unit_price_median"),
-                    "其中包含机械费单价最高值": price_stats.get("machinery_unit_price_max"),
+                    "其中包含机械费单价P90": price_stats.get("machinery_unit_price_p90"),
                     "价格证据样本数": price_stats.get("evidence_count"),
                     "来源样本": cell_text(price_stats.get("source_refs")),
                     "practice_option_id": item.practice_option_id,
@@ -3120,9 +3456,13 @@ def build_scenario_outputs(
                     "original_family_id": item.original_family_id,
                     "representative_family_id": item.representative_family_id,
                     "价格证据family": ",".join(family_ids),
+                    "display_id": item.display_id,
                 }
             )
-    return pd.DataFrame(scenario_rows, columns=ESTIMATE_SCENARIO_COLUMNS).fillna("")
+    return (
+        pd.DataFrame(scenario_rows, columns=ESTIMATE_SCENARIO_COLUMNS).fillna(""),
+        pd.DataFrame(price_evidence_rows, columns=PRICE_EVIDENCE_ITEM_COLUMNS).fillna(""),
+    )
 
 
 def display_frame(frame: pd.DataFrame, display: bool) -> pd.DataFrame:
@@ -3143,7 +3483,6 @@ EXCEL_DISPLAY_COLUMN_LABELS = {
 
 
 TEXT_IDENTIFIER_COLUMNS = {
-    "方案编号",
     "scenario_id",
     "display_id",
     "family_id",
@@ -3160,13 +3499,10 @@ TEXT_IDENTIFIER_COLUMNS = {
 }
 
 TEXT_VALUE_COLUMNS = {
-    "是否推荐方案",
     "工程量预估",
     "方案说明",
     "主要施工内容",
-    "与其他方案的核心差异",
     "待现场确认事项",
-    "项目说明",
     "工程量依据",
     "来源样本",
     "价格证据family",
@@ -3174,6 +3510,7 @@ TEXT_VALUE_COLUMNS = {
 
 INTEGER_COLUMNS = {
     "序号",
+    "final_item_position",
     "rank",
     "selection_rank",
     "support_rank",
@@ -3210,9 +3547,9 @@ AMOUNT_VALUE_COLUMNS = {
 
 AMOUNT_WIDTH_COLUMNS = {
     "total_price",
-    "合价最低值",
+    "合价P10",
     "合价中位数",
-    "合价最高值",
+    "合价P90",
 }
 
 
@@ -3300,36 +3637,26 @@ def build_estimate_summary(
 ) -> pd.DataFrame:
     if estimate_scenarios.empty:
         return pd.DataFrame(columns=ESTIMATE_SUMMARY_COLUMNS)
-    scenario_by_id = {scenario.scenario_id: scenario for scenario in scenarios}
-    rows: list[dict[str, Any]] = []
-    first_order = numeric_or_none(estimate_scenarios.iloc[0].get("方案顺序"))
-    for (_scenario_order, scenario_id), frame in estimate_scenarios.groupby(["方案顺序", "方案编号"], sort=True):
-        scenario = frame.iloc[0]
-        scenario_object = scenario_by_id.get(cell_text(scenario_id))
-        scenario_summary = scenario_object.scenario_summary if scenario_object is not None else ""
-        conditional_explanations = [
-            item.selection_reason
-            for item in (scenario_object.items if scenario_object is not None else [])
-            if cell_text(item.quantity.get("type")) == "range"
-            and numeric_or_none(item.quantity.get("min")) == 0
-        ]
-        rows.append(
-            {
-                "方案顺序": scenario.get("方案顺序", ""),
-                "方案编号": scenario_id,
-                "方案名称": scenario.get("方案名称", ""),
-                "是否推荐方案": "是" if numeric_or_none(scenario.get("方案顺序")) == first_order else "否",
-                "方案说明": scenario_summary,
-                "主要施工内容": join_non_empty([display_item_label(row) for _index, row in frame.iterrows()]),
-                "与其他方案的核心差异": "",
-                "计价项目数": int(len(frame)),
-                "合价最低值": amount_sum(frame, "合价最低值"),
-                "合价中位数": amount_sum(frame, "合价中位数"),
-                "合价最高值": amount_sum(frame, "合价最高值"),
-                "待现场确认事项": join_non_empty(conditional_explanations),
-            }
-        )
-    return pd.DataFrame(rows, columns=ESTIMATE_SUMMARY_COLUMNS).fillna("")
+    scenario = scenarios[0] if scenarios else None
+    conditional_explanations = [
+        item.selection_reason
+        for item in (scenario.items if scenario is not None else [])
+        if cell_text(item.quantity.get("type")) == "range"
+        and numeric_or_none(item.quantity.get("min")) == 0
+    ]
+    row = {
+        "方案名称": scenario.scenario_name if scenario is not None else "",
+        "方案说明": scenario.scenario_summary if scenario is not None else "",
+        "主要施工内容": join_non_empty([
+            display_item_label(item) for _index, item in estimate_scenarios.iterrows()
+        ]),
+        "计价项目数": int(len(estimate_scenarios)),
+        "合价P10": amount_sum(estimate_scenarios, "合价P10"),
+        "合价中位数": amount_sum(estimate_scenarios, "合价中位数"),
+        "合价P90": amount_sum(estimate_scenarios, "合价P90"),
+        "待现场确认事项": join_non_empty(conditional_explanations),
+    }
+    return pd.DataFrame([row], columns=ESTIMATE_SUMMARY_COLUMNS).fillna("")
 
 
 def build_parse_info(
@@ -3501,6 +3828,9 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
             index=False,
         )
         display_frame(result.evidence_items, display).to_excel(writer, sheet_name="evidence_items", index=False)
+        display_frame(result.price_evidence_items, display).to_excel(
+            writer, sheet_name="price_evidence_items", index=False
+        )
         result.parse_info.to_excel(writer, sheet_name="parse_info", index=False)
         result.llm_trace.to_excel(writer, sheet_name="llm_trace", index=False)
     apply_workbook_style(output_path)
@@ -3514,23 +3844,6 @@ def apply_workbook_style(path: Path) -> None:
         return
 
     workbook = openpyxl.load_workbook(path)
-    scenario_worksheet = workbook["estimate_scenarios"] if "estimate_scenarios" in workbook.sheetnames else None
-    if scenario_worksheet is not None:
-        header_by_name = {cell_text(cell.value): cell.column for cell in scenario_worksheet[1]}
-        scenario_id_column = header_by_name.get("方案编号")
-        if scenario_id_column is not None:
-            separator_rows: list[int] = []
-            previous_scenario_id = ""
-            for row_index in range(2, scenario_worksheet.max_row + 1):
-                scenario_id = cell_text(scenario_worksheet.cell(row_index, scenario_id_column).value)
-                if previous_scenario_id and scenario_id and scenario_id != previous_scenario_id:
-                    separator_rows.append(row_index)
-                if scenario_id:
-                    previous_scenario_id = scenario_id
-            for row_index in reversed(separator_rows):
-                scenario_worksheet.insert_rows(row_index)
-                scenario_worksheet.row_dimensions[row_index].height = 16
-
     for worksheet in workbook.worksheets:
         worksheet.freeze_panes = None
         column_formats = {
@@ -3688,6 +4001,10 @@ def run_query(
         candidate_families,
         warnings=warnings,
     )
+    displays_with_options = attach_option_support_counts(displays_with_options, evidence_items)
+    display_option_grouping_trace_frame = build_display_option_grouping_trace_frame(
+        displays_with_options, display_group_families, candidate_families
+    )
     plan_items = attach_original_practice_options(plan_items, displays_with_options)
     required_family_ids = set(display_group_families["family_id"].map(cell_text).tolist())
     lookup_evidence_items = evidence_items[
@@ -3717,13 +4034,16 @@ def run_query(
         scenario_item_count=len(plan_items),
     )
     plan_items, option_selection_trace_frame, option_selection_llm_traces = select_final_options(
-        raw_text, plan_items, sample_lookup, displays_with_options, candidate_families, warnings
+        raw_text, plan_items, sample_lookup, displays_with_options, candidate_families, warnings, evidence_items
+    )
+    display_option_grouping_trace_frame = apply_option_selection_to_grouping_trace(
+        display_option_grouping_trace_frame, option_selection_trace_frame
     )
     scenario, quantity_prompt, quantity_trace = generate_quantity_determination(
         raw_text, selected_project_package_id, plan_items, sample_lookup
     )
     scenarios = [scenario]
-    estimate_scenarios = build_scenario_outputs(
+    estimate_scenarios, _price_evidence_items = build_scenario_outputs(
         scenarios, displays_with_options, candidate_families, candidate_samples
     )
     (
@@ -3741,7 +4061,7 @@ def run_query(
         warnings=warnings,
     )
     scenarios = [scenario]
-    estimate_scenarios = build_scenario_outputs(
+    estimate_scenarios, price_evidence_items = build_scenario_outputs(
         scenarios, displays_with_options, candidate_families, candidate_samples
     )
     estimate_summary = build_estimate_summary(scenarios, estimate_scenarios)
@@ -3827,6 +4147,7 @@ def run_query(
         option_selection_trace=option_selection_trace_frame,
         matched_project_examples=matched_project_examples_output,
         evidence_items=evidence_items,
+        price_evidence_items=price_evidence_items,
         parse_info=parse_info,
         llm_trace=llm_trace,
         success=final_explanation_success,
