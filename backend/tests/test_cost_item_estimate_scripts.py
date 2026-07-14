@@ -1825,15 +1825,21 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {"practice_option_id": "D1-O02", "family_ids": ["F2", "F3"]},
         ]}])
         families = pd.DataFrame([
-            {"family_id": "F1", "representative_cost_item_name": "屋面防水", "representative_project_description": "4mm SBS", "unit": "m²", "本次召回样本数": 9},
-            {"family_id": "F2", "representative_cost_item_name": "屋面防水", "representative_project_description": "", "unit": "m²", "本次召回样本数": 3},
-            {"family_id": "F3", "representative_cost_item_name": "屋面防水", "representative_project_description": "3mm SBS", "unit": "m²", "本次召回样本数": 3},
+            {"family_id": "F1", "representative_cost_item_name": "屋面防水", "representative_project_description": "4mm SBS", "unit": "m²", "normalized_signature": "roof|4mm|m²", "本次召回样本数": 9},
+            {"family_id": "F2", "representative_cost_item_name": "屋面防水", "representative_project_description": "", "unit": "m²", "normalized_signature": "roof||m²", "本次召回样本数": 3},
+            {"family_id": "F3", "representative_cost_item_name": "屋面防水", "representative_project_description": "3mm SBS", "unit": "m²", "normalized_signature": "roof|3mm|m²", "本次召回样本数": 3},
         ])
         response = types.SimpleNamespace(content={"selected_option_id": "D1-O02"}, usage={}, raw_content="{}")
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response):
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response) as llm_mock:
             selected, trace, _llm_traces = query_estimate_llm.select_final_options(
                 "使用3mm SBS", plan, lookup, displays, families, []
             )
+        prompt = llm_mock.call_args.args[0]
+        self.assertNotIn('"family_id"', prompt)
+        self.assertNotIn('"normalized_signature"', prompt)
+        self.assertIn('"original_option_id": "D1-O01"', prompt)
+        self.assertIn('"option_id": "D1-O01"', prompt)
+        self.assertIn('"option_id": "D1-O02"', prompt)
         self.assertEqual(selected.loc[0, "representative_family_id"], "F3")
         self.assertTrue(trace.loc[0, "whether_replaced"])
 

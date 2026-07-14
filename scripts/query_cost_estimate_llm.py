@@ -2396,6 +2396,15 @@ def family_payload(family_id: str, family_map: dict[str, pd.Series]) -> dict[str
     }
 
 
+def option_selection_family_payload(family_id: str, family_map: dict[str, pd.Series]) -> dict[str, Any]:
+    payload = family_payload(family_id, family_map)
+    return {
+        "cost_item_name": payload["cost_item_name"],
+        "project_description": payload["project_description"],
+        "unit": payload["unit"],
+    }
+
+
 def choose_representative_family(
     option: dict[str, Any], original_family_id: str, family_map: dict[str, pd.Series]
 ) -> str:
@@ -2447,18 +2456,53 @@ def select_final_options(
                 "raw_query": raw_text,
                 "display_id": display_id,
                 "original_option_id": original_option_id,
-                "original_family": family_payload(original_family_id, family_map),
+                "original_family": option_selection_family_payload(original_family_id, family_map),
                 "options": [{
                     "option_id": cell_text(option.get("practice_option_id")),
-                    "families": [family_payload(cell_text(fid), family_map) for fid in option.get("family_ids", [])],
+                    "families": [
+                        option_selection_family_payload(cell_text(fid), family_map)
+                        for fid in option.get("family_ids", [])
+                    ],
                 } for option in options],
             }
-            prompt = (
-                "从同一 Display 的现有 Option 中选择一个。用户明确参数时精确匹配；"
-                "用户未说明特殊参数且存在明确通用 Option 时可替换；不确定时保留 original_option_id。"
-                "不得按价格、样本数或文字长度选择。只输出 {\"selected_option_id\":\"...\"}\n输入："
-                + json_text(payload)
-            )
+            prompt = f"""
+从同一 Display 的现有 Options 中选择最终 Option。
+
+- raw_query 是用户需求的唯一依据。
+- original_option_id 是历史工程原 Option；无替换条件时保留。
+- original_family 是历史工程事实，不代表用户要求。
+- 只能返回 options 中已有的 option_id。
+- family_id 只是内部编号，不参与判断。
+
+注意 OCR/序号粘连：
+“1.5层楼垂直运输费”“1.2层垂直运输费”“1.1层垂直运输费”
+可能分别表示序号“1.”后接“5层”“2层”“1层”，不是小数层数；
+“1.垂直运输费”表示“垂直运输费”。
+但“1.5mm厚”“1.2mm厚”仍是真实厚度。
+
+只在两种情况下替换：
+
+1. raw_query 明确指定不同的材料、工艺、规格、厚度、层数或部位，
+   original Option 不符合，而某个候选明确符合时，选择该候选。
+   例如原始是“1.5mm聚氨酯防水涂料”，用户明确要求
+   “2mm水泥基渗透结晶型防水涂料”，且存在该候选时，必须替换。
+
+2. original_family.project_description 含有 raw_query 未指定的层数、
+   部位或其他限定，且某个候选保持同一清单对象和主要工艺，
+   只是去掉该限定时，必须选择该候选。
+   例如原始是“5层楼垂直运输费”，用户未说明楼层，
+   候选中有“垂直运输费”，必须替换。
+
+不得仅因描述更短而改变主要材料、厚度、规格或施工工艺。
+除以上两种情况外，保留 original_option_id。
+不得按价格、样本数、相似度、文字长度、Option顺序或编号选择。
+
+只输出：
+{{"selected_option_id":"..."}}
+
+输入：
+{json_text(payload)}
+""".strip()
             try:
                 response = request_llm_json_with_usage(
                     prompt, max_tokens=128,
