@@ -1057,6 +1057,16 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertTrue(all(item["stable_sample_id"] for example in examples for item in example["items"]))
         self.assertEqual(examples[0]["items"][0]["source_ref"], "ref-2")
 
+    def grouping_result(self, family_ids, groups, tags=None):
+        tags = tags or {}
+        return {
+            "families": [
+                {"family_id": family_id, "thickness": "", "material": "", "level": "", **tags.get(family_id, {})}
+                for family_id in family_ids
+            ],
+            "groups": groups,
+        }
+
     def test_display_option_grouping_prompt_includes_family_coverage_contract(self):
         display_groups = pd.DataFrame([{"display_id": "D001", "display_name": "屋面卷材防水", "unit": "m²", "family_count": 2}])
         display_families = pd.DataFrame(
@@ -1108,13 +1118,18 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         for removed_field in ["samples", "packages", "item_query_similarity", "unit_price_min", "unit_price_median", "unit_price_max"]:
             self.assertNotIn(f'"{removed_field}"', prompt)
         for expected_text in [
-            "核心材料、厚度、关键规格、层数和主要施工做法一致时，可以合并",
-            "不改变核心报价口径的普通措辞差异可以忽略",
-            "指定层数与未指定层数必须拆分",
-            "拆除、基层处理、垃圾清运等实质附加工作",
-            "3mm 与 4mm 防水材料必须拆分",
-            "3mm SBS改性沥青防水卷材",
-            "屋面重新刷1.5mm单组分聚氨酯防水涂料",
+            "先逐个提取",
+            "thickness",
+            "material",
+            "level",
+            "顶层只允许 families 和 groups",
+            "3mm 与 4mm 必须拆分",
+            "2mm 水泥基渗透结晶与 2mm 聚氨酯必须拆分",
+            "3mm 自粘卷材与 3mm SBS改性沥青卷材必须拆分",
+            "1层、2层、5层、未注明层数必须分别拆分",
+            "1.5mm单组份聚氨酯与1.5mm厚单组分聚氨酯可以合并",
+            "1.2mm聚合物水泥基，含基层清理",
+            "不要增加 is_generic",
         ]:
             self.assertIn(expected_text, prompt)
         for removed_text in ["raw_query", "project_package_query_text", "item_query_text", "selection_reason", "default_representative_family_id", "family_assignments", "group_reason"]:
@@ -1131,7 +1146,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
 
         displays_with_options, meta = query_estimate_llm.parse_display_option_grouping_result(
-            {"groups": [["F007", "F004"], ["F010"]]},
+            self.grouping_result(["F004", "F007", "F010"], [["F007", "F004"], ["F010"]]),
             display_groups,
             display_families,
             [],
@@ -1161,16 +1176,100 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             [{"display_id": "D001", "family_id": family_id, "unit": "m²"} for family_id in ["F001", "F002", "F003", "F004"]]
         )
         displays_with_options, meta = query_estimate_llm.parse_display_option_grouping_result(
-            {"groups": [["F003", "F004"], ["F002", "F001"]]},
+            self.grouping_result(
+                ["F001", "F002", "F003", "F004"],
+                [["F003", "F004"], ["F002", "F001"]],
+            ),
             display_groups,
             display_families,
             [],
         )
 
         flattened = [family_id for option in displays_with_options.loc[0, "practice_options"] for family_id in option["family_ids"]]
-        self.assertEqual(flattened, ["F001", "F002", "F003", "F004"])
+        self.assertEqual(flattened, ["F003", "F004", "F002", "F001"])
         self.assertEqual(len(flattened), len(set(flattened)))
         self.assertEqual(meta["families_grouped_count"], 4)
+
+    def test_display_option_grouping_auto_split_conflict_matrix_and_stable_order(self):
+        cases = [
+            (
+                "different thickness",
+                ["F001", "F002"], [["F001", "F002"]],
+                {"F001": {"thickness": "3mm"}, "F002": {"thickness": "4mm"}},
+                [["F001"], ["F002"]], ["thickness_conflict"],
+            ),
+            (
+                "one thickness and blanks",
+                ["F001", "F002", "F003"], [["F001", "F002", "F003"]],
+                {"F001": {"thickness": "3mm"}},
+                [["F001", "F002", "F003"]], [],
+            ),
+            (
+                "different material",
+                ["F003", "F005", "F022"], [["F003", "F005", "F022"]],
+                {"F003": {"material": "水泥基渗透结晶"}, "F005": {"material": "水泥基渗透结晶"}, "F022": {"material": "聚氨酯"}},
+                [["F003", "F005"], ["F022"]], ["material_conflict"],
+            ),
+            (
+                "one material and blanks",
+                ["F001", "F012"], [["F001", "F012"]],
+                {"F012": {"material": "聚合物水泥基"}},
+                [["F001", "F012"]], [],
+            ),
+            (
+                "different levels including blank",
+                ["F086", "F087", "F088", "F093", "F094"], [["F086", "F087", "F088", "F093", "F094"]],
+                {"F086": {"level": "2层"}, "F087": {"level": "5层"}, "F088": {"level": "1层"}},
+                [["F086"], ["F087"], ["F088"], ["F093", "F094"]], ["level_conflict"],
+            ),
+            (
+                "self adhesive versus sbs",
+                ["F008", "F011"], [["F008", "F011"]],
+                {"F008": {"thickness": "3mm", "material": "自粘卷材"}, "F011": {"thickness": "3mm", "material": "SBS改性沥青"}},
+                [["F008"], ["F011"]], ["material_conflict"],
+            ),
+            (
+                "same normalized polyurethane",
+                ["F014", "F043"], [["F014", "F043"]],
+                {"F014": {"thickness": "1.5mm", "material": "聚氨酯"}, "F043": {"thickness": "1.5mm", "material": "聚氨酯"}},
+                [["F014", "F043"]], [],
+            ),
+            (
+                "same tags with cleaning detail",
+                ["F032", "F048"], [["F032", "F048"]],
+                {"F032": {"thickness": "1.2mm", "material": "聚合物水泥基"}, "F048": {"thickness": "1.2mm", "material": "聚合物水泥基"}},
+                [["F032", "F048"]], [],
+            ),
+            (
+                "only conflicting group splits",
+                ["F010", "F011", "F025", "F026", "F027"], [["F010", "F011"], ["F025", "F026", "F027"]],
+                {"F010": {"thickness": "2mm"}, "F011": {"thickness": "2mm"}, "F025": {"thickness": "4mm"}, "F026": {"thickness": "3mm"}, "F027": {"thickness": "3mm"}},
+                [["F010", "F011"], ["F025"], ["F026", "F027"]], ["thickness_conflict"],
+            ),
+            (
+                "multiple conflicts",
+                ["F001", "F002"], [["F001", "F002"]],
+                {"F001": {"thickness": "3mm", "material": "SBS改性沥青", "level": "1层"}, "F002": {"thickness": "4mm", "material": "聚氨酯", "level": ""}},
+                [["F001"], ["F002"]], ["multiple_conflicts"],
+            ),
+        ]
+        for name, family_ids, groups, tags, expected_groups, expected_reasons in cases:
+            with self.subTest(name=name):
+                displays = pd.DataFrame([{"display_id": "D001", "display_name": "测试", "unit": "m²", "family_count": len(family_ids)}])
+                display_families = pd.DataFrame([
+                    {"display_id": "D001", "family_id": family_id, "unit": "m²", "本次召回样本数": 1}
+                    for family_id in family_ids
+                ])
+                grouped, meta = query_estimate_llm.parse_display_option_grouping_result(
+                    self.grouping_result(family_ids, groups, tags), displays, display_families, []
+                )
+                options = grouped.loc[0, "practice_options"]
+                self.assertEqual([option["family_ids"] for option in options], expected_groups)
+                self.assertEqual([option["practice_option_id"] for option in options], [f"D001-O{i:02d}" for i in range(1, len(expected_groups) + 1)])
+                details = meta["grouping_details_by_display"]["D001"]
+                self.assertEqual(details["final_groups"], expected_groups)
+                self.assertEqual(details["auto_split_reasons"], expected_reasons)
+                self.assertEqual(details["auto_split_applied"], bool(expected_reasons))
 
     def test_display_option_grouping_strict_validation_rejects_invalid_options(self):
         display_groups = pd.DataFrame([{"display_id": "D001", "display_name": "屋面防水", "unit": "m²", "family_count": 2}])
@@ -1180,7 +1279,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"display_id": "D001", "family_id": "F002", "unit": "m²"},
             ]
         )
-        valid_result = {"groups": [["F001", "F002"]]}
+        valid_result = self.grouping_result(["F001", "F002"], [["F001", "F002"]])
 
         def assert_invalid(result, message):
             with self.assertRaisesRegex(ValueError, message):
@@ -1191,29 +1290,39 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     [],
                 )
 
-        assert_invalid({"groups": [["F001", "F002"]], "display_id": "D999"}, "顶层只允许包含 groups")
+        assert_invalid({**valid_result, "display_id": "D999"}, "顶层只允许包含 families 和 groups")
         assert_invalid(
-            {"groups": [["F001"]]},
+            {**valid_result, "groups": [["F001"]]},
             "遗漏 candidate family",
         )
         assert_invalid(
-            {"groups": [["F001", "F001", "F002"]]},
+            {**valid_result, "groups": [["F001", "F001", "F002"]]},
             "family 重复",
         )
         assert_invalid(
-            {"groups": [["F001", "BAD"]]},
+            {**valid_result, "groups": [["F001", "BAD"]]},
             "不属于当前 display",
         )
         for legacy_field in ["default_representative_family_id", "selection_reason", "family_assignments"]:
             assert_invalid(
                 {**valid_result, legacy_field: "legacy"},
-                "顶层只允许包含 groups",
+                "顶层只允许包含 families 和 groups",
             )
-        assert_invalid({"groups": []}, "groups 必须为非空")
-        assert_invalid({"groups": [[]]}, "group 必须为非空")
+        assert_invalid({**valid_result, "groups": []}, "groups 必须为非空")
+        assert_invalid({**valid_result, "groups": [[]]}, "group 必须为非空")
         assert_invalid(
-            {"groups": [["F001", "F002"], ["F002", "F001"]]},
+            {**valid_result, "groups": [["F001", "F002"], ["F002", "F001"]]},
             "完全相同的 family_ids 分组",
+        )
+        malformed_family = dict(valid_result["families"][0])
+        malformed_family.pop("level")
+        assert_invalid(
+            {**valid_result, "families": [malformed_family, valid_result["families"][1]]},
+            "family_id、thickness、material、level",
+        )
+        assert_invalid(
+            {**valid_result, "families": [valid_result["families"][0], valid_result["families"][0]]},
+            "为空或重复",
         )
 
     def test_display_option_grouping_rejects_unit_mismatch_inside_option(self):
@@ -1227,7 +1336,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "单位必须一致"):
             query_estimate_llm.parse_display_option_grouping_result(
-                {"groups": [["F001", "F002"]]},
+                self.grouping_result(["F001", "F002"], [["F001", "F002"]]),
                 display_groups,
                 display_families,
                 [],
@@ -1256,7 +1365,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
         )
         response = types.SimpleNamespace(
-            content={"groups": [["F002"], ["F003"]]},
+            content=self.grouping_result(
+                ["F002", "F003"], [["F002", "F003"]],
+                {"F002": {"thickness": "1.5mm"}, "F003": {"thickness": "2mm"}},
+            ),
             usage={},
             raw_content="{}",
         )
@@ -1281,6 +1393,17 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(json.loads(per_display_traces[0]["input_summary"]), {
             "display_id": "D002", "display_name": "墙面防水", "candidate_family_count": 2,
         })
+        for field in [
+            "display_id", "display_name", "candidate_family_count", "raw_response",
+            "parsed_family_tags", "original_groups", "final_groups", "auto_split_applied",
+            "auto_split_reasons", "status", "error", "prompt_tokens", "completion_tokens", "total_tokens",
+        ]:
+            self.assertIn(field, per_display_traces[0])
+        self.assertEqual(per_display_traces[0]["status"], "success")
+        self.assertTrue(per_display_traces[0]["auto_split_applied"])
+        self.assertEqual(per_display_traces[0]["original_groups"], [["F002", "F003"]])
+        self.assertEqual(per_display_traces[0]["final_groups"], [["F002"], ["F003"]])
+        self.assertEqual(per_display_traces[0]["auto_split_reasons"], ["thickness_conflict"])
 
     def test_display_option_grouping_fallback_is_isolated_per_display(self):
         displays = pd.DataFrame([
@@ -1298,8 +1421,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             for family_id in ["F001", "F002", "F003", "F004"]
         ], columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS)
         responses = [
-            types.SimpleNamespace(content={"groups": [["F001", "F999"]]}, usage={"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13}, raw_content="bad"),
-            types.SimpleNamespace(content={"groups": [["F003", "F004"]]}, usage={"prompt_tokens": 21, "completion_tokens": 3, "total_tokens": 24}, raw_content="good"),
+            types.SimpleNamespace(content=self.grouping_result(["F001", "F002"], [["F001", "F999"]]), usage={"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13}, raw_content="bad"),
+            types.SimpleNamespace(content=self.grouping_result(["F003", "F004"], [["F003", "F004"]]), usage={"prompt_tokens": 21, "completion_tokens": 3, "total_tokens": 24}, raw_content="good"),
         ]
         warnings = []
         with patch.object(query_estimate_llm, "request_llm_json_with_usage", side_effect=responses) as llm_mock:
