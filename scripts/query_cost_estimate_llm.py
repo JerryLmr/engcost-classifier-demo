@@ -2588,18 +2588,28 @@ def build_quantity_determination_prompt(raw_text: str, plan_items: pd.DataFrame)
     return f"""
 最终方案清单已经确定。只为每个清单确定工程量，不得增加、删除、重排清单，不得修改工艺或生成价格。
 
+这些清单来自同一个参考历史工程案例。即使部分清单名称或施工对象不同，也可能在同一工程中配套出现，因此不得判断某项不应存在。
+
 规则：
 1. 必须覆盖输入中的每个 item_position，且每个位置只出现一次。
 2. item_position 是完整历史工程包中的 0-based 绝对位置，不得重新编号。
-3. quantity 只能是 exact 或 range；优先采用用户明确工程量，避免照搬明显不适合的历史数量。
-4. quantity_reason 必须非空，并简要说明依据。
+3. quantity 只能使用 exact。
+4. 不得输出 0。
+5. 用户明确提供且能直接对应当前清单的工程量时，优先采用用户工程量。
+6. 用户没有明确提供当前清单工程量时，采用 historical_quantity。
+7. 不得把用户对某一清单的数量自动传播给明显不同计量对象的其他清单。
+8. 不得重新判断清单是否必要、重复、互斥或应取消。
+9. quantity_reason 必须非空，只写一句简短、确定的依据，不得输出分析过程或自我质疑。
+
+quantity 格式：
+{{"type":"exact","value":数值}}
 
 只输出：
 {{
   "item_quantities": [
     {{
       "item_position": 0,
-      "quantity": {{"type": "exact", "value": 500}},
+      "quantity": {{"type":"exact","value":1}},
       "quantity_reason": "工程量确定依据"
     }}
   ]
@@ -2942,7 +2952,7 @@ def price_stats_for_option(
 
     selected_signatures = list(dict.fromkeys(signature for _family_id, signature in family_signatures))
     sample_signatures = samples["normalized_signature"].map(cell_text)
-    expanded = samples[samples["normalized_signature"].isin(selected_signatures)].copy()
+    expanded = samples[sample_signatures.isin(selected_signatures)].copy()
     for family_id, signature in family_signatures:
         if not sample_signatures.eq(signature).any():
             raise ValueError(
@@ -3068,6 +3078,10 @@ def build_scenario_outputs(
             representative = family_map.get(item.representative_family_id)
             if representative is None:
                 raise ValueError(f"代表 Family 回查失败: {item.representative_family_id}")
+            representative_unit = cell_text(representative.get("unit"))
+            representative_unit_normalized = cell_text(representative.get("unit_normalized"))
+            if not representative_unit and not representative_unit_normalized:
+                continue
             price_stats = price_stats_for_option(option, display_row, candidate_families, samples)
             validate_price_stats(price_stats, item.stable_sample_id, item.practice_option_id)
             amount_low, amount_mid, amount_high = quantity_amounts(item.quantity, price_stats)

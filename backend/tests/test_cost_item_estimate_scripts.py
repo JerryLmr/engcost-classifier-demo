@@ -1869,6 +1869,56 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         generator.assert_called_once()
         self.assertEqual(actual, expected)
 
+    def test_scenario_outputs_skip_unitless_item_without_blocking_normal_item(self):
+        normal_item = query_estimate_llm.ScenarioItem(
+            "package-1", "sid-waterproof", "ref-waterproof", "D1", "D1-O01",
+            "D1-O01", "F1", "F1", "选用防水做法", {"type": "exact", "value": 10}, "按面积计算",
+        )
+        unitless_item = query_estimate_llm.ScenarioItem(
+            "package-1", "sid-measures", "ref-measures", "D2", "D2-O01",
+            "D2-O01", "F2", "F2", "其他措施费", {"type": "exact", "value": 1}, "按项计算",
+        )
+        scenario = query_estimate_llm.EstimateScenario(
+            "S001", 1, "防水方案", "", [normal_item, unitless_item]
+        )
+        displays = pd.DataFrame([
+            {"display_id": "D1", "unit": "m²", "practice_options": [
+                {"practice_option_id": "D1-O01", "family_ids": ["F1"]},
+            ]},
+            {"display_id": "D2", "unit": "", "practice_options": [
+                {"practice_option_id": "D2-O01", "family_ids": ["F2"]},
+            ]},
+        ])
+        families = pd.DataFrame([
+            {
+                "family_id": "F1", "representative_cost_item_name": "屋面防水",
+                "representative_project_description": "3mm SBS", "unit": "m²",
+                "unit_normalized": "m²",
+            },
+            {
+                "family_id": "F2", "representative_cost_item_name": "其他措施费",
+                "representative_project_description": "", "unit": "", "unit_normalized": "",
+            },
+        ])
+        price_stats = {
+            "unit_price_min": 100, "unit_price_median": 120, "unit_price_max": 150,
+            "labor_unit_price_min": 10, "labor_unit_price_median": 12, "labor_unit_price_max": 15,
+            "machinery_unit_price_min": 1, "machinery_unit_price_median": 2,
+            "machinery_unit_price_max": 3, "evidence_count": 2, "source_refs": "ref-1, ref-2",
+        }
+
+        with patch.object(query_estimate_llm, "price_stats_for_option", return_value=price_stats) as price_lookup:
+            output = query_estimate_llm.build_scenario_outputs(
+                [scenario], displays, families, pd.DataFrame()
+            )
+
+        price_lookup.assert_called_once()
+        self.assertEqual(price_lookup.call_args.args[0]["practice_option_id"], "D1-O01")
+        self.assertEqual(output["stable_sample_id"].tolist(), ["sid-waterproof"])
+        self.assertEqual(output.loc[0, "单位"], "m²")
+        self.assertEqual(output.loc[0, "综合单价中位数"], 120)
+        self.assertEqual(output.loc[0, "合价中位数"], 1200)
+
     def price_family(self, family_id: str, signature: str, unit: str = "m²") -> dict[str, object]:
         return {
             "family_id": family_id,
