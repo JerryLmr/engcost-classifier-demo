@@ -1677,26 +1677,46 @@ def build_display_option_grouping_prompt(
     candidate_display_groups: pd.DataFrame,
     display_group_families: pd.DataFrame,
     candidate_families: pd.DataFrame,
-) -> tuple[str, list[dict[str, Any]]]:
-    records: list[dict[str, Any]] = []
-    for _index, display in candidate_display_groups.iterrows():
-        display_id = cell_text(display.get("display_id"))
-        candidate_families_payload = option_grouping_payload_for_display(display_id, display_group_families, candidate_families)
-        records.append(
-            {
-                "display_id": display_id,
-                "display_name": truncate_text(display.get("display_name"), 40),
-                "candidate_families": candidate_families_payload,
-            }
-        )
-    payload = {"candidate_displays": records}
+) -> tuple[str, dict[str, Any]]:
+    if len(candidate_display_groups) != 1:
+        raise ValueError("display_option_grouping prompt 每次必须且只能包含一个 Display")
+    display = candidate_display_groups.iloc[0]
+    display_id = cell_text(display.get("display_id"))
+    record = {
+        "display_name": truncate_text(display.get("display_name"), 40),
+        "candidate_families": option_grouping_payload_for_display(
+            display_id, display_group_families, candidate_families
+        ),
+    }
+    payload = {"candidate_display": record}
     prompt = f"""
-将每个 Display 下业务上等价、可使用同一报价口径的 Family 归入同一 Option。
-材料、关键规格、厚度、层数、施工做法或实质附加工作不同时必须分组；仅存在 OCR、标点、文字顺序、同义表达或格式差异时可合并。
-每个输入 family_id 必须且只能出现一次。
+你的任务是：将当前唯一 Display 下业务上等价、可以共用同一价格统计口径的 Family 归入同一个 Option。
 
-【输出 JSON】
-{{"display_results":[{{"display_id":"D001","groups":[["F004","F007"],["F010"]]}}]}}
+groups 是二维数组：
+- 外层数组中的每一组代表一个独立 Option；
+- 同一内层数组中的 Family 会被合并价格证据；
+- 不同内层数组表示不同具体做法，后续程序会在这些 Option 之间选择。
+
+分组规则：
+- 材料、关键规格、厚度、层数、施工做法、部位或实质附加工作不同，必须拆分；
+- 仅存在 OCR、标点、文字顺序、同义表达或格式不同，才可以合并；
+- 无法确认完全等价时，宁可拆开，不要误合并。
+
+例如：
+- 2mm 与 4mm 防水材料必须拆分；
+- 3层与 6层的垂直运输必须拆分；
+- 指定层数与未指定层数的垂直运输必须拆分；
+- 聚氨酯与聚合物水泥基必须拆分；
+- “3mm SBS”“3.0mm弹性体改性沥青”“3厚SBS”在没有其他差异时可以合并。
+
+每个输入 family_id 必须且只能出现一次，不得遗漏、重复或新增。
+
+输出格式：
+{{"groups": [["F004", "F007"], ["F010"]]}}
+
+其中：
+- ["F004", "F007"] 表示一个 Option；
+- ["F010"] 表示另一个 Option。
 
 只输出 JSON，不输出解释或 Markdown。
 
@@ -1704,7 +1724,7 @@ def build_display_option_grouping_prompt(
 
 {json_text(payload)}
 """.strip()
-    return prompt, records
+    return prompt, record
 
 
 def display_family_unit(row: pd.Series) -> str:
@@ -1729,12 +1749,13 @@ def parse_display_option_grouping_result(
     display_group_families: pd.DataFrame,
     warnings: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    if not isinstance(result, dict) or set(result) != {"display_results"}:
+    if len(candidate_display_groups) != 1:
+        raise ValueError("display_option_grouping 每次必须且只能校验一个 Display")
+    if not isinstance(result, dict) or set(result) != {"groups"}:
         actual_keys = sorted(result) if isinstance(result, dict) else [type(result).__name__]
-        raise ValueError(f"display_option_grouping 顶层只允许包含 display_results，实际为: {actual_keys}")
-    raw_rows = result.get("display_results")
-    if not isinstance(raw_rows, list):
-        raise ValueError("display_option_grouping 输出缺少 display_results list")
+        raise ValueError(f"display_option_grouping 顶层只允许包含 groups，实际为: {actual_keys}")
+    bound_display_id = cell_text(candidate_display_groups.iloc[0].get("display_id"))
+    raw_rows = [{"display_id": bound_display_id, "groups": result.get("groups")}]
 
     display_ids = [cell_text(value) for value in candidate_display_groups.get("display_id", pd.Series(dtype=object)).tolist()]
     allowed_order_by_display = {
@@ -1913,38 +1934,57 @@ def generate_display_option_grouping(
         lambda value: len(family_ids_by_display.get(cell_text(value), [])) > 1
     )
     multi_family_displays = candidate_display_groups[multi_family_mask].copy().reset_index(drop=True)
-    prompt, records = build_display_option_grouping_prompt(
-        multi_family_displays, display_group_families, candidate_families
+    family_count = sum(
+        len(family_ids_by_display.get(cell_text(row.get("display_id")), []))
+        for _index, row in multi_family_displays.iterrows()
     )
-    family_count = sum(len(item.get("candidate_families") or []) for item in records)
-    max_tokens = min(16384, max(4096, 4096 + family_count * 192 + len(records) * 256))
-    response = None
+    prompts: list[str] = []
+    responses: list[Any] = []
+    errors_by_display: dict[str, str] = {}
     fallback = False
-    error_message = ""
-    if multi_family_displays.empty:
-        grouped_displays = pd.DataFrame()
-    else:
+    grouped_frames: list[pd.DataFrame] = []
+    for _index, display in multi_family_displays.iterrows():
+        display_id = cell_text(display.get("display_id"))
+        current_display = pd.DataFrame([display.to_dict()])
+        prompt, record = build_display_option_grouping_prompt(
+            current_display, display_group_families, candidate_families
+        )
+        prompts.append(prompt)
+        current_family_count = len(record.get("candidate_families") or [])
+        max_tokens = min(4096, max(512, 256 + current_family_count * 96))
+        response = None
         try:
             response = request_llm_json_with_usage(
                 prompt, max_tokens=max_tokens,
-                system_prompt="只输出顶层为 display_results 的 JSON object，不输出解释。",
+                system_prompt="只输出顶层为 groups 的 JSON object，不输出 display_id 或解释。",
             )
-            grouped_displays, _grouped_meta = parse_display_option_grouping_result(
-                response.content, multi_family_displays, display_group_families, warnings,
+            grouped_display, _grouped_meta = parse_display_option_grouping_result(
+                response.content, current_display, display_group_families, warnings,
             )
         except (RuntimeError, ValueError) as exc:
             fallback = True
-            error_message = str(exc)
-            append_warning(warnings, "display_option_grouping_fallback_single_family_options")
-            fallback_result = {"display_results": [
-                {"display_id": cell_text(row.get("display_id")), "groups": [[family_id] for family_id in sorted(
-                    family_ids_by_display[cell_text(row.get("display_id"))]
-                )]}
-                for _index, row in multi_family_displays.iterrows()
-            ]}
-            grouped_displays, _grouped_meta = parse_display_option_grouping_result(
-                fallback_result, multi_family_displays, display_group_families, warnings,
+            errors_by_display[display_id] = str(exc)
+            append_warning(warnings, f"display_option_grouping_fallback_single_family_options:{display_id}")
+            fallback_result = {
+                "groups": [[family_id] for family_id in sorted(family_ids_by_display[display_id])]
+            }
+            grouped_display, _grouped_meta = parse_display_option_grouping_result(
+                fallback_result, current_display, display_group_families, warnings,
             )
+        grouped_frames.append(grouped_display)
+        if response is not None:
+            responses.append(response)
+
+    grouped_displays = pd.concat(grouped_frames, ignore_index=True) if grouped_frames else pd.DataFrame()
+    error_message = "；".join(f"{display_id}: {message}" for display_id, message in errors_by_display.items())
+    combined_prompt = "\n\n".join(prompts)
+    combined_usage = {
+        key: sum(int((getattr(response, "usage", {}) or {}).get(key) or 0) for response in responses)
+        for key in ["prompt_tokens", "completion_tokens", "total_tokens"]
+    }
+    combined_raw_response = "\n".join(
+        cell_text(getattr(response, "raw_content", "")) for response in responses
+    )
 
     family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
     grouped_map = {cell_text(row.get("display_id")): row for _index, row in grouped_displays.iterrows()}
@@ -1994,21 +2034,21 @@ def generate_display_option_grouping(
         "将全部 candidate display 内的 family 划分为独立价格统计口径的 practice options",
         not fallback,
         error=error_message,
-        prompt=prompt,
-        max_tokens=max_tokens,
+        prompt=combined_prompt,
+        max_tokens=4096 if len(multi_family_displays) else 0,
         input_summary=json_text(
             {
                 "display_count": len(candidate_display_groups),
-                "llm_display_count": len(records),
+                "llm_display_count": len(multi_family_displays),
                 "programmatic_single_family_display_count": meta["programmatic_single_family_display_count"],
                 "family_count": family_count,
                 "practice_option_count": meta.get("practice_option_count", 0),
             }
         ),
-        usage=response.usage if response is not None else None,
-        raw_response=getattr(response, "raw_content", "") if response is not None else "",
+        usage=combined_usage if responses else None,
+        raw_response=combined_raw_response,
     )
-    return displays_with_options, not fallback, fallback, error_message, prompt, trace, meta, trace_frame
+    return displays_with_options, not fallback, fallback, error_message, combined_prompt, trace, meta, trace_frame
 
 
 def normalized_unit(value: Any) -> str:

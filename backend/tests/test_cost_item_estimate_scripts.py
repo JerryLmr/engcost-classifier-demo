@@ -1091,16 +1091,18 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
         )
 
-        prompt, records = query_estimate_llm.build_display_option_grouping_prompt(
+        prompt, record = query_estimate_llm.build_display_option_grouping_prompt(
             display_groups, display_families, candidate_families
         )
 
-        self.assertEqual(set(records[0]), {"display_id", "display_name", "candidate_families"})
+        self.assertEqual(set(record), {"display_name", "candidate_families"})
         self.assertEqual(
-            set(records[0]["candidate_families"][0]),
+            set(record["candidate_families"][0]),
             {"family_id", "name", "spec", "unit"},
         )
-        self.assertEqual(records[0]["candidate_families"][1]["spec"], "A" * 120)
+        self.assertEqual(record["candidate_families"][1]["spec"], "A" * 120)
+        self.assertNotIn("display_id", prompt)
+        self.assertNotIn("display_results", prompt)
         self.assertNotIn("candidate_family_ids", prompt)
         self.assertNotIn("candidate_family_count", prompt)
         for removed_field in ["samples", "packages", "item_query_similarity", "unit_price_min", "unit_price_median", "unit_price_max"]:
@@ -1121,14 +1123,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
 
         displays_with_options, meta = query_estimate_llm.parse_display_option_grouping_result(
-            {
-                "display_results": [
-                    {
-                        "display_id": "D001",
-                        "groups": [["F007", "F004"], ["F010"]],
-                    }
-                ]
-            },
+            {"groups": [["F007", "F004"], ["F010"]]},
             display_groups,
             display_families,
             [],
@@ -1158,14 +1153,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             [{"display_id": "D001", "family_id": family_id, "unit": "m²"} for family_id in ["F001", "F002", "F003", "F004"]]
         )
         displays_with_options, meta = query_estimate_llm.parse_display_option_grouping_result(
-            {
-                "display_results": [
-                    {
-                        "display_id": "D001",
-                        "groups": [["F003", "F004"], ["F002", "F001"]],
-                    }
-                ]
-            },
+            {"groups": [["F003", "F004"], ["F002", "F001"]]},
             display_groups,
             display_families,
             [],
@@ -1184,14 +1172,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"display_id": "D001", "family_id": "F002", "unit": "m²"},
             ]
         )
-        valid_result = {
-            "display_results": [
-                {
-                    "display_id": "D001",
-                    "groups": [["F001", "F002"]],
-                }
-            ]
-        }
+        valid_result = {"groups": [["F001", "F002"]]}
 
         def assert_invalid(result, message):
             with self.assertRaisesRegex(ValueError, message):
@@ -1202,53 +1183,28 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     [],
                 )
 
-        assert_invalid({"display_results": [{**valid_result["display_results"][0], "display_id": "D999"}]}, "未知 display")
+        assert_invalid({"groups": [["F001", "F002"]], "display_id": "D999"}, "顶层只允许包含 groups")
         assert_invalid(
-            {"display_results": [valid_result["display_results"][0], valid_result["display_results"][0]]},
-            "重复返回 display",
-        )
-        assert_invalid(
-            {
-                "display_results": [
-                    {
-                        "display_id": "D001",
-                        "groups": [["F001"]],
-                    }
-                ],
-            },
+            {"groups": [["F001"]]},
             "遗漏 candidate family",
         )
         assert_invalid(
-            {
-                "display_results": [
-                    {
-                        "display_id": "D001",
-                        "groups": [["F001", "F001", "F002"]],
-                    }
-                ],
-            },
+            {"groups": [["F001", "F001", "F002"]]},
             "family 重复",
         )
         assert_invalid(
-            {
-                "display_results": [
-                    {
-                        "display_id": "D001",
-                        "groups": [["F001", "BAD"]],
-                    }
-                ],
-            },
+            {"groups": [["F001", "BAD"]]},
             "不属于当前 display",
         )
         for legacy_field in ["default_representative_family_id", "selection_reason", "family_assignments"]:
             assert_invalid(
-                {"display_results": [{**valid_result["display_results"][0], legacy_field: "legacy"}]},
-                "display_result 只允许包含",
+                {**valid_result, legacy_field: "legacy"},
+                "顶层只允许包含 groups",
             )
-        assert_invalid({"display_results": [{"display_id": "D001", "groups": []}]}, "groups 必须为非空")
-        assert_invalid({"display_results": [{"display_id": "D001", "groups": [[]]}]}, "group 必须为非空")
+        assert_invalid({"groups": []}, "groups 必须为非空")
+        assert_invalid({"groups": [[]]}, "group 必须为非空")
         assert_invalid(
-            {"display_results": [{"display_id": "D001", "groups": [["F001", "F002"], ["F002", "F001"]]}]},
+            {"groups": [["F001", "F002"], ["F002", "F001"]]},
             "完全相同的 family_ids 分组",
         )
 
@@ -1263,20 +1219,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "单位必须一致"):
             query_estimate_llm.parse_display_option_grouping_result(
-                {
-                    "display_results": [
-                        {
-                            "display_id": "D001",
-                            "groups": [["F001", "F002"]],
-                        }
-                    ]
-                },
+                {"groups": [["F001", "F002"]]},
                 display_groups,
                 display_families,
                 [],
             )
 
-    def test_generate_display_option_grouping_handles_all_displays_with_one_llm_call(self):
+    def test_generate_display_option_grouping_calls_each_multi_family_display_independently(self):
         display_groups = pd.DataFrame(
             [
                 {"display_id": "D001", "display_name": "屋面防水", "unit": "m²", "family_count": 1},
@@ -1299,14 +1248,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
         )
         response = types.SimpleNamespace(
-            content={
-                "display_results": [
-                    {
-                        "display_id": "D002",
-                        "groups": [["F002"], ["F003"]],
-                    }
-                ]
-            },
+            content={"groups": [["F002"], ["F003"]]},
             usage={},
             raw_content="{}",
         )
@@ -1323,6 +1265,50 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(meta["programmatic_single_family_display_count"], 1)
         self.assertEqual(meta["llm_display_count"], 1)
         self.assertEqual(set(trace_frame["display_id"]), {"D001", "D002"})
+
+    def test_display_option_grouping_fallback_is_isolated_per_display(self):
+        displays = pd.DataFrame([
+            {"display_id": "D001", "display_name": "A", "unit": "m²", "family_count": 2},
+            {"display_id": "D002", "display_name": "B", "unit": "m²", "family_count": 2},
+        ])
+        display_families = pd.DataFrame([
+            {"display_id": "D001", "family_id": "F001", "unit": "m²", "本次召回样本数": 1, "本次召回工程包数": 1, "item_query_similarity最大值": .9},
+            {"display_id": "D001", "family_id": "F002", "unit": "m²", "本次召回样本数": 1, "本次召回工程包数": 1, "item_query_similarity最大值": .8},
+            {"display_id": "D002", "family_id": "F003", "unit": "m²", "本次召回样本数": 1, "本次召回工程包数": 1, "item_query_similarity最大值": .9},
+            {"display_id": "D002", "family_id": "F004", "unit": "m²", "本次召回样本数": 1, "本次召回工程包数": 1, "item_query_similarity最大值": .8},
+        ])
+        families = pd.DataFrame([
+            {"family_id": family_id, "representative_cost_item_name": family_id, "unit": "m²", "本次召回样本数": 1}
+            for family_id in ["F001", "F002", "F003", "F004"]
+        ], columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS)
+        responses = [
+            types.SimpleNamespace(content={"groups": [["F001", "F999"]]}, usage={}, raw_content="bad"),
+            types.SimpleNamespace(content={"groups": [["F003", "F004"]]}, usage={}, raw_content="good"),
+        ]
+        warnings = []
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage", side_effect=responses) as llm_mock:
+            grouped, success, fallback, error, *_rest = query_estimate_llm.generate_display_option_grouping(
+                displays, display_families, families, warnings
+            )
+        self.assertEqual(llm_mock.call_count, 2)
+        first_input = llm_mock.call_args_list[0].args[0].split("【输入数据】", 1)[1]
+        second_input = llm_mock.call_args_list[1].args[0].split("【输入数据】", 1)[1]
+        self.assertIn("F001", first_input)
+        self.assertIn("F002", first_input)
+        self.assertNotIn("F003", first_input)
+        self.assertNotIn("F004", first_input)
+        self.assertIn("F003", second_input)
+        self.assertIn("F004", second_input)
+        self.assertNotIn("F001", second_input)
+        self.assertNotIn("F002", second_input)
+        options_by_display = {row["display_id"]: row["practice_options"] for _index, row in grouped.iterrows()}
+        self.assertEqual(len(options_by_display["D001"]), 2)
+        self.assertEqual(len(options_by_display["D002"]), 1)
+        self.assertFalse(success)
+        self.assertTrue(fallback)
+        self.assertIn("D001", error)
+        self.assertNotIn("D002:", error)
+        self.assertIn("display_option_grouping_fallback_single_family_options:D001", warnings)
 
     def displays_with_options_fixture(self):
         return pd.DataFrame(
