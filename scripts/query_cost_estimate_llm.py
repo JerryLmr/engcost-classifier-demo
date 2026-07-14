@@ -67,9 +67,6 @@ MATCHED_PROJECT_EXAMPLE_COLUMNS = [
     "item_order",
     "stable_sample_id",
     "source_ref",
-    "family_id",
-    "display_id",
-    "practice_option_id",
     "cost_item_name",
     "project_description",
     "unit",
@@ -1090,7 +1087,6 @@ def select_contiguous_item_range(
 def build_matched_project_examples(
     matched_project_packages: pd.DataFrame,
     samples: pd.DataFrame,
-    sample_lookup: dict[str, dict[str, Any]],
     limit: int = 3,
 ) -> list[dict[str, Any]]:
     if matched_project_packages.empty or limit <= 0:
@@ -1105,17 +1101,11 @@ def build_matched_project_examples(
         project_items = ordered_project_items(samples, project_package_id)
         items: list[dict[str, Any]] = []
         for _item_index, item in project_items.iterrows():
-            stable_sample_id = cell_text(item.get("stable_sample_id"))
-            mapped = sample_lookup.get(stable_sample_id)
-            if mapped is None:
-                raise ValueError(f"历史工程样本未映射到证据池: {project_package_id}/{stable_sample_id}")
+            source_ref = cell_text(item.get("source_ref")) or source_identity_for_row(item)[2]
             items.append(
                 {
-                    "stable_sample_id": stable_sample_id,
-                    "source_ref": cell_text(mapped.get("source_ref")),
-                    "family_id": cell_text(mapped.get("family_id")),
-                    "display_id": cell_text(mapped.get("display_id")),
-                    "practice_option_id": cell_text(mapped.get("practice_option_id")),
+                    "stable_sample_id": cell_text(item.get("stable_sample_id")),
+                    "source_ref": source_ref,
                     "cost_item_name": cell_text(item.get("cost_item_name")),
                     "project_description": cell_text(item.get("project_description")),
                     "unit": cell_text(item.get("unit")) or cell_text(item.get("unit_normalized")),
@@ -1157,9 +1147,6 @@ def matched_project_examples_frame(examples: list[dict[str, Any]]) -> pd.DataFra
                     "item_order": item_order,
                     "stable_sample_id": cell_text(item.get("stable_sample_id")),
                     "source_ref": cell_text(item.get("source_ref")),
-                    "family_id": cell_text(item.get("family_id")),
-                    "display_id": cell_text(item.get("display_id")),
-                    "practice_option_id": cell_text(item.get("practice_option_id")),
                     "cost_item_name": cell_text(item.get("cost_item_name")),
                     "project_description": cell_text(item.get("project_description")),
                     "unit": cell_text(item.get("unit")),
@@ -3589,6 +3576,10 @@ def run_query(
     selected_project_name = cell_text(selected_package.get("工程名称")) or cell_text(
         selected_package.get("project_name_text")
     )
+    matched_project_examples = build_matched_project_examples(
+        matched_project_packages, samples, limit=5
+    )
+    matched_project_examples_output = matched_project_examples_frame(matched_project_examples)
     selected_items = attach_family_and_display_ids_to_selected_items(
         expand_selected_project_items(samples, selected_package),
         evidence_items,
@@ -3627,10 +3618,6 @@ def run_query(
     sample_lookup = build_stable_sample_lookup(
         samples, lookup_evidence_items, display_group_families, displays_with_options
     )
-    matched_project_examples = build_matched_project_examples(
-        matched_project_packages, samples, sample_lookup, limit=5
-    )
-    matched_project_examples_output = matched_project_examples_frame(matched_project_examples)
     range_selection_trace = trace_row(
         "range_selection",
         "在确定性选中的完整历史工程内选择连续清单区间",

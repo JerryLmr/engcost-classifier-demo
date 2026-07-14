@@ -1038,17 +1038,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ]
         )
         samples["stable_sample_id"] = [f"sid-{index}" for index in range(len(samples))]
-        sample_lookup = {
-            row["stable_sample_id"]: {
-                "source_ref": "duplicate-ref" if index < 2 else f"ref-{index}",
-                "family_id": f"F{index:03d}",
-                "display_id": f"D{index:03d}",
-                "practice_option_id": f"D{index:03d}-O01",
-            }
-            for index, row in samples.iterrows()
-        }
+        samples["source_ref"] = ["duplicate-ref" if index < 2 else f"ref-{index}" for index in range(len(samples))]
 
-        examples = query_estimate_llm.build_matched_project_examples(matched, samples, sample_lookup)
+        examples = query_estimate_llm.build_matched_project_examples(matched, samples)
 
         self.assertEqual([example["project_package_id"] for example in examples], ["P1", "P2", "P3"])
         self.assertEqual([item["cost_item_name"] for item in examples[0]["items"]], ["第一项", "第二项", "第十项"])
@@ -1056,6 +1048,52 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(sum(len(example["items"]) for example in examples), 6)
         self.assertTrue(all(item["stable_sample_id"] for example in examples for item in example["items"]))
         self.assertEqual(examples[0]["items"][0]["source_ref"], "ref-2")
+
+    def test_matched_project_examples_generate_source_ref_without_lookup(self):
+        matched = pd.DataFrame([{"rank": 1, "project_package_id": "P1"}])
+        samples = pd.DataFrame([{
+            "project_package_id": "P1", "stable_sample_id": "sid-1",
+            "project_key": "batch::2", "item_row_id": "2-1", "cost_item_name": "清单项",
+        }])
+
+        examples = query_estimate_llm.build_matched_project_examples(matched, samples)
+
+        self.assertEqual(examples[0]["items"][0]["source_ref"], "batch::2::2-1")
+
+    def test_matched_examples_keep_full_project_when_grouping_only_requires_display_a(self):
+        plan_items = pd.DataFrame([{"display_id": "D-A"}])
+        display_groups = pd.DataFrame([
+            {"display_id": "D-A", "display_name": "A", "unit": "m²", "family_count": 1},
+            {"display_id": "D-B", "display_name": "B", "unit": "m²", "family_count": 1},
+        ])
+        display_families = pd.DataFrame([
+            {"display_id": "D-A", "family_id": "F-A", "unit": "m²"},
+            {"display_id": "D-B", "family_id": "F-B", "unit": "m²"},
+        ])
+        candidate_families = pd.DataFrame([
+            {"family_id": "F-A", "representative_cost_item_name": "A", "unit": "m²", "本次召回样本数": 1},
+            {"family_id": "F-B", "representative_cost_item_name": "B", "unit": "m²", "本次召回样本数": 1},
+        ], columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS)
+        matched = pd.DataFrame([{"rank": 1, "project_package_id": "P1"}])
+        samples = pd.DataFrame([
+            {"project_package_id": "P1", "stable_sample_id": "sid-a", "seq": 1, "cost_item_name": "Display A 清单"},
+            {"project_package_id": "P1", "stable_sample_id": "sid-b", "seq": 2, "cost_item_name": "Display B 清单"},
+        ])
+
+        required, filtered_groups, filtered_families = query_estimate_llm.filter_required_display_groups(
+            plan_items, display_groups, display_families
+        )
+        grouped, *_rest = query_estimate_llm.generate_display_option_grouping(
+            filtered_groups, filtered_families, candidate_families, []
+        )
+        examples = query_estimate_llm.build_matched_project_examples(matched, samples)
+
+        self.assertEqual(required, ["D-A"])
+        self.assertEqual(grouped["display_id"].tolist(), ["D-A"])
+        self.assertEqual(
+            [item["cost_item_name"] for item in examples[0]["items"]],
+            ["Display A 清单", "Display B 清单"],
+        )
 
     def test_selected_items_strictly_attach_family_and_display_ids(self):
         selected = pd.DataFrame([

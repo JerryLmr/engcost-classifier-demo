@@ -19,7 +19,7 @@
 - range 后新增 Option Selection：单 Option 直接沿用，多 Option 只能选现有 ID，代表 Family 按真实证据确定性选择。
 - 删除旧 `historical_plan_determination` 自由选择链路，新增确定性工程包选择、完整工程展开、连续区间选择和独立 quantity determination。
 - 查询 CLI 新增 `--with-explanations`；项目级和清单级解释默认关闭，XLSX 仍保留既有结构和完整价格、工程量、来源及统计结果。
-- Option Grouping 延后至代表工程连续区间确定后，仅处理最终区间所需 Display；sample lookup 在 Grouping 后统一构建一次。
+- Option Grouping 延后至代表工程连续区间确定后，仅处理最终区间所需 Display；局部 sample lookup 只服务最终估价链路，完整历史工程展示直接读取 samples。
 
 ## Decisions
 - 当前阶段不引入数据库、Milvus 或 LangChain；样本合并后重建本地 parquet + npy 索引。
