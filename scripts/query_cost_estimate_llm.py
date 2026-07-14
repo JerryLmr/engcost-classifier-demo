@@ -929,6 +929,67 @@ def expand_selected_project_items(
     return selected_items
 
 
+def attach_family_and_display_ids_to_selected_items(
+    selected_items: pd.DataFrame,
+    evidence_items: pd.DataFrame,
+    display_group_families: pd.DataFrame,
+) -> pd.DataFrame:
+    selected = selected_items.copy()
+    selected_ids = selected.get("stable_sample_id", pd.Series(index=selected.index, dtype=object)).map(cell_text)
+    if selected_ids.eq("").any():
+        raise ValueError("selected_items 中 stable_sample_id 不得为空")
+    duplicate_selected_ids = selected_ids[selected_ids.duplicated(keep=False)]
+    if not duplicate_selected_ids.empty:
+        raise ValueError(
+            f"selected_items 中 stable_sample_id 必须唯一: "
+            f"{join_non_empty(duplicate_selected_ids.tolist(), limit=10)}"
+        )
+
+    evidence_mapping = evidence_items[["stable_sample_id", "family_id"]].copy()
+    evidence_mapping["stable_sample_id"] = evidence_mapping["stable_sample_id"].map(cell_text)
+    evidence_mapping["family_id"] = evidence_mapping["family_id"].map(cell_text)
+    if evidence_mapping["stable_sample_id"].eq("").any() or evidence_mapping["family_id"].eq("").any():
+        raise ValueError("evidence_items 中 stable_sample_id/family_id 不得为空")
+    duplicate_evidence_ids = evidence_mapping.loc[
+        evidence_mapping["stable_sample_id"].duplicated(keep=False), "stable_sample_id"
+    ]
+    if not duplicate_evidence_ids.empty:
+        raise ValueError(
+            f"evidence_items 中 stable_sample_id 必须唯一: "
+            f"{join_non_empty(duplicate_evidence_ids.tolist(), limit=10)}"
+        )
+
+    display_mapping = display_group_families[["family_id", "display_id"]].copy()
+    display_mapping["family_id"] = display_mapping["family_id"].map(cell_text)
+    display_mapping["display_id"] = display_mapping["display_id"].map(cell_text)
+    if display_mapping["family_id"].eq("").any() or display_mapping["display_id"].eq("").any():
+        raise ValueError("display_group_families 中 family_id/display_id 不得为空")
+    duplicate_family_ids = display_mapping.loc[
+        display_mapping["family_id"].duplicated(keep=False), "family_id"
+    ]
+    if not duplicate_family_ids.empty:
+        raise ValueError(
+            f"family_id 必须唯一映射到一个 display_id: "
+            f"{join_non_empty(duplicate_family_ids.tolist(), limit=10)}"
+        )
+
+    selected["stable_sample_id"] = selected_ids
+    original_count = len(selected)
+    selected = selected.merge(evidence_mapping, on="stable_sample_id", how="left", validate="one_to_one")
+    selected = selected.merge(display_mapping, on="family_id", how="left", validate="many_to_one")
+    if len(selected) != original_count:
+        raise ValueError("selected_items 合并 family/display 后行数发生变化")
+    missing_family = selected["family_id"].map(cell_text).eq("")
+    missing_display = selected["display_id"].map(cell_text).eq("")
+    if missing_family.any() or missing_display.any():
+        missing_ids = selected.loc[missing_family | missing_display, "stable_sample_id"].tolist()
+        raise ValueError(
+            f"selected_items 每行必须唯一映射到 family_id 和 display_id: "
+            f"{join_non_empty(missing_ids, limit=10)}"
+        )
+    return selected
+
+
 def range_selection_item_records(selected_items: pd.DataFrame) -> list[dict[str, Any]]:
     return [
         {
@@ -1611,6 +1672,43 @@ def attach_display_support_ratios(
     return output[CANDIDATE_DISPLAY_GROUP_COLUMNS].reset_index(drop=True)
 
 
+def filter_required_display_groups(
+    plan_items: pd.DataFrame,
+    candidate_display_groups: pd.DataFrame,
+    display_group_families: pd.DataFrame,
+) -> tuple[list[str], pd.DataFrame, pd.DataFrame]:
+    required_display_ids = list(dict.fromkeys(plan_items["display_id"].map(cell_text).tolist()))
+    if not required_display_ids or any(not display_id for display_id in required_display_ids):
+        raise ValueError("plan_items 每行必须包含 display_id")
+
+    display_order = {display_id: index for index, display_id in enumerate(required_display_ids)}
+    available_display_ids = set(candidate_display_groups["display_id"].map(cell_text).tolist())
+    missing_display_ids = [display_id for display_id in required_display_ids if display_id not in available_display_ids]
+    if missing_display_ids:
+        raise ValueError(f"required display 不存在于 candidate_display_groups: {join_non_empty(missing_display_ids)}")
+
+    filtered_groups = candidate_display_groups[
+        candidate_display_groups["display_id"].map(cell_text).isin(required_display_ids)
+    ].copy()
+    filtered_groups["_required_order"] = filtered_groups["display_id"].map(cell_text).map(display_order)
+    filtered_groups = filtered_groups.sort_values("_required_order", kind="stable").drop(columns="_required_order")
+
+    filtered_families = display_group_families[
+        display_group_families["display_id"].map(cell_text).isin(required_display_ids)
+    ].copy()
+    present_family_displays = set(filtered_families["display_id"].map(cell_text).tolist())
+    missing_family_displays = [display_id for display_id in required_display_ids if display_id not in present_family_displays]
+    if missing_family_displays:
+        raise ValueError(f"required display 缺少 family 映射: {join_non_empty(missing_family_displays)}")
+    filtered_families["_required_order"] = filtered_families["display_id"].map(cell_text).map(display_order)
+    filtered_families = filtered_families.sort_values("_required_order", kind="stable").drop(columns="_required_order")
+    return (
+        required_display_ids,
+        filtered_groups.reset_index(drop=True),
+        filtered_families.reset_index(drop=True),
+    )
+
+
 def replace_nan_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     if frame.empty:
         return []
@@ -2033,6 +2131,40 @@ def build_display_option_grouping_trace_frame(
         ascending=[True, True, True, False],
     ).drop(columns=["_item_similarity_sort"])
     return frame[DISPLAY_OPTION_GROUPING_TRACE_COLUMNS]
+
+
+def attach_original_practice_options(
+    plan_items: pd.DataFrame,
+    displays_with_options: pd.DataFrame,
+) -> pd.DataFrame:
+    family_to_option: dict[str, str] = {}
+    for _index, display in displays_with_options.iterrows():
+        options = display.get("practice_options") if isinstance(display.get("practice_options"), list) else []
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            option_id = cell_text(option.get("practice_option_id"))
+            if not option_id:
+                raise ValueError("practice_option_id 不得为空")
+            for family_value in option.get("family_ids") or []:
+                family_id = cell_text(family_value)
+                if not family_id:
+                    raise ValueError("practice option 中 family_id 不得为空")
+                if family_id in family_to_option:
+                    raise ValueError(f"family_id 必须唯一映射到一个 practice_option_id: {family_id}")
+                family_to_option[family_id] = option_id
+
+    output = plan_items.copy()
+    output["practice_option_id"] = output["family_id"].map(
+        lambda value: family_to_option.get(cell_text(value), "")
+    )
+    missing = output["practice_option_id"].map(cell_text).eq("")
+    if missing.any():
+        raise ValueError(
+            f"plan_items family_id 无法映射到 practice_option_id: "
+            f"{join_non_empty(output.loc[missing, 'family_id'].map(cell_text).tolist(), limit=10)}"
+        )
+    return output
 
 
 def generate_display_option_grouping(
@@ -3447,6 +3579,30 @@ def run_query(
         evidence_items,
         package_evidence_weights,
     )
+    release_embedding_model(model)
+    del model
+    gc.collect()
+
+    selected_package, ranked_packages = select_representative_project_package(matched_raw)
+    matched_project_packages = matched_project_packages_for_output(ranked_packages)
+    selected_project_package_id = cell_text(selected_package.get("project_package_id"))
+    selected_project_name = cell_text(selected_package.get("工程名称")) or cell_text(
+        selected_package.get("project_name_text")
+    )
+    selected_items = attach_family_and_display_ids_to_selected_items(
+        expand_selected_project_items(samples, selected_package),
+        evidence_items,
+        display_group_families,
+    )
+    start, end, range_meta = select_contiguous_item_range(
+        raw_text, selected_project_name, selected_items
+    )
+    if range_meta["fallback"]:
+        append_warning(warnings, "range_selection_fallback_full_project")
+    plan_items = selected_items.iloc[start : end + 1].copy()
+    required_display_ids, candidate_display_groups, display_group_families = filter_required_display_groups(
+        plan_items, candidate_display_groups, display_group_families
+    )
     (
         displays_with_options,
         _display_option_grouping_success,
@@ -3463,28 +3619,18 @@ def run_query(
         candidate_families,
         warnings=warnings,
     )
-    sample_lookup = build_stable_sample_lookup(samples, evidence_items, display_group_families, displays_with_options)
-    release_embedding_model(model)
-    del model
-    gc.collect()
-
-    selected_package, ranked_packages = select_representative_project_package(matched_raw)
-    matched_project_packages = matched_project_packages_for_output(ranked_packages)
-    selected_project_package_id = cell_text(selected_package.get("project_package_id"))
-    selected_project_name = cell_text(selected_package.get("工程名称")) or cell_text(
-        selected_package.get("project_name_text")
+    plan_items = attach_original_practice_options(plan_items, displays_with_options)
+    required_family_ids = set(display_group_families["family_id"].map(cell_text).tolist())
+    lookup_evidence_items = evidence_items[
+        evidence_items["family_id"].map(cell_text).isin(required_family_ids)
+    ].copy()
+    sample_lookup = build_stable_sample_lookup(
+        samples, lookup_evidence_items, display_group_families, displays_with_options
     )
-    selected_items = expand_selected_project_items(samples, selected_package)
     matched_project_examples = build_matched_project_examples(
         matched_project_packages, samples, sample_lookup, limit=5
     )
     matched_project_examples_output = matched_project_examples_frame(matched_project_examples)
-    start, end, range_meta = select_contiguous_item_range(
-        raw_text, selected_project_name, selected_items
-    )
-    if range_meta["fallback"]:
-        append_warning(warnings, "range_selection_fallback_full_project")
-    plan_items = selected_items.iloc[start : end + 1].copy()
     range_selection_trace = trace_row(
         "range_selection",
         "在确定性选中的完整历史工程内选择连续清单区间",

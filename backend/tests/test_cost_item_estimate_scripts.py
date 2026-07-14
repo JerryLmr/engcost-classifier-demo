@@ -1057,6 +1057,90 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertTrue(all(item["stable_sample_id"] for example in examples for item in example["items"]))
         self.assertEqual(examples[0]["items"][0]["source_ref"], "ref-2")
 
+    def test_selected_items_strictly_attach_family_and_display_ids(self):
+        selected = pd.DataFrame([
+            {"stable_sample_id": "sid-1", "item_position": 0},
+            {"stable_sample_id": "sid-2", "item_position": 1},
+        ])
+        evidence = pd.DataFrame([
+            {"stable_sample_id": "sid-1", "family_id": "F001"},
+            {"stable_sample_id": "sid-2", "family_id": "F002"},
+        ])
+        display_families = pd.DataFrame([
+            {"family_id": "F001", "display_id": "D002"},
+            {"family_id": "F002", "display_id": "D001"},
+        ])
+
+        result = query_estimate_llm.attach_family_and_display_ids_to_selected_items(
+            selected, evidence, display_families
+        )
+
+        self.assertEqual(result["family_id"].tolist(), ["F001", "F002"])
+        self.assertEqual(result["display_id"].tolist(), ["D002", "D001"])
+
+    def test_selected_items_mapping_rejects_missing_and_duplicate_mappings(self):
+        selected = pd.DataFrame([{"stable_sample_id": "sid-1"}])
+        with self.assertRaisesRegex(ValueError, "每行必须唯一映射"):
+            query_estimate_llm.attach_family_and_display_ids_to_selected_items(
+                selected,
+                pd.DataFrame([{"stable_sample_id": "sid-2", "family_id": "F001"}]),
+                pd.DataFrame([{"family_id": "F001", "display_id": "D001"}]),
+            )
+        with self.assertRaisesRegex(ValueError, "family_id 必须唯一映射"):
+            query_estimate_llm.attach_family_and_display_ids_to_selected_items(
+                selected,
+                pd.DataFrame([{"stable_sample_id": "sid-1", "family_id": "F001"}]),
+                pd.DataFrame([
+                    {"family_id": "F001", "display_id": "D001"},
+                    {"family_id": "F001", "display_id": "D002"},
+                ]),
+            )
+
+    def test_filter_required_display_groups_preserves_required_and_family_order(self):
+        plan_items = pd.DataFrame([
+            {"display_id": "D002"}, {"display_id": "D001"}, {"display_id": "D002"},
+        ])
+        groups = pd.DataFrame([
+            {"display_id": "D001"}, {"display_id": "D002"}, {"display_id": "D003"},
+        ])
+        families = pd.DataFrame([
+            {"display_id": "D001", "family_id": "F001"},
+            {"display_id": "D002", "family_id": "F002"},
+            {"display_id": "D002", "family_id": "F003"},
+            {"display_id": "D003", "family_id": "F004"},
+        ])
+
+        required, filtered_groups, filtered_families = query_estimate_llm.filter_required_display_groups(
+            plan_items, groups, families
+        )
+
+        self.assertEqual(required, ["D002", "D001"])
+        self.assertEqual(filtered_groups["display_id"].tolist(), ["D002", "D001"])
+        self.assertEqual(filtered_families["family_id"].tolist(), ["F002", "F003", "F001"])
+
+    def test_attach_original_practice_options_is_strict(self):
+        plan_items = pd.DataFrame([{"family_id": "F001"}, {"family_id": "F002"}])
+        displays = pd.DataFrame([{
+            "display_id": "D001",
+            "practice_options": [
+                {"practice_option_id": "D001-O01", "family_ids": ["F001"]},
+                {"practice_option_id": "D001-O02", "family_ids": ["F002"]},
+            ],
+        }])
+        result = query_estimate_llm.attach_original_practice_options(plan_items, displays)
+        self.assertEqual(result["practice_option_id"].tolist(), ["D001-O01", "D001-O02"])
+
+        with self.assertRaisesRegex(ValueError, "唯一映射"):
+            query_estimate_llm.attach_original_practice_options(
+                plan_items.head(1),
+                pd.DataFrame([{
+                    "practice_options": [
+                        {"practice_option_id": "O1", "family_ids": ["F001"]},
+                        {"practice_option_id": "O2", "family_ids": ["F001"]},
+                    ],
+                }]),
+            )
+
     def grouping_result(self, family_ids, groups, tags=None):
         tags = tags or {}
         return {

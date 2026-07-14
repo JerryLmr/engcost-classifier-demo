@@ -19,6 +19,7 @@
 - range 后新增 Option Selection：单 Option 直接沿用，多 Option 只能选现有 ID，代表 Family 按真实证据确定性选择。
 - 删除旧 `historical_plan_determination` 自由选择链路，新增确定性工程包选择、完整工程展开、连续区间选择和独立 quantity determination。
 - 查询 CLI 新增 `--with-explanations`；项目级和清单级解释默认关闭，XLSX 仍保留既有结构和完整价格、工程量、来源及统计结果。
+- Option Grouping 延后至代表工程连续区间确定后，仅处理最终区间所需 Display；sample lookup 在 Grouping 后统一构建一次。
 
 ## Decisions
 - 当前阶段不引入数据库、Milvus 或 LangChain；样本合并后重建本地 parquet + npy 索引。
@@ -30,6 +31,7 @@
 - 工程包选择不调用 LLM：全部召回包参与平均清单数计算，最终候选仅限相似度前 5，距离相同时选择相似度排名更高者。
 - 连续区间和 quantity 使用完整工程包中的绝对 `item_position`；quantity 读取最终代表 Family 的真实清单名称、项目特征和单位。
 - Option 只是一组业务等价的 Family ID，不生成工艺摘要；不确定或选择失败时保留原 Option。
+- selected items 必须通过 `stable_sample_id → family_id → display_id` 严格唯一映射；缺失或重复直接报错，不设置兼容 lookup 或旧流程 fallback。
 - 项目级和清单级解释只读取已经确定的工程、区间、quantity 和价格结果，不参与任何选择或计算。
 - dedup_selection 只抑制最终展示项，不创建新 family，不合并 source_refs、本次召回样本、工程量或价格区间。
 
