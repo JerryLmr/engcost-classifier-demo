@@ -1107,8 +1107,16 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertNotIn("candidate_family_count", prompt)
         for removed_field in ["samples", "packages", "item_query_similarity", "unit_price_min", "unit_price_median", "unit_price_max"]:
             self.assertNotIn(f'"{removed_field}"', prompt)
-        self.assertIn("仅存在 OCR、标点、文字顺序、同义表达", prompt)
-        self.assertIn("关键规格、厚度", prompt)
+        for expected_text in [
+            "核心材料、厚度、关键规格、层数和主要施工做法一致时，可以合并",
+            "不改变核心报价口径的普通措辞差异可以忽略",
+            "指定层数与未指定层数必须拆分",
+            "拆除、基层处理、垃圾清运等实质附加工作",
+            "3mm 与 4mm 防水材料必须拆分",
+            "3mm SBS改性沥青防水卷材",
+            "屋面重新刷1.5mm单组分聚氨酯防水涂料",
+        ]:
+            self.assertIn(expected_text, prompt)
         for removed_text in ["raw_query", "project_package_query_text", "item_query_text", "selection_reason", "default_representative_family_id", "family_assignments", "group_reason"]:
             self.assertNotIn(removed_text, prompt)
 
@@ -1254,7 +1262,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
 
         with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response) as llm_mock:
-            displays_with_options, *_rest, meta, trace_frame = query_estimate_llm.generate_display_option_grouping(
+            (
+                displays_with_options, _success, _fallback, _error, _prompt,
+                _summary_trace, meta, trace_frame, per_display_traces,
+            ) = query_estimate_llm.generate_display_option_grouping(
                 display_groups, display_families, candidate_families, []
             )
 
@@ -1265,6 +1276,11 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(meta["programmatic_single_family_display_count"], 1)
         self.assertEqual(meta["llm_display_count"], 1)
         self.assertEqual(set(trace_frame["display_id"]), {"D001", "D002"})
+        self.assertEqual(len(per_display_traces), 1)
+        self.assertIn("D002", per_display_traces[0]["purpose"])
+        self.assertEqual(json.loads(per_display_traces[0]["input_summary"]), {
+            "display_id": "D002", "display_name": "墙面防水", "candidate_family_count": 2,
+        })
 
     def test_display_option_grouping_fallback_is_isolated_per_display(self):
         displays = pd.DataFrame([
@@ -1282,12 +1298,15 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             for family_id in ["F001", "F002", "F003", "F004"]
         ], columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS)
         responses = [
-            types.SimpleNamespace(content={"groups": [["F001", "F999"]]}, usage={}, raw_content="bad"),
-            types.SimpleNamespace(content={"groups": [["F003", "F004"]]}, usage={}, raw_content="good"),
+            types.SimpleNamespace(content={"groups": [["F001", "F999"]]}, usage={"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13}, raw_content="bad"),
+            types.SimpleNamespace(content={"groups": [["F003", "F004"]]}, usage={"prompt_tokens": 21, "completion_tokens": 3, "total_tokens": 24}, raw_content="good"),
         ]
         warnings = []
         with patch.object(query_estimate_llm, "request_llm_json_with_usage", side_effect=responses) as llm_mock:
-            grouped, success, fallback, error, *_rest = query_estimate_llm.generate_display_option_grouping(
+            (
+                grouped, success, fallback, error, _prompt, _summary_trace,
+                _meta, _trace_frame, per_display_traces,
+            ) = query_estimate_llm.generate_display_option_grouping(
                 displays, display_families, families, warnings
             )
         self.assertEqual(llm_mock.call_count, 2)
@@ -1309,6 +1328,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertIn("D001", error)
         self.assertNotIn("D002:", error)
         self.assertIn("display_option_grouping_fallback_single_family_options:D001", warnings)
+        self.assertEqual([trace["parsed_status"] for trace in per_display_traces], ["failed", "success"])
+        self.assertIn("fallback_single_family_options", per_display_traces[0]["error_message"])
+        self.assertEqual(per_display_traces[0]["raw_response"], "bad")
+        self.assertEqual(per_display_traces[1]["raw_response"], "good")
+        self.assertEqual(per_display_traces[1]["error_message"], "")
+        self.assertEqual(per_display_traces[0]["total_tokens"], 13)
+        self.assertEqual(per_display_traces[1]["total_tokens"], 24)
 
     def displays_with_options_fixture(self):
         return pd.DataFrame(

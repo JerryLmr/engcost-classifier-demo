@@ -1690,37 +1690,63 @@ def build_display_option_grouping_prompt(
     }
     payload = {"candidate_display": record}
     prompt = f"""
-你的任务是：将当前唯一 Display 下业务上等价、可以共用同一价格统计口径的 Family 归入同一个 Option。
+你的任务是：将当前唯一 Display 下的 Family 划分为若干 Option。
+
+Option 的定义是：
+
+同一 Option 内的所有 Family，后续必须能够作为一个整体被选中，并作为一个整体展开回全库查询价格证据。
+
+如果用户明确某个参数后，需要保留同组中的一部分 Family、排除另一部分 Family，那么这些 Family 就不能属于同一个 Option。
 
 groups 是二维数组：
-- 外层数组中的每一组代表一个独立 Option；
-- 同一内层数组中的 Family 会被合并价格证据；
-- 不同内层数组表示不同具体做法，后续程序会在这些 Option 之间选择。
+- 每个内层数组代表一个独立 Option；
+- 同一内层数组中的 Family 会在后续被整体选择、整体展开；
+- 不同内层数组表示后续可以分别选择的不同候选做法。
 
-分组规则：
-- 材料、关键规格、厚度、层数、施工做法、部位或实质附加工作不同，必须拆分；
-- 仅存在 OCR、标点、文字顺序、同义表达或格式不同，才可以合并；
-- 无法确认完全等价时，宁可拆开，不要误合并。
+分组时，重点判断以下关键参数：
+
+1. 厚度或关键规格；
+2. 明确材料类别；
+3. 层数、高度、部位等明确特殊条件；
+4. 指定参数与未指定参数；
 
 例如：
-- 2mm 与 4mm 防水材料必须拆分；
-- 3层与 6层的垂直运输必须拆分；
-- 指定层数与未指定层数的垂直运输必须拆分；
-- 聚氨酯与聚合物水泥基必须拆分；
-- “3mm SBS”“3.0mm弹性体改性沥青”“3厚SBS”在没有其他差异时可以合并。
+
+- 3mm 与 4mm 必须拆分；
+- 1.2mm、1.5mm、2mm 必须拆分；
+- 2mm 水泥基防水涂料与 2mm 聚氨酯防水涂料必须拆分；
+- 3mm SBS 改性沥青防水涂料与 3mm 聚氨酯防水涂料必须拆分；
+- 3mm 自粘防水卷材与 3mm SBS 或弹性体改性沥青防水卷材必须拆分；
+- 1层、2层、5层、未指定层数原则上应分别拆分；
+- 至少，明确层数与未指定层数必须拆分；
+- 指定高度与通用未指定高度必须拆分；
+- 指定规格与未指定规格必须拆分。
+
+以下差异当前可以忽略，不必单独拆分：
+
+- OCR、标点、空格、换行、编号；
+- 文字顺序不同；
+- 明确同义表达；
+- 基层清理；
+- 垃圾清运；
+- 普通修补；
+- 一般性的附带施工描述；
+- 不影响用户后续选择的文字详略差异。
 
 每个输入 family_id 必须且只能出现一次，不得遗漏、重复或新增。
 
 输出格式：
-{{"groups": [["F004", "F007"], ["F010"]]}}
 
-其中：
-- ["F004", "F007"] 表示一个 Option；
-- ["F010"] 表示另一个 Option。
+{{
+  "groups": [
+    ["F004", "F007"],
+    ["F010"]
+  ]
+}}
+
+每个内层数组就是一个 Option。
 
 只输出 JSON，不输出解释或 Markdown。
-
-【输入数据】
 
 {json_text(payload)}
 """.strip()
@@ -1925,7 +1951,7 @@ def generate_display_option_grouping(
     display_group_families: pd.DataFrame,
     candidate_families: pd.DataFrame,
     warnings: list[str] | None = None,
-) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any], dict[str, Any], pd.DataFrame]:
+) -> tuple[pd.DataFrame, bool, bool, str, str, dict[str, Any], dict[str, Any], pd.DataFrame, list[dict[str, Any]]]:
     family_ids_by_display = {
         display_id: [family_id for family_id in group["family_id"].map(cell_text).tolist() if family_id]
         for display_id, group in display_group_families.groupby("display_id", sort=False, dropna=False)
@@ -1941,6 +1967,7 @@ def generate_display_option_grouping(
     prompts: list[str] = []
     responses: list[Any] = []
     errors_by_display: dict[str, str] = {}
+    per_display_traces: list[dict[str, Any]] = []
     fallback = False
     grouped_frames: list[pd.DataFrame] = []
     for _index, display in multi_family_displays.iterrows():
@@ -1953,6 +1980,7 @@ def generate_display_option_grouping(
         current_family_count = len(record.get("candidate_families") or [])
         max_tokens = min(4096, max(512, 256 + current_family_count * 96))
         response = None
+        current_error = ""
         try:
             response = request_llm_json_with_usage(
                 prompt, max_tokens=max_tokens,
@@ -1963,7 +1991,8 @@ def generate_display_option_grouping(
             )
         except (RuntimeError, ValueError) as exc:
             fallback = True
-            errors_by_display[display_id] = str(exc)
+            current_error = f"fallback_single_family_options: {exc}"
+            errors_by_display[display_id] = current_error
             append_warning(warnings, f"display_option_grouping_fallback_single_family_options:{display_id}")
             fallback_result = {
                 "groups": [[family_id] for family_id in sorted(family_ids_by_display[display_id])]
@@ -1971,6 +2000,22 @@ def generate_display_option_grouping(
             grouped_display, _grouped_meta = parse_display_option_grouping_result(
                 fallback_result, current_display, display_group_families, warnings,
             )
+        display_name = cell_text(display.get("display_name"))
+        per_display_traces.append(trace_row(
+            "display_option_grouping",
+            f"为 Display {display_id} {display_name} 划分 Option",
+            not current_error,
+            error=current_error,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            input_summary=json_text({
+                "display_id": display_id,
+                "display_name": display_name,
+                "candidate_family_count": current_family_count,
+            }),
+            usage=response.usage if response is not None else None,
+            raw_response=getattr(response, "raw_content", "") if response is not None else "",
+        ))
         grouped_frames.append(grouped_display)
         if response is not None:
             responses.append(response)
@@ -2048,7 +2093,10 @@ def generate_display_option_grouping(
         usage=combined_usage if responses else None,
         raw_response=combined_raw_response,
     )
-    return displays_with_options, not fallback, fallback, error_message, combined_prompt, trace, meta, trace_frame
+    return (
+        displays_with_options, not fallback, fallback, error_message, combined_prompt,
+        trace, meta, trace_frame, per_display_traces,
+    )
 
 
 def normalized_unit(value: Any) -> str:
@@ -3295,6 +3343,7 @@ def run_query(
         display_option_grouping_trace,
         display_option_grouping_meta,
         display_option_grouping_trace_frame,
+        display_option_grouping_llm_traces,
     ) = generate_display_option_grouping(
         candidate_display_groups,
         display_group_families,
@@ -3432,7 +3481,7 @@ def run_query(
     llm_trace = pd.DataFrame(
         [
             rewrite_trace,
-            display_option_grouping_trace,
+            *display_option_grouping_llm_traces,
             range_selection_trace,
             *option_selection_llm_traces,
             quantity_trace,
