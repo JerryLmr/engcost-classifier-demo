@@ -178,10 +178,7 @@ DISPLAY_OPTION_GROUPING_TRACE_COLUMNS = [
     "display_id",
     "display_name",
     "practice_option_id",
-    "representative_family_id",
-    "practice_description",
     "family_id",
-    "family_role",
     "representative_cost_item_name",
     "representative_project_description",
     "unit",
@@ -193,6 +190,12 @@ DISPLAY_OPTION_GROUPING_TRACE_COLUMNS = [
     "unit_price_max",
 ]
 
+OPTION_SELECTION_TRACE_COLUMNS = [
+    "final_item_position", "display_id", "original_option_id", "selected_option_id",
+    "original_family_id", "representative_family_id", "candidate_option_count",
+    "whether_replaced", "selection_reason",
+]
+
 ESTIMATE_SCENARIO_COLUMNS = [
     "方案顺序",
     "方案编号",
@@ -202,8 +205,7 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "source_ref",
     "display_id",
     "清单名称",
-    "选用工艺",
-    "其他可选工艺",
+    "项目特征",
     "单位",
     "项目说明",
     "工程量预估",
@@ -223,6 +225,9 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "价格证据样本数",
     "来源样本",
     "practice_option_id",
+    "original_option_id",
+    "original_family_id",
+    "representative_family_id",
     "价格证据family",
 ]
 
@@ -279,6 +284,9 @@ class ScenarioItem:
     source_ref: str
     display_id: str
     practice_option_id: str
+    original_option_id: str
+    original_family_id: str
+    representative_family_id: str
     selection_reason: str
     quantity: dict[str, Any]
     quantity_reason: str
@@ -304,6 +312,7 @@ class QueryResult:
     package_evidence_weights: pd.DataFrame
     display_group_families: pd.DataFrame
     display_option_grouping_trace: pd.DataFrame
+    option_selection_trace: pd.DataFrame
     matched_project_examples: pd.DataFrame
     evidence_items: pd.DataFrame
     parse_info: pd.DataFrame
@@ -1682,44 +1691,12 @@ def build_display_option_grouping_prompt(
         )
     payload = {"candidate_displays": records}
     prompt = f"""
-你负责将同一个清单展示项下的历史 family 划分为若干明确的 practice_options。
-
-每个 practice_option 都必须代表一个可以独立形成价格统计口径的具体做法。
-
-【分组原则】
-
-1. 如果 family 中明确写出的主要材料或设备类型、关键规格、厚度、
-   层数、型号、主要施工方法、施工对象、部位或计价范围存在冲突，
-   必须拆成不同 option。
-
-2. 某个 family 未写明材料、规格或施工范围时，不得仅凭另一 family
-   的明确描述推定其相同；信息不充分且无法确认时，单独形成 option。
-
-3. 如果上述关键信息一致，仅存在 OCR、标点、文字顺序、同义表达，
-   或不改变主要计价范围的普通清理、保洁、垃圾清运、运距说明差异，
-   可以合并。
+将每个 Display 下业务上等价、可使用同一报价口径的 Family 归入同一 Option。
+材料、关键规格、厚度、层数、施工做法或实质附加工作不同时必须分组；仅存在 OCR、标点、文字顺序、同义表达或格式差异时可合并。
+每个输入 family_id 必须且只能出现一次。
 
 【输出 JSON】
-
-{{
-  "display_results": [
-    {{
-      "display_id": "D001",
-      "practice_options": [
-        {{
-          "representative_family_id": "F004",
-          "practice_description": "1.5mm单组份聚氨酯涂膜防水",
-          "family_ids": ["F004", "F007"]
-        }},
-        {{
-          "representative_family_id": "F010",
-          "practice_description": "2.0mm单组份聚氨酯涂膜防水",
-          "family_ids": ["F010"]
-        }}
-      ]
-    }}
-  ]
-}}
+{{"display_results":[{{"display_id":"D001","groups":[["F004","F007"],["F010"]]}}]}}
 
 只输出 JSON，不输出解释或 Markdown。
 
@@ -1785,8 +1762,8 @@ def parse_display_option_grouping_result(
     for item in raw_rows:
         if not isinstance(item, dict):
             raise ValueError("display_option_grouping display_result 必须为 object")
-        if set(item) != {"display_id", "practice_options"}:
-            raise ValueError("display_result 只允许包含 display_id 和 practice_options")
+        if set(item) != {"display_id", "groups"}:
+            raise ValueError("display_result 只允许包含 display_id 和 groups")
         display_id = cell_text(item.get("display_id"))
         if display_id not in allowed_by_display:
             raise ValueError(f"display_option_grouping 返回未知 display: {display_id}")
@@ -1795,33 +1772,20 @@ def parse_display_option_grouping_result(
         allowed_family_ids = allowed_by_display[display_id]
         if not allowed_family_ids:
             raise ValueError(f"display 缺少 candidate families: {display_id}")
-        raw_options = item.get("practice_options")
+        raw_options = item.get("groups")
         if not isinstance(raw_options, list) or not raw_options:
-            raise ValueError(f"practice_options 必须为非空 list: {display_id}")
+            raise ValueError(f"groups 必须为非空 list: {display_id}")
 
         practice_options: list[dict[str, Any]] = []
         seen_family_ids: set[str] = set()
-        representative_family_ids: set[str] = set()
         seen_family_groups: set[frozenset[str]] = set()
         for option_index, raw_option in enumerate(raw_options, start=1):
-            if not isinstance(raw_option, dict):
-                raise ValueError(f"practice_option 必须为 object: {display_id}/O{option_index:02d}")
-            if set(raw_option) != {"representative_family_id", "practice_description", "family_ids"}:
-                raise ValueError(
-                    "practice_option 只允许包含 representative_family_id、practice_description 和 family_ids"
-                )
-            representative_family_id = cell_text(raw_option.get("representative_family_id"))
-            practice_description = truncate_text(normalize_display_description(raw_option.get("practice_description")), 120)
-            raw_family_ids = raw_option.get("family_ids")
-            if not representative_family_id:
-                raise ValueError(f"practice_option 缺少 representative_family_id: {display_id}/O{option_index:02d}")
-            if not practice_description:
-                raise ValueError(f"practice_description 不得为空: {display_id}/{representative_family_id}")
+            raw_family_ids = raw_option
             if not isinstance(raw_family_ids, list) or not raw_family_ids:
-                raise ValueError(f"family_ids 必须为非空 list: {display_id}/{representative_family_id}")
+                raise ValueError(f"group 必须为非空 family_id list: {display_id}/O{option_index:02d}")
             family_ids = [cell_text(family_id) for family_id in raw_family_ids]
             if any(not family_id for family_id in family_ids):
-                raise ValueError(f"family_ids 不得为空: {display_id}/{representative_family_id}")
+                raise ValueError(f"family_ids 不得为空: {display_id}/O{option_index:02d}")
             duplicate_in_option = [family_id for family_id in family_ids if family_ids.count(family_id) > 1]
             if duplicate_in_option:
                 raise ValueError(f"同一 practice_option 内 family 重复: {display_id}/{join_non_empty(duplicate_in_option)}")
@@ -1834,34 +1798,29 @@ def parse_display_option_grouping_result(
             duplicate_across_options = [family_id for family_id in family_ids if family_id in seen_family_ids]
             if duplicate_across_options:
                 raise ValueError(f"family 不得出现在多个 practice_options: {display_id}/{join_non_empty(duplicate_across_options)}")
-            if representative_family_id not in family_ids:
-                raise ValueError(f"representative_family_id 必须位于自己的 family_ids 中: {display_id}/{representative_family_id}")
-            if representative_family_id in representative_family_ids:
-                raise ValueError(f"不同 option 的 representative family 不得重复: {display_id}/{representative_family_id}")
             option_units = [
                 display_family_unit(family_row_map.get((display_id, family_id), pd.Series(dtype=object)))
                 for family_id in family_ids
             ]
             if len(set(option_units)) > 1:
-                raise ValueError(f"同一 practice_option 中 family 单位必须一致: {display_id}/{representative_family_id}")
+                raise ValueError(f"同一 practice_option 中 family 单位必须一致: {display_id}/O{option_index:02d}")
             sample_count = 0
             for family_id in family_ids:
                 family_row = family_row_map.get((display_id, family_id), pd.Series(dtype=object))
                 sample_count += int(numeric_or_none(family_row.get("本次召回样本数")) or 0)
 
-            representative_family_ids.add(representative_family_id)
             seen_family_groups.add(family_group)
             seen_family_ids.update(family_ids)
-            practice_option_id = f"{display_id}-O{option_index:02d}"
             practice_options.append(
                 {
-                    "practice_option_id": practice_option_id,
-                    "representative_family_id": representative_family_id,
-                    "practice_description": practice_description,
                     "sample_count": sample_count,
-                    "family_ids": family_ids,
+                    "family_ids": sorted(family_ids),
                 }
             )
+
+        practice_options.sort(key=lambda option: option["family_ids"][0])
+        for stable_index, option in enumerate(practice_options, start=1):
+            option["practice_option_id"] = f"{display_id}-O{stable_index:02d}"
 
         missing_family_ids = [family_id for family_id in allowed_order_by_display[display_id] if family_id not in seen_family_ids]
         if missing_family_ids:
@@ -1907,8 +1866,6 @@ def build_display_option_grouping_trace_frame(
             if not isinstance(option, dict):
                 continue
             practice_option_id = cell_text(option.get("practice_option_id"))
-            representative_family_id = cell_text(option.get("representative_family_id"))
-            practice_description = cell_text(option.get("practice_description"))
             family_ids = option.get("family_ids") if isinstance(option.get("family_ids"), list) else []
             for family_id_value in family_ids:
                 family_id = cell_text(family_id_value)
@@ -1919,10 +1876,7 @@ def build_display_option_grouping_trace_frame(
                         "display_id": display_id,
                         "display_name": cell_text(row.get("display_name")) or cell_text(display.get("display_name")),
                         "practice_option_id": practice_option_id,
-                        "representative_family_id": representative_family_id,
-                        "practice_description": practice_description,
                         "family_id": family_id,
-                        "family_role": "representative" if family_id == representative_family_id else "member",
                         "representative_cost_item_name": cell_text(row.get("representative_cost_item_name")),
                         "representative_project_description": cell_text(row.get("representative_project_description")),
                         "unit": cell_text(candidate.get("unit_normalized")) or cell_text(row.get("unit")) or cell_text(candidate.get("unit")),
@@ -1937,12 +1891,11 @@ def build_display_option_grouping_trace_frame(
     frame = pd.DataFrame(rows, columns=DISPLAY_OPTION_GROUPING_TRACE_COLUMNS)
     if frame.empty:
         return frame
-    frame["_family_role_sort"] = frame["family_role"].map(lambda value: 0 if cell_text(value) == "representative" else 1)
     frame["_item_similarity_sort"] = pd.to_numeric(frame["item_query_similarity最大值"], errors="coerce").fillna(-1)
     frame = frame.sort_values(
-        ["display_id", "practice_option_id", "_family_role_sort", "_item_similarity_sort"],
+        ["display_id", "practice_option_id", "family_id", "_item_similarity_sort"],
         ascending=[True, True, True, False],
-    ).drop(columns=["_family_role_sort", "_item_similarity_sort"])
+    ).drop(columns=["_item_similarity_sort"])
     return frame[DISPLAY_OPTION_GROUPING_TRACE_COLUMNS]
 
 
@@ -1966,24 +1919,32 @@ def generate_display_option_grouping(
     family_count = sum(len(item.get("candidate_families") or []) for item in records)
     max_tokens = min(16384, max(4096, 4096 + family_count * 192 + len(records) * 256))
     response = None
+    fallback = False
+    error_message = ""
     if multi_family_displays.empty:
         grouped_displays = pd.DataFrame()
     else:
-        response = request_llm_json_with_usage(
-            prompt,
-            max_tokens=max_tokens,
-            system_prompt=(
-                "你只输出一个 JSON object，顶层必须且只能包含 display_results 数组；"
-                "每个输入 candidate display 必须在数组中恰好出现一次。"
-                "不输出解释、Markdown 或思考过程。"
-            ),
-        )
-        grouped_displays, _grouped_meta = parse_display_option_grouping_result(
-            response.content,
-            multi_family_displays,
-            display_group_families,
-            warnings,
-        )
+        try:
+            response = request_llm_json_with_usage(
+                prompt, max_tokens=max_tokens,
+                system_prompt="只输出顶层为 display_results 的 JSON object，不输出解释。",
+            )
+            grouped_displays, _grouped_meta = parse_display_option_grouping_result(
+                response.content, multi_family_displays, display_group_families, warnings,
+            )
+        except (RuntimeError, ValueError) as exc:
+            fallback = True
+            error_message = str(exc)
+            append_warning(warnings, "display_option_grouping_fallback_single_family_options")
+            fallback_result = {"display_results": [
+                {"display_id": cell_text(row.get("display_id")), "groups": [[family_id] for family_id in sorted(
+                    family_ids_by_display[cell_text(row.get("display_id"))]
+                )]}
+                for _index, row in multi_family_displays.iterrows()
+            ]}
+            grouped_displays, _grouped_meta = parse_display_option_grouping_result(
+                fallback_result, multi_family_displays, display_group_families, warnings,
+            )
 
     family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
     grouped_map = {cell_text(row.get("display_id")): row for _index, row in grouped_displays.iterrows()}
@@ -1997,12 +1958,6 @@ def generate_display_option_grouping(
         if len(family_ids) == 1:
             family_id = family_ids[0]
             family = family_map.get(family_id, pd.Series(dtype=object))
-            description = truncate_text(
-                normalize_display_description(family.get("representative_project_description"))
-                or cell_text(family.get("representative_cost_item_name"))
-                or cell_text(display.get("display_name")),
-                120,
-            )
             row = {
                 "display_id": display_id,
                 "display_name": cell_text(display.get("display_name")),
@@ -2011,8 +1966,6 @@ def generate_display_option_grouping(
                 "practice_options": [
                     {
                         "practice_option_id": f"{display_id}-O01",
-                        "representative_family_id": family_id,
-                        "practice_description": description,
                         "sample_count": int(numeric_or_none(family.get("本次召回样本数")) or 0),
                         "family_ids": [family_id],
                     }
@@ -2039,7 +1992,8 @@ def generate_display_option_grouping(
     trace = trace_row(
         "display_option_grouping",
         "将全部 candidate display 内的 family 划分为独立价格统计口径的 practice options",
-        True,
+        not fallback,
+        error=error_message,
         prompt=prompt,
         max_tokens=max_tokens,
         input_summary=json_text(
@@ -2054,7 +2008,7 @@ def generate_display_option_grouping(
         usage=response.usage if response is not None else None,
         raw_response=getattr(response, "raw_content", "") if response is not None else "",
     )
-    return displays_with_options, True, False, "", prompt, trace, meta, trace_frame
+    return displays_with_options, not fallback, fallback, error_message, prompt, trace, meta, trace_frame
 
 
 def normalized_unit(value: Any) -> str:
@@ -2109,6 +2063,125 @@ def display_option_maps(
             if isinstance(option, dict):
                 option_map[(display_id, cell_text(option.get("practice_option_id")))] = option
     return display_map, option_map
+
+
+def family_payload(family_id: str, family_map: dict[str, pd.Series]) -> dict[str, Any]:
+    row = family_map.get(family_id, pd.Series(dtype=object))
+    return {
+        "family_id": family_id,
+        "cost_item_name": cell_text(row.get("representative_cost_item_name")),
+        "project_description": cell_text(row.get("representative_project_description")),
+        "unit": cell_text(row.get("unit_normalized")) or cell_text(row.get("unit")),
+        "normalized_signature": cell_text(row.get("normalized_signature")),
+    }
+
+
+def choose_representative_family(
+    option: dict[str, Any], original_family_id: str, family_map: dict[str, pd.Series]
+) -> str:
+    family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
+    if original_family_id in family_ids:
+        return original_family_id
+    ranked = sorted(
+        family_ids,
+        key=lambda family_id: (
+            -int(numeric_or_none(family_map.get(family_id, pd.Series(dtype=object)).get("本次召回样本数")) or 0),
+            0 if cell_text(family_map.get(family_id, pd.Series(dtype=object)).get("representative_project_description")) else 1,
+            family_id,
+        ),
+    )
+    if not ranked:
+        raise ValueError("selected option 不得缺少 family")
+    return ranked[0]
+
+
+def select_final_options(
+    raw_text: str,
+    plan_items: pd.DataFrame,
+    sample_lookup: dict[str, dict[str, Any]],
+    displays_with_options: pd.DataFrame,
+    candidate_families: pd.DataFrame,
+    warnings: list[str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
+    display_map, option_map = display_option_maps(displays_with_options)
+    family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
+    selected_rows: list[dict[str, Any]] = []
+    trace_rows: list[dict[str, Any]] = []
+    llm_traces: list[dict[str, Any]] = []
+    for _index, item in plan_items.iterrows():
+        position = int(item["item_position"])
+        sample = sample_lookup.get(cell_text(item.get("stable_sample_id")))
+        if sample is None:
+            raise ValueError(f"最终清单无法回查证据: item_position={position}")
+        display_id = cell_text(sample.get("display_id"))
+        original_family_id = cell_text(sample.get("family_id"))
+        original_option_id = cell_text(sample.get("practice_option_id"))
+        display = display_map.get(display_id)
+        options = display.get("practice_options") if display is not None and isinstance(display.get("practice_options"), list) else []
+        selected_option_id = original_option_id
+        prompt = ""
+        response = None
+        error_message = ""
+        if len(options) > 1:
+            payload = {
+                "raw_query": raw_text,
+                "display_id": display_id,
+                "original_option_id": original_option_id,
+                "original_family": family_payload(original_family_id, family_map),
+                "options": [{
+                    "option_id": cell_text(option.get("practice_option_id")),
+                    "families": [family_payload(cell_text(fid), family_map) for fid in option.get("family_ids", [])],
+                } for option in options],
+            }
+            prompt = (
+                "从同一 Display 的现有 Option 中选择一个。用户明确参数时精确匹配；"
+                "用户未说明特殊参数且存在明确通用 Option 时可替换；不确定时保留 original_option_id。"
+                "不得按价格、样本数或文字长度选择。只输出 {\"selected_option_id\":\"...\"}\n输入："
+                + json_text(payload)
+            )
+            try:
+                response = request_llm_json_with_usage(
+                    prompt, max_tokens=128,
+                    system_prompt="只输出 selected_option_id 单字段 JSON object。",
+                )
+                result = response.content
+                allowed_ids = {cell_text(option.get("practice_option_id")) for option in options}
+                if not isinstance(result, dict) or set(result) != {"selected_option_id"}:
+                    raise ValueError("option selection 只允许 selected_option_id")
+                candidate = cell_text(result.get("selected_option_id"))
+                if candidate not in allowed_ids:
+                    raise ValueError("option selection 返回非候选 Option ID")
+                selected_option_id = candidate
+            except (RuntimeError, ValueError) as exc:
+                error_message = str(exc)
+                append_warning(warnings, f"option_selection_fallback_original:{position}")
+            llm_traces.append(trace_row(
+                "option_selection", f"为最终清单 {position} 选择现有 Option", not error_message,
+                error=error_message, prompt=prompt, max_tokens=128,
+                usage=response.usage if response is not None else None,
+                raw_response=getattr(response, "raw_content", "") if response is not None else "",
+            ))
+        selected_option = option_map.get((display_id, selected_option_id))
+        if selected_option is None:
+            raise ValueError(f"最终 Option 回查失败: {display_id}/{selected_option_id}")
+        representative_family_id = choose_representative_family(selected_option, original_family_id, family_map)
+        representative = family_payload(representative_family_id, family_map)
+        selected_rows.append({
+            **item.to_dict(), "display_id": display_id,
+            "original_option_id": original_option_id, "selected_option_id": selected_option_id,
+            "original_family_id": original_family_id, "representative_family_id": representative_family_id,
+            "cost_item_name": representative["cost_item_name"],
+            "project_description": representative["project_description"], "unit": representative["unit"],
+            "normalized_signature": representative["normalized_signature"],
+        })
+        trace_rows.append({
+            "final_item_position": position, "display_id": display_id,
+            "original_option_id": original_option_id, "selected_option_id": selected_option_id,
+            "original_family_id": original_family_id, "representative_family_id": representative_family_id,
+            "candidate_option_count": len(options), "whether_replaced": selected_option_id != original_option_id,
+            "selection_reason": "",
+        })
+    return pd.DataFrame(selected_rows), pd.DataFrame(trace_rows, columns=OPTION_SELECTION_TRACE_COLUMNS), llm_traces
 
 
 def validate_quantity(value: Any) -> dict[str, Any]:
@@ -2223,8 +2296,11 @@ def build_scenario_from_plan_items(
                 project_package_id=project_package_id,
                 stable_sample_id=stable_sample_id,
                 source_ref=cell_text(sample.get("source_ref")),
-                display_id=cell_text(sample.get("display_id")),
-                practice_option_id=cell_text(sample.get("practice_option_id")),
+                display_id=cell_text(row.get("display_id")) or cell_text(sample.get("display_id")),
+                practice_option_id=cell_text(row.get("selected_option_id")) or cell_text(sample.get("practice_option_id")),
+                original_option_id=cell_text(row.get("original_option_id")) or cell_text(sample.get("practice_option_id")),
+                original_family_id=cell_text(row.get("original_family_id")) or cell_text(sample.get("family_id")),
+                representative_family_id=cell_text(row.get("representative_family_id")) or cell_text(sample.get("family_id")),
                 selection_reason="",
                 quantity=quantity,
                 quantity_reason=quantity_reason,
@@ -2342,7 +2418,7 @@ def build_final_explanation_prompt(
         selected_project_name.get("project_name_text")
     )
     item_columns = [
-        "清单名称", "选用工艺", "单位",
+        "清单名称", "项目特征", "单位",
         "工程量预估", "工程量依据", "综合单价最低值", "综合单价中位数", "综合单价最高值",
         "合价最低值", "合价中位数", "合价最高值", "价格证据样本数",
     ]
@@ -2390,6 +2466,9 @@ def parse_final_explanation_result(result: dict[str, Any], scenario: EstimateSce
             source_ref=item.source_ref,
             display_id=item.display_id,
             practice_option_id=item.practice_option_id,
+            original_option_id=item.original_option_id,
+            original_family_id=item.original_family_id,
+            representative_family_id=item.representative_family_id,
             selection_reason=explanations[position],
             quantity=item.quantity,
             quantity_reason=item.quantity_reason,
@@ -2594,6 +2673,7 @@ def build_scenario_outputs(
     evidence_items: pd.DataFrame,
 ) -> pd.DataFrame:
     display_map, option_map = display_option_maps(displays_with_options)
+    family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
     scenario_rows: list[dict[str, Any]] = []
     for scenario in scenarios:
         for item in scenario.items:
@@ -2601,12 +2681,9 @@ def build_scenario_outputs(
             option = option_map.get((item.display_id, item.practice_option_id))
             if display_row is None or option is None:
                 raise ValueError(f"最终清单 display/option 回查失败: {item.stable_sample_id}")
-            practice_options = display_row.get("practice_options") if isinstance(display_row.get("practice_options"), list) else []
-            other_options = [
-                cell_text(other.get("practice_description"))
-                for other in practice_options
-                if isinstance(other, dict) and cell_text(other.get("practice_option_id")) != item.practice_option_id
-            ]
+            representative = family_map.get(item.representative_family_id)
+            if representative is None:
+                raise ValueError(f"代表 Family 回查失败: {item.representative_family_id}")
             price_stats = price_stats_for_option(option, candidate_families, evidence_items)
             validate_price_stats(price_stats, item.stable_sample_id, item.practice_option_id)
             amount_low, amount_mid, amount_high = quantity_amounts(item.quantity, price_stats)
@@ -2620,10 +2697,9 @@ def build_scenario_outputs(
                     "stable_sample_id": item.stable_sample_id,
                     "source_ref": item.source_ref,
                     "display_id": item.display_id,
-                    "清单名称": cell_text(display_row.get("display_name")),
-                    "单位": cell_text(display_row.get("unit")),
-                    "选用工艺": cell_text(option.get("practice_description")),
-                    "其他可选工艺": "；".join([text for text in other_options if text]),
+                    "清单名称": cell_text(representative.get("representative_cost_item_name")),
+                    "项目特征": cell_text(representative.get("representative_project_description")),
+                    "单位": cell_text(representative.get("unit_normalized")) or cell_text(representative.get("unit")),
                     "项目说明": item.selection_reason,
                     "工程量预估": quantity_display(item.quantity),
                     "工程量依据": item.quantity_reason,
@@ -2642,6 +2718,9 @@ def build_scenario_outputs(
                     "价格证据样本数": price_stats.get("evidence_count"),
                     "来源样本": cell_text(price_stats.get("source_refs")),
                     "practice_option_id": item.practice_option_id,
+                    "original_option_id": item.original_option_id,
+                    "original_family_id": item.original_family_id,
+                    "representative_family_id": item.representative_family_id,
                     "价格证据family": ",".join(family_ids),
                 }
             )
@@ -2811,7 +2890,7 @@ def short_description(value: Any, limit: int = 28) -> str:
 
 def display_item_label(row: pd.Series) -> str:
     name = cell_text(row.get("清单名称")) or cell_text(row.get("项目名称")) or cell_text(row.get("清单项名称"))
-    description = short_description(row.get("项目特征") or row.get("选用工艺") or row.get("项目特征/施工工艺"))
+    description = short_description(row.get("项目特征"))
     if name and description:
         return f"{name}（{description}）"
     return name or description
@@ -3004,6 +3083,9 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
             writer,
             sheet_name="display_option_grouping_trace",
             index=False,
+        )
+        display_frame(result.option_selection_trace, display).to_excel(
+            writer, sheet_name="option_selection_trace", index=False,
         )
         display_frame(result.matched_project_packages, display).to_excel(
             writer,
@@ -3221,6 +3303,9 @@ def run_query(
         scenario_count=1,
         scenario_item_count=len(plan_items),
     )
+    plan_items, option_selection_trace_frame, option_selection_llm_traces = select_final_options(
+        raw_text, plan_items, sample_lookup, displays_with_options, candidate_families, warnings
+    )
     scenario, quantity_prompt, quantity_trace = generate_quantity_determination(
         raw_text, selected_project_package_id, plan_items, sample_lookup
     )
@@ -3309,6 +3394,7 @@ def run_query(
             rewrite_trace,
             display_option_grouping_trace,
             range_selection_trace,
+            *option_selection_llm_traces,
             quantity_trace,
             final_explanation_trace,
         ],
@@ -3325,6 +3411,7 @@ def run_query(
         package_evidence_weights=package_evidence_weights,
         display_group_families=display_group_families,
         display_option_grouping_trace=display_option_grouping_trace_frame,
+        option_selection_trace=option_selection_trace_frame,
         matched_project_examples=matched_project_examples_output,
         evidence_items=evidence_items,
         parse_info=parse_info,

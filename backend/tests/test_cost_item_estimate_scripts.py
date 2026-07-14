@@ -1125,18 +1125,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "display_results": [
                     {
                         "display_id": "D001",
-                        "practice_options": [
-                            {
-                                "representative_family_id": "F004",
-                                "practice_description": "3mm SBS卷材防水",
-                                "family_ids": ["F004", "F007"],
-                            },
-                            {
-                                "representative_family_id": "F010",
-                                "practice_description": "聚氨酯涂膜防水",
-                                "family_ids": ["F010"],
-                            },
-                        ],
+                        "groups": [["F007", "F004"], ["F010"]],
                     }
                 ]
             },
@@ -1148,6 +1137,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(displays_with_options.loc[0, "practice_options"][0]["practice_option_id"], "D001-O01")
         self.assertEqual(displays_with_options.loc[0, "practice_options"][0]["sample_count"], 5)
         self.assertEqual(displays_with_options.loc[0, "practice_options"][1]["practice_option_id"], "D001-O02")
+        self.assertNotIn("practice_description", displays_with_options.loc[0, "practice_options"][0])
+        self.assertNotIn("representative_family_id", displays_with_options.loc[0, "practice_options"][0])
         self.assertNotIn("selected_family_id", displays_with_options.columns)
         self.assertNotIn("default_practice_option_id", displays_with_options.columns)
         self.assertNotIn("default_practice", displays_with_options.columns)
@@ -1171,10 +1162,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "display_results": [
                     {
                         "display_id": "D001",
-                        "practice_options": [
-                            {"representative_family_id": "F001", "practice_description": "1.5mm涂膜", "family_ids": ["F001", "F002"]},
-                            {"representative_family_id": "F003", "practice_description": "2.0mm涂膜", "family_ids": ["F003", "F004"]},
-                        ],
+                        "groups": [["F003", "F004"], ["F002", "F001"]],
                     }
                 ]
             },
@@ -1200,13 +1188,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "display_results": [
                 {
                     "display_id": "D001",
-                    "practice_options": [
-                        {
-                            "representative_family_id": "F001",
-                            "practice_description": "3mm SBS",
-                            "family_ids": ["F001", "F002"],
-                        }
-                    ],
+                    "groups": [["F001", "F002"]],
                 }
             ]
         }
@@ -1230,13 +1212,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "display_results": [
                     {
                         "display_id": "D001",
-                        "practice_options": [
-                            {
-                                "representative_family_id": "F001",
-                                "practice_description": "3mm SBS",
-                                "family_ids": ["F001"],
-                            }
-                        ],
+                        "groups": [["F001"]],
                     }
                 ],
             },
@@ -1247,13 +1223,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "display_results": [
                     {
                         "display_id": "D001",
-                        "practice_options": [
-                            {
-                                "representative_family_id": "F001",
-                                "practice_description": "3mm SBS",
-                                "family_ids": ["F001", "F001", "F002"],
-                            }
-                        ],
+                        "groups": [["F001", "F001", "F002"]],
                     }
                 ],
             },
@@ -1264,13 +1234,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "display_results": [
                     {
                         "display_id": "D001",
-                        "practice_options": [
-                            {
-                                "representative_family_id": "F001",
-                                "practice_description": "3mm SBS",
-                                "family_ids": ["F001", "BAD"],
-                            }
-                        ],
+                        "groups": [["F001", "BAD"]],
                     }
                 ],
             },
@@ -1281,19 +1245,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"display_results": [{**valid_result["display_results"][0], legacy_field: "legacy"}]},
                 "display_result 只允许包含",
             )
+        assert_invalid({"display_results": [{"display_id": "D001", "groups": []}]}, "groups 必须为非空")
+        assert_invalid({"display_results": [{"display_id": "D001", "groups": [[]]}]}, "group 必须为非空")
         assert_invalid(
-            {"display_results": [{"display_id": "D001", "practice_options": [{**valid_result["display_results"][0]["practice_options"][0], "group_reason": "legacy"}]}]},
-            "practice_option 只允许包含",
-        )
-        assert_invalid(
-            {"display_results": [{"display_id": "D001", "practice_options": [{"representative_family_id": "BAD", "practice_description": "3mm SBS", "family_ids": ["F001", "F002"]}]}]},
-            "representative_family_id 必须位于",
-        )
-        assert_invalid(
-            {"display_results": [{"display_id": "D001", "practice_options": [
-                {"representative_family_id": "F001", "practice_description": "做法一", "family_ids": ["F001", "F002"]},
-                {"representative_family_id": "F002", "practice_description": "做法二", "family_ids": ["F002", "F001"]},
-            ]}]},
+            {"display_results": [{"display_id": "D001", "groups": [["F001", "F002"], ["F002", "F001"]]}]},
             "完全相同的 family_ids 分组",
         )
 
@@ -1312,13 +1267,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "display_results": [
                         {
                             "display_id": "D001",
-                            "practice_options": [
-                                {
-                                    "representative_family_id": "F001",
-                                    "practice_description": "屋面防水",
-                                    "family_ids": ["F001", "F002"],
-                                }
-                            ],
+                            "groups": [["F001", "F002"]],
                         }
                     ]
                 },
@@ -1354,10 +1303,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 "display_results": [
                     {
                         "display_id": "D002",
-                        "practice_options": [
-                            {"representative_family_id": "F002", "practice_description": "1.5mm涂膜", "family_ids": ["F002"]},
-                            {"representative_family_id": "F003", "practice_description": "2.0mm涂膜", "family_ids": ["F003"]},
-                        ],
+                        "groups": [["F002"], ["F003"]],
                     }
                 ]
             },
@@ -1595,6 +1541,45 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(scenario.items[0].practice_option_id, "D1-O2")
         self.assertEqual(scenario.items[0].selection_reason, "")
 
+    def test_option_selection_single_option_passthrough_and_empty_description(self):
+        plan = pd.DataFrame([{"item_position": 0, "stable_sample_id": "sid"}])
+        lookup = {"sid": {"family_id": "F1", "display_id": "D1", "practice_option_id": "D1-O01"}}
+        displays = pd.DataFrame([{"display_id": "D1", "practice_options": [{"practice_option_id": "D1-O01", "family_ids": ["F1"]}]}])
+        families = pd.DataFrame([{
+            "family_id": "F1", "representative_cost_item_name": "电话主机",
+            "representative_project_description": "", "unit": "台", "normalized_signature": "电话主机||台",
+            "本次召回样本数": 1,
+        }])
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage") as llm_mock:
+            selected, trace, llm_traces = query_estimate_llm.select_final_options(
+                "消防主机", plan, lookup, displays, families, []
+            )
+        llm_mock.assert_not_called()
+        self.assertEqual(selected.loc[0, "project_description"], "")
+        self.assertEqual(selected.loc[0, "representative_family_id"], "F1")
+        self.assertEqual(trace.loc[0, "candidate_option_count"], 1)
+        self.assertEqual(llm_traces, [])
+
+    def test_option_selection_replacement_uses_deterministic_real_family(self):
+        plan = pd.DataFrame([{"item_position": 0, "stable_sample_id": "sid"}])
+        lookup = {"sid": {"family_id": "F1", "display_id": "D1", "practice_option_id": "D1-O01"}}
+        displays = pd.DataFrame([{"display_id": "D1", "practice_options": [
+            {"practice_option_id": "D1-O01", "family_ids": ["F1"]},
+            {"practice_option_id": "D1-O02", "family_ids": ["F2", "F3"]},
+        ]}])
+        families = pd.DataFrame([
+            {"family_id": "F1", "representative_cost_item_name": "屋面防水", "representative_project_description": "4mm SBS", "unit": "m²", "本次召回样本数": 9},
+            {"family_id": "F2", "representative_cost_item_name": "屋面防水", "representative_project_description": "", "unit": "m²", "本次召回样本数": 3},
+            {"family_id": "F3", "representative_cost_item_name": "屋面防水", "representative_project_description": "3mm SBS", "unit": "m²", "本次召回样本数": 3},
+        ])
+        response = types.SimpleNamespace(content={"selected_option_id": "D1-O02"}, usage={}, raw_content="{}")
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response):
+            selected, trace, _llm_traces = query_estimate_llm.select_final_options(
+                "使用3mm SBS", plan, lookup, displays, families, []
+            )
+        self.assertEqual(selected.loc[0, "representative_family_id"], "F3")
+        self.assertTrue(trace.loc[0, "whether_replaced"])
+
     def test_query_parse_args_explanations_default_false_and_flag_true(self):
         with patch.object(sys, "argv", ["query_cost_estimate_llm.py", "--text", "test"]):
             self.assertFalse(query_estimate_llm.parse_args().with_explanations)
@@ -1708,6 +1693,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             package_evidence_weights=pd.DataFrame(columns=query_estimate_llm.PACKAGE_EVIDENCE_WEIGHT_COLUMNS),
             display_group_families=pd.DataFrame(columns=query_estimate_llm.DISPLAY_GROUP_FAMILY_COLUMNS),
             display_option_grouping_trace=pd.DataFrame(columns=query_estimate_llm.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS),
+            option_selection_trace=pd.DataFrame(columns=query_estimate_llm.OPTION_SELECTION_TRACE_COLUMNS),
             matched_project_examples=pd.DataFrame(columns=query_estimate_llm.MATCHED_PROJECT_EXAMPLE_COLUMNS),
             evidence_items=pd.DataFrame(columns=query_estimate_llm.EVIDENCE_ITEM_COLUMNS),
             parse_info=pd.DataFrame([{"字段": "final_explanation_status", "值": "failed"}]),
@@ -1731,11 +1717,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             scenario_headers,
             [
                 "方案顺序", "方案编号", "方案名称", "project_package_id", "stable_sample_id", "source_ref",
-                "display_id", "清单名称", "选用工艺", "其他可选工艺", "单位", "项目说明", "工程量预估",
+                "display_id", "清单名称", "项目特征", "单位", "项目说明", "工程量预估",
                 "工程量依据", "合价最低值", "合价中位数", "合价最高值", "综合单价最低值", "综合单价中位数",
                 "综合单价最高值", "其中包含人工费单价最低值", "其中包含人工费单价中位数",
                 "其中包含人工费单价最高值", "其中包含机械费单价最低值", "其中包含机械费单价中位数",
-                "其中包含机械费单价最高值", "价格证据样本数", "来源样本", "practice_option_id", "价格证据family",
+                "其中包含机械费单价最高值", "价格证据样本数", "来源样本", "practice_option_id",
+                "original_option_id", "original_family_id", "representative_family_id", "价格证据family",
             ],
         )
         self.assertEqual(trace_stages, ["query_rewrite_for_embedding", "display_option_grouping", "range_selection", "quantity_determination", "final_explanation"])
