@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from build_cost_item_embedding_index import build_fine_signature, normalize_fine_signature_text
+from cost_item_signature import build_normalized_signature, normalize_project_description
 
 
 DEFAULT_CASES = [
@@ -24,27 +24,27 @@ DEFAULT_CASES = [
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="调试 fine_signature 归一化结果")
+    parser = argparse.ArgumentParser(description="调试 normalized_signature 归一化结果")
     parser.add_argument("--text", default="", help="待归一化的项目特征文本；不传则输出内置案例")
-    parser.add_argument("--cost-item-name", default="屋面卷材防水", help="用于生成 fine_signature 的清单项名称")
-    parser.add_argument("--unit", default="m²", help="用于生成 fine_signature 的单位")
+    parser.add_argument("--cost-item-name", default="屋面卷材防水", help="用于生成 normalized_signature 的清单项名称")
+    parser.add_argument("--unit", default="m²", help="用于生成 normalized_signature 的单位")
     return parser.parse_args()
 
 
-def fine_signature_for(cost_item_name: str, project_description: str, unit: str) -> str:
+def normalized_signature_for(cost_item_name: str, project_description: str, unit: str) -> str:
     row: dict[str, Any] = {
         "cost_item_name": cost_item_name,
         "project_description": project_description,
         "unit": unit,
         "unit_normalized": unit,
     }
-    return build_fine_signature(row)  # type: ignore[arg-type]
+    return build_normalized_signature(row)
 
 
 def print_case(text: str, cost_item_name: str, unit: str) -> None:
     print(f"原文: {text}")
-    print(f"归一化: {normalize_fine_signature_text(text)}")
-    print(f"fine_signature: {fine_signature_for(cost_item_name, text, unit)}")
+    print(f"归一化: {normalize_project_description(text)}")
+    print(f"normalized_signature: {normalized_signature_for(cost_item_name, text, unit)}")
 
 
 def main() -> None:

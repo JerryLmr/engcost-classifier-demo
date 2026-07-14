@@ -316,7 +316,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         samples.insert(0, "sample_index", range(len(samples)))
         samples["project_package_id"] = samples["project_key"]
         samples["item_retrieval_text"] = samples.apply(build_index.build_item_retrieval_text, axis=1)
-        samples["fine_signature"] = samples.apply(build_index.build_fine_signature, axis=1)
+        samples["normalized_signature"] = samples.apply(build_index.build_normalized_signature, axis=1)
         return samples
 
     def test_normalize_embeddings_handles_zero_vector(self):
@@ -342,19 +342,19 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
         self.assertNotIn("一级分类", row["item_retrieval_text"])
         self.assertNotIn("工程语义", row["item_retrieval_text"])
-        self.assertEqual(row["fine_signature"], "屋面卷材防水 | 3.0mm弹性体改性沥青防水卷材 | m²")
+        self.assertEqual(row["normalized_signature"], "屋面卷材防水 | 3mm厚sbs防水卷材 | m²")
 
-    def test_fine_signature_normalizes_spacing_and_units(self):
-        normalize = build_index.normalize_fine_signature_text
+    def test_normalized_signature_normalizes_spacing_and_units(self):
+        normalize = build_index.normalize_project_description
 
         self.assertEqual(normalize("外墙脚手架 高度13m以内"), normalize("外墙脚手架 高度 13m 以内"))
         self.assertEqual(normalize("外墙脚手架 高度20m以内"), normalize("外墙脚手架 高度 20m 以内"))
         self.assertNotEqual(normalize("外墙脚手架 高度13m以内"), normalize("外墙脚手架 高度20m以内"))
-        self.assertEqual(normalize("㎡"), normalize("m2"))
-        self.assertEqual(normalize("平方米"), normalize("m²"))
+        self.assertEqual(build_index.normalize_unit("㎡"), build_index.normalize_unit("m2"))
+        self.assertEqual(build_index.normalize_unit("平方米"), build_index.normalize_unit("m²"))
 
-    def test_fine_signature_normalizes_waterproof_thickness(self):
-        normalize = build_index.normalize_fine_signature_text
+    def test_normalized_signature_normalizes_waterproof_thickness(self):
+        normalize = build_index.normalize_project_description
 
         self.assertEqual(normalize("立面聚合物水泥防水涂料 ~1.2mm厚"), normalize("立面聚合物水泥防水涂料 ~1.2mm 厚"))
         self.assertEqual(normalize("平面聚氨酯防水涂料 ~1.5mm厚"), normalize("平面聚氨酯防水涂料~1.5mm 厚"))
@@ -364,9 +364,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertNotEqual(normalize("自粘卷材"), normalize("热熔卷材"))
         self.assertNotEqual(normalize("一层防水"), normalize("两层防水"))
 
-    def test_fine_signature_normalizes_sbs_waterproof_aliases(self):
-        normalize = build_index.normalize_fine_signature_text
-        expected = "3.0mm弹性体改性沥青防水卷材"
+    def test_normalized_signature_normalizes_sbs_waterproof_aliases(self):
+        normalize = build_index.normalize_project_description
+        expected = "3mm厚sbs防水卷材"
 
         equivalent_values = [
             "1.3.0mm厚弹性体改性沥青防水卷材",
@@ -385,8 +385,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(normalize(value), expected)
 
-    def test_fine_signature_keeps_price_sensitive_waterproof_differences(self):
-        normalize = build_index.normalize_fine_signature_text
+    def test_normalized_signature_keeps_price_sensitive_waterproof_differences(self):
+        normalize = build_index.normalize_project_description
         base = normalize("3.0mm SBS防水卷材")
 
         different_values = [
@@ -411,7 +411,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertNotEqual(normalize(value), base)
 
-    def test_build_fine_signature_normalizes_sbs_waterproof_aliases(self):
+    def test_build_normalized_signature_normalizes_sbs_waterproof_aliases(self):
         row = pd.Series(
             {
                 "cost_item_name": "屋面卷材防水",
@@ -422,23 +422,47 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
 
         self.assertEqual(
-            build_index.build_fine_signature(row),
-            "屋面卷材防水 | 3.0mm弹性体改性沥青防水卷材 | m²",
+            build_index.build_normalized_signature(row),
+            "屋面卷材防水 | 3mm厚sbs防水卷材 | m²",
         )
 
-    def test_fine_signature_normalizes_tilde_between_chinese(self):
-        normalize = build_index.normalize_fine_signature_text
+    def test_normalized_signature_removes_layout_whitespace(self):
+        normalize = build_index.normalize_project_description
+        self.assertEqual(normalize("抹灰面铲除 抹灰面 只拆除面层时"), normalize("抹灰面铲除抹灰面只拆除面层时"))
 
-        self.assertEqual(normalize("抹灰面铲除 抹灰面 只拆除面层时"), normalize("抹灰面铲除 抹灰面~只拆除面层时"))
-
-    def test_fine_signature_normalizes_thickness_order_without_merging_meaning(self):
-        normalize = build_index.normalize_fine_signature_text
+    def test_normalized_signature_normalizes_thickness_order_without_merging_meaning(self):
+        normalize = build_index.normalize_project_description
 
         self.assertEqual(normalize("厚 1.5（mm）聚氨酯防水涂料"), normalize("1.5mm厚聚氨酯防水涂料"))
         self.assertEqual(normalize("1.1.5mm厚聚氨酯防水涂料"), normalize("1.5mm聚氨酯防水涂料"))
-        self.assertEqual(normalize("m^{2}"), "m²")
-        self.assertEqual(normalize("原有面层铲除及垃圾外运"), normalize("原面层拆除及垃圾清运"))
+        self.assertEqual(build_index.normalize_unit("m^{2}"), "m²")
+        self.assertNotEqual(normalize("原有面层铲除及垃圾外运"), normalize("原面层拆除及垃圾清运"))
         self.assertNotEqual(normalize("屋面卷材防水 1.5mm厚"), normalize("墙面卷材防水 1.5mm厚"))
+
+    def test_normalized_signature_removes_glued_list_numbers_but_keeps_decimals(self):
+        normalize = build_index.normalize_project_description
+        multiline = "1.原屋面基层清理\n2.刷1.2mm厚防水涂料"
+        glued = "1.原屋面基层清理2.刷1.2mm防水涂料"
+
+        self.assertEqual(normalize(multiline), normalize(glued))
+        self.assertIn("1.2mm厚", normalize(glued))
+
+    def test_normalized_signature_normalizes_confirmed_terms_only(self):
+        normalize = build_index.normalize_project_description
+
+        self.assertEqual(
+            normalize("3.0厚弹性体改性沥青防水卷材"),
+            normalize("3mmSBS改性沥青防水卷材"),
+        )
+        self.assertEqual(normalize("3.0mm自粘性防水卷材"), normalize("3mm自粘防水卷材"))
+        self.assertEqual(normalize("单组份聚氨酯"), normalize("单组分聚氨酯"))
+        self.assertNotEqual(normalize("原屋面防水层拆除"), normalize("原有屋面防水层拆除"))
+        self.assertNotEqual(normalize("原屋面卷材铲除"), normalize("原屋面卷材拆除"))
+        self.assertNotEqual(normalize("含垃圾外运"), normalize("含垃圾清运"))
+
+    def test_normalized_signature_keeps_empty_description_slot_and_normalizes_unit(self):
+        row = {"cost_item_name": "屋面保温修复", "project_description": "", "unit": "M2"}
+        self.assertEqual(build_index.build_normalized_signature(row), "屋面保温修复 |  | m²")
 
     def test_project_packages_use_cost_item_names_summary_for_embedding(self):
         packages = build_index.build_project_packages(self.prepared_samples())
@@ -688,11 +712,11 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertNotIn("final_score", retrieved_evidence_items.columns)
         self.assertNotIn("cooccur_score", retrieved_evidence_items.columns)
 
-    def test_candidate_families_group_by_fine_signature_only(self):
+    def test_candidate_families_group_by_normalized_signature_only(self):
         candidates = self.prepared_samples().head(1).copy()
         same = candidates.iloc[0].copy()
         same["project_description"] = "3.0mm   SBS 沥青防水卷材"
-        same["fine_signature"] = build_index.build_fine_signature(same)
+        same["normalized_signature"] = build_index.build_normalized_signature(same)
         same["quantity"] = 120
         same["unit_price"] = 90
         same["total_price"] = 10800
@@ -703,7 +727,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         same["item_row_id"] = "5-1"
         different = candidates.iloc[0].copy()
         different["project_description"] = "4.0mm SBS 沥青防水卷材"
-        different["fine_signature"] = build_index.build_fine_signature(different)
+        different["normalized_signature"] = build_index.build_normalized_signature(different)
         different["quantity"] = 300
         different["unit_price"] = 120
         different["total_price"] = 36000
@@ -715,7 +739,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         candidates = pd.concat([candidates, same.to_frame().T, different.to_frame().T], ignore_index=True)
         candidates["package_query_similarity"] = [0.8, 0.7, 0.6]
         candidates["package_rank"] = [1, 2, 3]
-        candidates["item_query_similarity"] = [0.9, 0.8, 0.7]
+        candidates["item_query_similarity"] = [0.7, 0.9, 0.6]
         candidates["source_ref"] = ["batch-a::2::2-1", "batch-a::5::5-1", "batch-a::6::6-1"]
 
         families = query_estimate_llm.build_candidate_families(candidates)
@@ -724,7 +748,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(len(families), 2)
         roof3 = families[families["representative_project_description"].str.contains("3.0mm")].iloc[0]
         roof4 = families[families["representative_project_description"].str.contains("4.0mm")].iloc[0]
-        self.assertEqual(roof3["fine_signature"], build_index.build_fine_signature(candidates.iloc[0]))
+        self.assertEqual(roof3["normalized_signature"], build_index.build_normalized_signature(candidates.iloc[0]))
         self.assertEqual(roof3["本次召回样本数"], 2)
         self.assertEqual(roof3["本次召回工程包数"], 2)
         self.assertEqual(roof3["本次召回综合单价最低值"], 80.0)
@@ -735,23 +759,25 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(roof3["package_query_similarity最大值"], 0.8)
         self.assertEqual(roof3["item_query_similarity最大值"], 0.9)
         self.assertEqual(roof3["representative_project_description"], "3.0mm SBS 沥青防水卷材")
+        self.assertEqual(roof3["family_id"], "F001")
+        self.assertEqual(roof4["family_id"], "F002")
         self.assertEqual(roof4["本次召回综合单价最低值"], 120.0)
 
         evidence = query_estimate_llm.attach_family_ids_to_evidence_items(candidates, families)
-        family_by_signature = dict(zip(families["fine_signature"], families["family_id"], strict=False))
+        family_by_signature = dict(zip(families["normalized_signature"], families["family_id"], strict=False))
         self.assertEqual(len(evidence), len(candidates))
         self.assertIn("family_id", evidence.columns)
-        self.assertIn("fine_signature", evidence.columns)
+        self.assertIn("normalized_signature", evidence.columns)
         self.assertFalse(evidence["family_id"].map(query_estimate_llm.cell_text).eq("").any())
         for _index, row in evidence.iterrows():
-            self.assertEqual(row["family_id"], family_by_signature[row["fine_signature"]])
+            self.assertEqual(row["family_id"], family_by_signature[row["normalized_signature"]])
 
     def test_display_groups_group_by_display_name_and_unit_without_merging_prices(self):
         families = pd.DataFrame(
             [
                 {
                     "family_id": "F001",
-                    "fine_signature": "sig-1",
+                    "normalized_signature": "sig-1",
                     "representative_cost_item_name": "屋面卷材防水",
                     "representative_project_description": "3.0mm SBS",
                     "unit": "平方米",
@@ -763,7 +789,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 },
                 {
                     "family_id": "F002",
-                    "fine_signature": "sig-2",
+                    "normalized_signature": "sig-2",
                     "representative_cost_item_name": "屋面卷材防水",
                     "representative_project_description": "4.0mm SBS",
                     "unit": "m²",
@@ -775,7 +801,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 },
                 {
                     "family_id": "F003",
-                    "fine_signature": "sig-3",
+                    "normalized_signature": "sig-3",
                     "representative_cost_item_name": "屋面卷材防水",
                     "representative_project_description": "含基层处理",
                     "unit": "m²",
@@ -787,7 +813,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 },
                 {
                     "family_id": "F004",
-                    "fine_signature": "sig-4",
+                    "normalized_signature": "sig-4",
                     "representative_cost_item_name": "垃圾外运",
                     "representative_project_description": "建筑垃圾外运",
                     "unit": "项",

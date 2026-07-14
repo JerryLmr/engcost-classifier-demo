@@ -62,7 +62,7 @@ MATCHED_PROJECT_EXAMPLE_COLUMNS = [
 
 CANDIDATE_FAMILY_COLUMNS = [
     "family_id",
-    "fine_signature",
+    "normalized_signature",
     "representative_cost_item_name",
     "representative_project_description",
     "unit",
@@ -98,7 +98,7 @@ PACKAGE_EVIDENCE_WEIGHT_COLUMNS = [
 EVIDENCE_ITEM_COLUMNS = [
     "source_ref",
     "family_id",
-    "fine_signature",
+    "normalized_signature",
     "project_key",
     "item_row_id",
     "stable_sample_id",
@@ -147,7 +147,7 @@ DISPLAY_GROUP_FAMILY_COLUMNS = [
     "display_key",
     "display_name",
     "family_id",
-    "fine_signature",
+    "normalized_signature",
     "representative_cost_item_name",
     "representative_project_description",
     "unit",
@@ -1014,8 +1014,7 @@ def build_candidate_families(candidates: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=CANDIDATE_FAMILY_COLUMNS)
 
     rows: list[dict[str, Any]] = []
-    for fine_signature, group in candidates.groupby("fine_signature", sort=False, dropna=False):
-        group = group.sort_values(["item_query_similarity", "package_query_similarity"], ascending=[False, False])
+    for normalized_signature, group in candidates.groupby("normalized_signature", sort=False, dropna=False):
         representative = group.iloc[0]
         quantity_min, quantity_median, quantity_max = min_median_max(group, "quantity")
         unit_price_min, unit_price_median, unit_price_max = min_median_max(group, "unit_price")
@@ -1024,7 +1023,7 @@ def build_candidate_families(candidates: pd.DataFrame) -> pd.DataFrame:
         machinery_min, machinery_median, machinery_max = min_median_max(group, "machinery_unit_price")
         rows.append(
             {
-                "fine_signature": cell_text(fine_signature),
+                "normalized_signature": cell_text(normalized_signature),
                 "representative_cost_item_name": cell_text(representative.get("cost_item_name")),
                 "representative_project_description": cell_text(representative.get("project_description")),
                 "unit": cell_text(representative.get("unit")),
@@ -1053,28 +1052,52 @@ def build_candidate_families(candidates: pd.DataFrame) -> pd.DataFrame:
         )
 
     output = pd.DataFrame(rows)
-    output = output.sort_values(["item_query_similarity最大值", "本次召回样本数", "本次召回工程包数"], ascending=[False, False, False])
     output.insert(0, "family_id", [f"F{index:03d}" for index in range(1, len(output) + 1)])
     for column in CANDIDATE_FAMILY_COLUMNS:
         if column not in output.columns:
             output[column] = None
-    return output[CANDIDATE_FAMILY_COLUMNS].reset_index(drop=True)
+    output = output[CANDIDATE_FAMILY_COLUMNS].reset_index(drop=True)
+    member_counts = candidates.groupby("normalized_signature", sort=False, dropna=False).size()
+    print(f"family normalization: original_samples={len(candidates)}")
+    print("family normalization: old_signature_count=unavailable")
+    print(f"family normalization: normalized_signature_count={len(member_counts)}")
+    print(f"family normalization: family_count={len(output)}")
+    print("family normalization: normalization_merged_family_count=unavailable")
+    print(f"family normalization: multi_member_family_count={int((member_counts > 1).sum())}")
+    print(f"family normalization: max_family_members={int(member_counts.max()) if not member_counts.empty else 0}")
+    for signature in member_counts[member_counts > 1].head(20).index:
+        members = candidates[candidates["normalized_signature"].eq(signature)]
+        examples = [
+            {
+                "cost_item_name": cell_text(row.get("cost_item_name")),
+                "project_description": cell_text(row.get("project_description")),
+            }
+            for _index, row in members.head(5).iterrows()
+        ]
+        print(
+            "family normalization merge: "
+            + json.dumps(
+                {"normalized_signature": cell_text(signature), "member_count": int(len(members)), "members": examples},
+                ensure_ascii=False,
+            )
+        )
+    return output
 
 
 def attach_family_ids_to_evidence_items(candidates: pd.DataFrame, candidate_families: pd.DataFrame) -> pd.DataFrame:
     if candidates.empty:
         return pd.DataFrame(columns=EVIDENCE_ITEM_COLUMNS)
     signature_to_family_id = {
-        cell_text(row.get("fine_signature")): cell_text(row.get("family_id"))
+        cell_text(row.get("normalized_signature")): cell_text(row.get("family_id"))
         for _index, row in candidate_families.iterrows()
-        if cell_text(row.get("fine_signature"))
+        if cell_text(row.get("normalized_signature"))
     }
-    fine_signatures = candidates.get("fine_signature", pd.Series([""] * len(candidates), index=candidates.index))
+    normalized_signatures = candidates.get("normalized_signature", pd.Series([""] * len(candidates), index=candidates.index))
     output = pd.DataFrame(
         {
             "source_ref": candidates.get("source_ref", ""),
-            "family_id": fine_signatures.map(lambda value: signature_to_family_id.get(cell_text(value), "")),
-            "fine_signature": fine_signatures,
+            "family_id": normalized_signatures.map(lambda value: signature_to_family_id.get(cell_text(value), "")),
+            "normalized_signature": normalized_signatures,
             "project_key": candidates.get("project_key", ""),
             "item_row_id": candidates.get("item_row_id", ""),
             "stable_sample_id": candidates.get("stable_sample_id", ""),
@@ -1220,7 +1243,7 @@ def build_candidate_display_groups(
                     "display_key": display_key,
                     "display_name": cell_text(display_row.get("display_name")),
                     "family_id": cell_text(family.get("family_id")),
-                    "fine_signature": cell_text(family.get("fine_signature")),
+                    "normalized_signature": cell_text(family.get("normalized_signature")),
                     "representative_cost_item_name": cell_text(family.get("representative_cost_item_name")),
                     "representative_project_description": cell_text(family.get("representative_project_description")),
                     "unit": display_unit_for_family(family),

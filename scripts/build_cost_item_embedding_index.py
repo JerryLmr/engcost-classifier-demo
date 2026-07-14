@@ -3,14 +3,23 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
-import unicodedata
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from cost_item_signature import (
+    build_normalized_signature,
+    normalize_project_description,
+    normalize_unit,
+)
 
 
 CORE_REQUIRED_COLUMNS = [
@@ -140,106 +149,6 @@ def normalize_source_row_id(value: Any) -> str:
     return text
 
 
-MATERIAL_ALIASES = [
-    (r"sbs\s*弹性体改性沥青防水卷材", "弹性体改性沥青防水卷材"),
-    (r"sbs\s*改性沥青防水卷材", "弹性体改性沥青防水卷材"),
-    (r"sbs\s*沥青防水卷材", "弹性体改性沥青防水卷材"),
-    (r"sbs\s*防水卷材", "弹性体改性沥青防水卷材"),
-    (r"弹性改性沥青防水卷材", "弹性体改性沥青防水卷材"),
-]
-
-CONFIRMED_TEXT_ALIASES = [
-    (r"原有", "原"),
-    (r"铲除", "拆除"),
-    (r"垃圾外运", "垃圾清运"),
-]
-
-TEMPLATE_PREFIX_PATTERNS = [
-    r"^(?:防水)?卷材品种、规格、厚度[:：]?",
-    r"^(?:防水)?卷材品种、规格[:：]?",
-    r"^材料品种、规格[:：]?",
-    r"^卷材品种[:：]?",
-]
-
-
-def normalize_fine_signature_line_prefixes(text: str) -> str:
-    lines: list[str] = []
-    for line in text.split("\n"):
-        line = re.sub(r"^\s*(?:(?:\d+、|\d+\.(?!\d)|\(\d+\)|（\d+）)\s*)", "", line)
-        line = re.sub(r"^\s*\d+\.(?=\d+\.\d+\s*(?:mm|毫米|厚))", "", line)
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def strip_fine_signature_template_prefixes(text: str) -> str:
-    lines: list[str] = []
-    for line in text.split("\n"):
-        stripped = line.lstrip()
-        leading_space = line[: len(line) - len(stripped)]
-        for pattern in TEMPLATE_PREFIX_PATTERNS:
-            stripped = re.sub(pattern, "", stripped)
-        lines.append(f"{leading_space}{stripped}")
-    return "\n".join(lines)
-
-
-def normalize_fine_signature_text(value: Any) -> str:
-    text = safe_text(value)
-    if not text:
-        return ""
-
-    text = unicodedata.normalize("NFKC", text).lower()
-
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = normalize_fine_signature_line_prefixes(text)
-
-    text = text.replace("㎡", "m²")
-    text = re.sub(r"(?<![a-z0-9])m\^\{2\}(?![a-z0-9])", "m²", text)
-    text = re.sub(r"(?<![a-z0-9])m\s*2(?![a-z0-9])", "m²", text)
-    text = re.sub(r"(?<![a-z0-9])m\^2(?![a-z0-9])", "m²", text)
-    text = text.replace("平方米", "m²")
-    text = text.replace("平方", "m²")
-    text = re.sub(r"(\d+(?:\.\d+)?)\s*(?:毫米|mm)(?![a-z0-9])", r"\1mm", text)
-
-    text = re.sub(r"厚\s*(\d+(?:\.\d+)?)\s*\(?\s*mm\s*\)?", r"\1mm", text)
-    text = re.sub(r"(\d+(?:\.\d+)?)\s*mm\s*厚", r"\1mm", text)
-    text = re.sub(r"厚\s*(\d+(?:\.\d+)?)(?![a-z0-9])", r"\1mm", text)
-    text = re.sub(r"(\d+(?:\.\d+)?)\s*厚(?!度)", r"\1mm", text)
-
-    text = text.replace("（", "(").replace("）", ")")
-    text = text.replace("，", ",").replace("。", ".")
-    text = text.replace("；", ";").replace("：", ":")
-    text = text.replace("｜", "|")
-    text = re.sub(r"[－—–−]", "-", text)
-    text = re.sub(r"[～〜∼﹋～]", "~", text)
-
-    text = strip_fine_signature_template_prefixes(text)
-    text = normalize_fine_signature_line_prefixes(text)
-    for source, target in MATERIAL_ALIASES:
-        text = re.sub(source, target, text)
-    for source, target in CONFIRMED_TEXT_ALIASES:
-        text = re.sub(source, target, text)
-
-    text = re.sub(r"\s+", " ", text).strip()
-
-    text = re.sub(r"(?<![a-z0-9])m\s*²(?![a-z0-9])", "m²", text)
-    text = re.sub(r"(\d+(?:\.\d+)?)\s*m(?![a-z0-9²³])", r"\1m", text)
-
-    text = re.sub(r"\s*~\s*(?=\d)", "~", text)
-    text = re.sub(r"(?<=[\u4e00-\u9fff])~(?=[\u4e00-\u9fff])", "", text)
-
-    text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[a-z0-9])", "", text)
-    text = re.sub(r"(?<=[a-z0-9])\s+(?=[\u4e00-\u9fff])", "", text)
-    text = re.sub(r"(?<=\d)\s+(?=[a-z㎡²³])", "", text)
-    text = re.sub(r"(?<=[a-z㎡²³])\s+(?=\d)", "", text)
-    text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
-
-    text = re.sub(r"\s*([|,;:/()~-])\s*", r"\1", text)
-    text = re.sub(r"([|,;:/()~-])\1+", r"\1", text)
-    text = re.sub(r"\s+", " ", text)
-
-    return text.strip()
-
-
 def first_non_empty(values: pd.Series) -> str:
     for value in values.tolist():
         text = safe_text(value)
@@ -321,17 +230,6 @@ def build_item_retrieval_text(row: pd.Series) -> str:
     return "\n".join(lines)
 
 
-def build_fine_signature(row: pd.Series) -> str:
-    unit = safe_text(row.get("unit_normalized")) or safe_text(row.get("unit"))
-    return " | ".join(
-        [
-            normalize_fine_signature_text(row.get("cost_item_name")),
-            normalize_fine_signature_text(row.get("project_description")),
-            normalize_fine_signature_text(unit),
-        ]
-    )
-
-
 def load_samples(samples_path: Path) -> pd.DataFrame:
     if not samples_path.exists():
         raise ValueError(f"样本文件不存在: {samples_path}")
@@ -351,7 +249,7 @@ def load_samples(samples_path: Path) -> pd.DataFrame:
     samples.insert(0, "sample_index", range(len(samples)))
     samples["project_package_id"] = samples["project_key"].map(safe_text)
     samples["item_retrieval_text"] = samples.apply(build_item_retrieval_text, axis=1)
-    samples["fine_signature"] = samples.apply(build_fine_signature, axis=1)
+    samples["normalized_signature"] = samples.apply(build_normalized_signature, axis=1)
     return samples
 
 
@@ -499,7 +397,7 @@ def build_index_meta(
             "sample_index": "samples.parquet 行号，与 item_embeddings.npy 行号一一对应。",
             "project_package_id": "当前阶段固定等于 project_key，用于历史工程包召回和展开。",
             "item_retrieval_text": "cost_item_name、project_description、unit_normalized(or unit) 拼接文本，用于 item embedding。",
-            "fine_signature": "规范化 cost_item_name + project_description + unit_normalized(or unit)，是唯一可报价施工做法分组边界。",
+            "normalized_signature": "规范化 cost_item_name + project_description + unit_normalized(or unit)，是唯一可报价施工做法分组边界。",
             "cost_item_names_summary": "同一个 project_package 下 cost_item_name 去重列表。",
             "package_text": "工程名称、project_name_text、cost_item_names_summary 拼接文本，用于 project_package embedding。",
         },
