@@ -627,18 +627,25 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         llm_result = {
             "project_package_query_text": "屋面漏水维修工程 屋面卷材防水",
             "item_query_text": "",
+            "location": "浙江省嘉兴市",
+            "start_date": "2025-07-14",
+            "end_date": "2026-07-14",
             "extra_analysis": [{"raw_text": "500平", "value": 500, "unit": "m²"}],
             "extra_specs": ["3mm SBS"],
             "likely_catalog": {"SHOULD": "IGNORE"},
         }
         with patch.object(query_estimate_llm, "request_llm_json", return_value=llm_result):
-            rewrite, trace = query_estimate_llm.query_rewrite_for_embedding("屋面漏水")
+            rewrite, trace = query_estimate_llm.query_rewrite_for_embedding(
+                "屋面漏水", current_date=query_estimate_llm.date(2026, 7, 14)
+            )
 
         self.assertTrue(rewrite.success)
         self.assertEqual(rewrite.project_package_query_text, "屋面漏水维修工程 屋面卷材防水")
         self.assertEqual(rewrite.item_query_text, "屋面漏水维修工程 屋面卷材防水")
+        self.assertEqual((rewrite.location, rewrite.start_date, rewrite.end_date), ("浙江省嘉兴市", "2025-07-14", "2026-07-14"))
         self.assertIn("item_query_text 为空", rewrite.notes[0])
         self.assertEqual(trace["stage"], "query_rewrite_for_embedding")
+        self.assertIn("当前日期：2026-07-14", trace["prompt"])
 
         with patch.object(query_estimate_llm, "request_llm_json", side_effect=query_estimate_llm.LLMServiceError("down")):
             fallback, trace = query_estimate_llm.query_rewrite_for_embedding("屋面漏水")
@@ -646,7 +653,71 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertFalse(fallback.success)
         self.assertEqual(fallback.project_package_query_text, "屋面漏水")
         self.assertEqual(fallback.item_query_text, "屋面漏水")
+        self.assertEqual((fallback.location, fallback.start_date, fallback.end_date), ("", "", ""))
         self.assertEqual(trace["parsed_status"], "failed")
+
+    def test_query_constraint_validation_accepts_only_standard_locations_and_strict_dates(self):
+        for location in ["浙江省嘉兴市", "浙江省杭州市", "江苏省苏州市", "上海市", "北京市"]:
+            with self.subTest(location=location):
+                self.assertEqual(query_estimate_llm.validate_query_constraints(location, "", "")[:3], (location, "", ""))
+
+        for location in ["嘉兴", "嘉兴市", "平湖市", "浙江省", "浙江省嘉兴市/上海市"]:
+            with self.subTest(location=location):
+                normalized, start, end, notes = query_estimate_llm.validate_query_constraints(location, "", "")
+                self.assertEqual((normalized, start, end), ("", "", ""))
+                self.assertTrue(notes)
+
+        self.assertEqual(
+            query_estimate_llm.validate_query_constraints("", "2025-07-14", "2026-07-14")[:3],
+            ("", "2025-07-14", "2026-07-14"),
+        )
+        self.assertEqual(
+            query_estimate_llm.validate_query_constraints("", "2025-13-01", "2025-02-30")[:3],
+            ("", "", ""),
+        )
+        self.assertEqual(
+            query_estimate_llm.validate_query_constraints("", "2026-01-01", "2025-01-01")[:3],
+            ("", "", ""),
+        )
+
+    def test_constraint_mask_combines_location_and_strict_date_bounds(self):
+        rows = pd.DataFrame([
+            {"location": "浙江省嘉兴市", "consultation_time": "2025-07-14"},
+            {"location": " 浙江省嘉兴市 ", "consultation_time": "2026-07-14"},
+            {"location": "上海市", "consultation_time": "2026-01-01"},
+            {"location": "浙江省嘉兴市", "consultation_time": "2025-02-30"},
+        ])
+        self.assertEqual(query_estimate_llm.build_constraint_mask(rows, "", "", "").tolist(), [True] * 4)
+        self.assertEqual(
+            query_estimate_llm.build_constraint_mask(rows, "浙江省嘉兴市", "2025-07-14", "2026-07-14").tolist(),
+            [True, True, False, False],
+        )
+        parsed = query_estimate_llm.parse_consultation_dates(rows["consultation_time"])
+        self.assertEqual(int(parsed.isna().sum()), 1)
+
+    def test_constraint_filter_keeps_dataframe_and_embedding_rows_aligned(self):
+        rows = pd.DataFrame({"value": ["a", "b", "c"]}, index=[10, 20, 30])
+        embeddings = np.array([[1, 0], [2, 0], [3, 0]], dtype=np.float32)
+        mask = pd.Series([True, False, True], index=rows.index)
+        filtered_rows, filtered_embeddings = query_estimate_llm.filter_rows_and_embeddings(
+            rows, embeddings, mask, "测试数据"
+        )
+        self.assertEqual(filtered_rows["value"].tolist(), ["a", "c"])
+        self.assertEqual(filtered_embeddings.tolist(), [[1.0, 0.0], [3.0, 0.0]])
+        with self.assertRaisesRegex(ValueError, "过滤前"):
+            query_estimate_llm.filter_rows_and_embeddings(rows, embeddings[:2], mask, "测试数据")
+
+    def test_empty_constrained_packages_fail_without_fallback_and_empty_direct_items_stay_empty(self):
+        rewrite = query_estimate_llm.QueryRewrite(
+            "屋面", "屋面工程", "屋面防水", "浙江省嘉兴市", "2025-01-01", "2025-12-31", [], True
+        )
+        with self.assertRaisesRegex(ValueError, "没有找到同时满足地域和时间约束"):
+            query_estimate_llm.ensure_project_package_candidates(pd.DataFrame(), rewrite)
+
+        direct = query_estimate_llm.score_direct_items(
+            pd.DataFrame(columns=["sample_index"]), np.array([], dtype=np.float32), top_items=300
+        )
+        self.assertTrue(direct.empty)
 
     def test_package_evidence_weights_use_continuous_softmax(self):
         weights = query_estimate_llm.build_package_evidence_weights(
@@ -742,7 +813,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         candidates["item_query_similarity"] = [0.7, 0.9, 0.6]
         candidates["source_ref"] = ["batch-a::2::2-1", "batch-a::5::5-1", "batch-a::6::6-1"]
 
-        families = query_estimate_llm.build_candidate_families(candidates)
+        with patch("builtins.print") as print_mock:
+            families = query_estimate_llm.build_candidate_families(candidates)
+        print_mock.assert_not_called()
 
         self.assertEqual(families.columns.tolist(), query_estimate_llm.CANDIDATE_FAMILY_COLUMNS)
         self.assertEqual(len(families), 2)
@@ -1447,6 +1520,31 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 query_estimate_llm.validate_contiguous_range(payload, 5)
 
+    def test_range_prompt_uses_minimal_items_but_quantity_prompt_keeps_quantity_context(self):
+        items = pd.DataFrame([{
+            "item_position": 3,
+            "cost_item_name": "屋面卷材防水",
+            "project_description": "3mm SBS",
+            "unit": "平方米",
+            "unit_normalized": "m²",
+            "quantity": 100,
+        }])
+        range_prompt = query_estimate_llm.build_contiguous_item_range_prompt("屋面维修", "历史工程", items)
+        range_payload = json.loads(range_prompt.split("输入：\n", 1)[1])
+        self.assertEqual(
+            range_payload["items"],
+            [{
+                "item_position": 3,
+                "cost_item_name": "屋面卷材防水",
+                "project_description": "3mm SBS",
+            }],
+        )
+
+        quantity_prompt = query_estimate_llm.build_quantity_determination_prompt("屋面维修", items)
+        quantity_payload = json.loads(quantity_prompt.split("输入：\n", 1)[1])
+        self.assertEqual(quantity_payload["items"][0]["unit"], "平方米")
+        self.assertEqual(quantity_payload["items"][0]["historical_quantity"], 100.0)
+
     def test_contiguous_range_failure_falls_back_to_full_project(self):
         items = pd.DataFrame([
             {"item_position": 0, "cost_item_name": "A"},
@@ -1537,7 +1635,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
     def test_parse_info_records_range_quantity_and_explanation_config(self):
         trace = {"prompt_chars": 10, "prompt_tokens": 4, "completion_tokens": 2}
         parse_info = query_estimate_llm.build_parse_info(
-            rewrite=query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], True),
+            rewrite=query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", "浙江省嘉兴市", "2025-01-01", "2025-12-31", [], True),
             top_packages=20,
             top_items=300,
             max_packages_per_cache_subject=1,
@@ -1548,6 +1646,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             meta={},
             sample_count=100,
             package_count=10,
+            project_packages_before_constraint=10,
+            project_packages_after_constraint=4,
+            samples_before_constraint=100,
+            samples_after_constraint=40,
+            invalid_sample_consultation_time_count=0,
+            invalid_project_package_consultation_time_count=0,
             retrieved_evidence_item_row_count=50,
             evidence_item_row_count=50,
             candidate_family_count=8,
@@ -1582,6 +1686,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         values = dict(parse_info.values.tolist())
 
         self.assertEqual(values["selected_project_package_id"], "PKG-1")
+        self.assertEqual(values["query_location"], "浙江省嘉兴市")
+        self.assertEqual(values["project_packages_after_constraint"], 4)
+        self.assertEqual(values["samples_after_constraint"], 40)
         self.assertEqual(values["range_selection_status"], "fallback_full_project")
         self.assertEqual(values["quantity_determination_status"], "success")
         self.assertEqual(values["with_explanations"], False)
@@ -1592,7 +1699,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_workbook_includes_new_columns_and_two_stage_trace(self):
         result = query_estimate_llm.QueryResult(
-            rewrite=query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", [], True),
+            rewrite=query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", "", "", "", [], True),
             estimate_summary=pd.DataFrame(columns=query_estimate_llm.ESTIMATE_SUMMARY_COLUMNS),
             estimate_scenarios=pd.DataFrame(columns=query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS),
             matched_project_packages=pd.DataFrame(columns=query_estimate_llm.MATCHED_PROJECT_PACKAGE_COLUMNS),
@@ -1602,7 +1709,6 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             display_group_families=pd.DataFrame(columns=query_estimate_llm.DISPLAY_GROUP_FAMILY_COLUMNS),
             display_option_grouping_trace=pd.DataFrame(columns=query_estimate_llm.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS),
             matched_project_examples=pd.DataFrame(columns=query_estimate_llm.MATCHED_PROJECT_EXAMPLE_COLUMNS),
-            range_selection=pd.DataFrame(columns=query_estimate_llm.RANGE_SELECTION_TRACE_COLUMNS),
             evidence_items=pd.DataFrame(columns=query_estimate_llm.EVIDENCE_ITEM_COLUMNS),
             parse_info=pd.DataFrame([{"字段": "final_explanation_status", "值": "failed"}]),
             llm_trace=pd.DataFrame(
@@ -1618,7 +1724,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             workbook = openpyxl.load_workbook(path, data_only=True)
             scenario_headers = [cell.value for cell in workbook["estimate_scenarios"][1]]
             trace_stages = [workbook["llm_trace"].cell(row=row, column=1).value for row in range(2, 7)]
-            self.assertIn("range_selection", workbook.sheetnames)
+            self.assertNotIn("range_selection", workbook.sheetnames)
             workbook.close()
 
         self.assertEqual(

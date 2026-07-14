@@ -247,7 +247,9 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 ```text
 用户查询
 → LLM query rewrite
-→ 工程包与清单行 embedding 召回
+→ 标准地级行政区域与绝对日期约束校验
+→ 按 location / consultation_time 同步过滤工程包、清单行及对应 embedding
+→ 受约束范围内的工程包与清单行 embedding 召回
 → retrieved_evidence_items
 → evidence package universe 与 package_evidence_weight
 → fine_signature family 聚合
@@ -278,6 +280,10 @@ candidate_display_groups
 
 查询阶段不使用 LLM 选择工程包。连续区间 LLM 只接收用户原始需求、所选工程名称和按原顺序排列的必要清单字段，不接收内部 ID、工艺候选或价格。
 
+Query Rewrite 固定输出 `project_package_query_text`、`item_query_text`、`location`、`start_date`、`end_date`。程序将运行当天以 `当前日期：YYYY-MM-DD` 显式传给 LLM，相对时间由 LLM 转为绝对日期。普通地级市使用“省级行政区 + 地级市”（例如 `浙江省嘉兴市`），直辖市使用 `北京市`、`上海市`、`天津市` 或 `重庆市`。程序不缩写地域、不推断县级行政区归属，也不自动放宽地域或时间范围。
+
+`consultation_time` 查询时严格按 `%Y-%m-%d` 解析，但不覆盖索引中的原始字符串。无时间约束时非法日期行仍可参与召回；有时间约束时非法日期行会被排除。约束后没有工程包时查询明确失败，不静默回退全库。
+
 最终价格仍从 top 20 工程包与 top 300 直接清单构成的完整证据池回填。
 
 输出 xlsx 固定包含：
@@ -293,9 +299,8 @@ candidate_display_groups
 - `display_group_families`：display 到内部 family 的映射表，用于从 display 回查 `fine_signature` 和 evidence。
 - `display_option_grouping_trace`：记录全部候选 display 内部的 practice options 及其覆盖的 family；单 family display 由程序直接生成唯一 option，多 family display 合并为一次 LLM 分组调用。
 - `matched_project_examples`：按召回 rank 展开前五个历史工程包的完整清单行，保持原工程 item 顺序，作为调试信息。
-- `range_selection`：记录确定性选中工程、完整清单数、连续区间、回退状态、错误、prompt 和原始响应。
 - `evidence_items`：来源样本明细，保存本次查询进入候选池的历史清单行。`source_ref = project_key + "::" + item_row_id`，`family_id` 和 `fine_signature` 可用于从历史样本回查所属 family。
-- `parse_info`：本次查询解析结果和检索参数，包括原始需求、ParsedQuery、retrieved evidence 行数、family 数、display 数、LLM 输入/输出规模、token、fallback、错误、dedup 抑制摘要和 warnings。
+- `parse_info`：本次查询解析结果和检索参数，包括 Query Rewrite 地域与绝对日期、约束校验 notes、工程包/样本过滤前后数量、无效 consultation_time 数量、retrieved evidence 行数、family 数、display 数、LLM 输入/输出规模、token、fallback、错误和 warnings。
 - `llm_trace`：记录 query rewrite、display option grouping、range selection、quantity determination 和可选 final explanation 的 prompt、原始响应、解析状态、token、输入摘要和错误。
 
 `fine_signature` 会对已确认的等价表达做受控归一化，例如：

@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import calendar
 import gc
 import json
 import re
 import sys
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,18 @@ from classifier.llm_client import LLMServiceError, check_lmstudio_service, reque
 
 
 DEFAULT_PACKAGE_WEIGHT_TEMPERATURE = 0.10
+MUNICIPALITIES = {"北京市", "上海市", "天津市", "重庆市"}
+PREFECTURE_LOCATION_PATTERN = re.compile(
+    r"^(?:[^,，/、]+省|[^,，/、]+自治区)[^,，/、省市]+市$"
+)
+
+
+def shift_months(value: date, months: int) -> date:
+    month_index = value.year * 12 + value.month - 1 + months
+    year, zero_based_month = divmod(month_index, 12)
+    month = zero_based_month + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
 
 MATCHED_PROJECT_PACKAGE_COLUMNS = [
     "rank",
@@ -42,20 +55,6 @@ MATCHED_PROJECT_PACKAGE_COLUMNS = [
     "item_count_distance_to_average",
     "project_selection_rank",
     "is_selected_package",
-]
-
-RANGE_SELECTION_TRACE_COLUMNS = [
-    "project_package_id",
-    "工程名称",
-    "project_item_count",
-    "start_item_position",
-    "end_item_position",
-    "selected_item_count",
-    "range_selection_status",
-    "fallback",
-    "error_message",
-    "prompt",
-    "raw_response",
 ]
 
 MATCHED_PROJECT_EXAMPLE_COLUMNS = [
@@ -266,6 +265,9 @@ class QueryRewrite:
     raw_query: str
     project_package_query_text: str
     item_query_text: str
+    location: str
+    start_date: str
+    end_date: str
     notes: list[str]
     success: bool
 
@@ -303,7 +305,6 @@ class QueryResult:
     display_group_families: pd.DataFrame
     display_option_grouping_trace: pd.DataFrame
     matched_project_examples: pd.DataFrame
-    range_selection: pd.DataFrame
     evidence_items: pd.DataFrame
     parse_info: pd.DataFrame
     llm_trace: pd.DataFrame
@@ -566,17 +567,24 @@ def load_index(index_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray,
     return samples, project_packages, project_package_embeddings, item_embeddings, meta
 
 
-def build_query_rewrite_prompt(query: str) -> str:
+def build_query_rewrite_prompt(query: str, current_date: date | None = None) -> str:
+    current_date = current_date or date.today()
+    current_date_text = current_date.isoformat()
     return f"""
 你是维修工程需求解析和 embedding query rewrite 助手。请把用户原始需求解析为严格 JSON object。
 
 只能输出 JSON object，不要 Markdown，不要解释，不要建议清单，不要计算价格。
+当前日期：{current_date_text}
 
 输出格式：
 {{
   "project_package_query_text": "",
-  "item_query_text": ""
+  "item_query_text": "",
+  "location": "",
+  "start_date": "",
+  "end_date": ""
 }}
+不要增加其他字段。
 
 当前 embedding 结构：
 1. project_package_text 由“工程名称、project_name_text、cost_item_name 去重列表”组成。
@@ -584,18 +592,26 @@ def build_query_rewrite_prompt(query: str) -> str:
 2. item_retrieval_text 由“cost_item_name、project_description、unit_normalized”组成。
    item_query_text 用于匹配相似清单行，应贴近用户明确表达的维修对象、材料规格和做法，不要扩展未明确发生的清单项。
 3. item_query_text 必须非空。如果用户问得很粗，也输出宽泛 item query，不要留空。
-4. 不扩展用户未明确提出的清单项。
-5. 不输出数量分析、材料列表、不确定性、方案建议、价格或施工清单。
+4. location 表示项目所属的标准地级行政区域。普通地级市必须输出“省级行政区 + 地级市”，例如“浙江省嘉兴市”“江苏省苏州市”“四川省成都市”；直辖市只输出“北京市”“上海市”“天津市”“重庆市”。
+5. 用户未提出地域限制时 location 输出空字符串。不要输出简称、县、区或镇；县级行政区所属地级行政区明确时可输出标准地级区域，不确定时不要猜测。
+6. start_date 和 end_date 只能是 YYYY-MM-DD 或空字符串。所有相对时间以当前日期 {current_date_text} 为基准转换为绝对日期。
+7. “最近一年”“一年内”向前推 12 个月；“最近半年”向前推 6 个月；“最近三个月”向前推 3 个月，end_date 均为当前日期。
+8. 整年使用当年 01-01 至 12-31；整月使用当月首日至末日；月份区间使用首月首日至末月末日；某日以后截至当前日期；“截至某日”只填写 end_date。
+9. 用户未提出时间约束时 start_date 和 end_date 均输出空字符串，不输出相对时间自然语言。
+10. 不扩展用户未明确提出的清单项，不输出数量分析、材料列表、不确定性、方案建议、价格或施工清单。
 
 示例：
 用户：屋面漏水，想做3mm SBS防水，面积大概500平
-输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修 3mm SBS防水","item_query_text":"屋面卷材防水 3mm SBS防水卷材"}}
+输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修 3mm SBS防水","item_query_text":"屋面卷材防水 3mm SBS防水卷材","location":"","start_date":"","end_date":""}}
 
 用户：屋面漏水帮我估价
-输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修","item_query_text":"屋面防水 防水层维修"}}
+输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修","item_query_text":"屋面防水 防水层维修","location":"","start_date":"","end_date":""}}
 
-用户：地下室渗水维修
-输出：{{"project_package_query_text":"地下室渗水维修工程 地下室防水维修","item_query_text":"地下室防水 渗水维修 防水层维修"}}
+用户：屋面漏水，参考嘉兴一年内的造价
+输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修","item_query_text":"屋面防水 防水层维修","location":"浙江省嘉兴市","start_date":"{shift_months(current_date, -12).isoformat()}","end_date":"{current_date_text}"}}
+
+用户：参考上海市2025年3月的消防报警主机更换造价
+输出：{{"project_package_query_text":"消防报警主机更换工程","item_query_text":"消防报警主机更换","location":"上海市","start_date":"2025-03-01","end_date":"2025-03-31"}}
 
 用户需求：{query}
 """.strip()
@@ -606,13 +622,102 @@ def fallback_query_rewrite(query: str, note: str) -> QueryRewrite:
         raw_query=query,
         project_package_query_text=query,
         item_query_text=query,
+        location="",
+        start_date="",
+        end_date="",
         notes=[note],
         success=False,
     )
 
 
-def query_rewrite_for_embedding(query: str) -> tuple[QueryRewrite, dict[str, Any]]:
-    prompt = build_query_rewrite_prompt(query)
+def normalize_location(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", cell_text(value)).strip()
+    return re.sub(r"\s+", " ", text)
+
+
+def validate_query_constraints(
+    location: Any,
+    start_date: Any,
+    end_date: Any,
+) -> tuple[str, str, str, list[str]]:
+    notes: list[str] = []
+    normalized_location = normalize_location(location)
+    if normalized_location and normalized_location not in MUNICIPALITIES and not PREFECTURE_LOCATION_PATTERN.fullmatch(normalized_location):
+        notes.append(f"location 格式非法，已清空: {normalized_location}")
+        normalized_location = ""
+
+    parsed_dates: dict[str, str] = {}
+    for field_name, value in (("start_date", start_date), ("end_date", end_date)):
+        text = cell_text(value)
+        if not text:
+            parsed_dates[field_name] = ""
+            continue
+        try:
+            parsed_dates[field_name] = datetime.strptime(text, "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            parsed_dates[field_name] = ""
+            notes.append(f"{field_name} 格式非法，已清空: {text}")
+
+    start_text = parsed_dates["start_date"]
+    end_text = parsed_dates["end_date"]
+    if start_text and end_text and start_text > end_text:
+        notes.append("start_date 晚于 end_date，两个日期约束均已清空")
+        start_text = ""
+        end_text = ""
+    return normalized_location, start_text, end_text, notes
+
+
+def parse_consultation_dates(values: pd.Series) -> pd.Series:
+    return pd.to_datetime(values, format="%Y-%m-%d", errors="coerce").dt.date
+
+
+def build_constraint_mask(
+    rows: pd.DataFrame,
+    location: str,
+    start_date: str,
+    end_date: str,
+) -> pd.Series:
+    mask = pd.Series(True, index=rows.index, dtype=bool)
+    if location:
+        if "location" not in rows.columns:
+            return pd.Series(False, index=rows.index, dtype=bool)
+        mask &= rows["location"].map(normalize_location).eq(location)
+    if start_date or end_date:
+        if "consultation_time" not in rows.columns:
+            return pd.Series(False, index=rows.index, dtype=bool)
+        dates = parse_consultation_dates(rows["consultation_time"])
+        if start_date:
+            mask &= dates.notna() & dates.ge(datetime.strptime(start_date, "%Y-%m-%d").date())
+        if end_date:
+            mask &= dates.notna() & dates.le(datetime.strptime(end_date, "%Y-%m-%d").date())
+    return mask
+
+
+def filter_rows_and_embeddings(
+    rows: pd.DataFrame,
+    embeddings: np.ndarray,
+    mask: pd.Series,
+    label: str,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    if len(rows) != len(embeddings) or len(rows) != len(mask):
+        raise ValueError(f"{label} 约束过滤前 DataFrame、embedding 与 mask 行数不一致")
+    filtered_rows = rows.loc[mask].copy()
+    filtered_embeddings = embeddings[mask.to_numpy()]
+    if len(filtered_rows) != len(filtered_embeddings):
+        raise ValueError(f"约束过滤后的{label}与 embedding 行数不一致")
+    return filtered_rows, filtered_embeddings
+
+
+def ensure_project_package_candidates(rows: pd.DataFrame, rewrite: QueryRewrite) -> None:
+    if not rows.empty:
+        return
+    if rewrite.location or rewrite.start_date or rewrite.end_date:
+        raise ValueError("没有找到同时满足地域和时间约束的历史工程包。")
+    raise ValueError("没有找到历史工程包。")
+
+
+def query_rewrite_for_embedding(query: str, current_date: date | None = None) -> tuple[QueryRewrite, dict[str, Any]]:
+    prompt = build_query_rewrite_prompt(query, current_date=current_date)
     max_tokens = 512
     try:
         result = request_llm_json(
@@ -635,6 +740,12 @@ def query_rewrite_for_embedding(query: str) -> tuple[QueryRewrite, dict[str, Any
     notes: list[str] = []
     package_text = cell_text(result.get("project_package_query_text")) if isinstance(result, dict) else ""
     item_text = cell_text(result.get("item_query_text")) if isinstance(result, dict) else ""
+    location, start_date, end_date, constraint_notes = validate_query_constraints(
+        result.get("location") if isinstance(result, dict) else "",
+        result.get("start_date") if isinstance(result, dict) else "",
+        result.get("end_date") if isinstance(result, dict) else "",
+    )
+    notes.extend(constraint_notes)
     if not package_text:
         package_text = query
         notes.append("project_package_query_text 为空，已回退为原始 query")
@@ -645,6 +756,9 @@ def query_rewrite_for_embedding(query: str) -> tuple[QueryRewrite, dict[str, Any
         raw_query=query,
         project_package_query_text=package_text,
         item_query_text=item_text,
+        location=location,
+        start_date=start_date,
+        end_date=end_date,
         notes=notes,
         success=True,
     )
@@ -812,8 +926,6 @@ def range_selection_item_records(selected_items: pd.DataFrame) -> list[dict[str,
             "item_position": int(row["item_position"]),
             "cost_item_name": cell_text(row.get("cost_item_name")),
             "project_description": cell_text(row.get("project_description")),
-            "unit": cell_text(row.get("unit")) or cell_text(row.get("unit_normalized")),
-            "historical_quantity": numeric_or_none(row.get("quantity")),
         }
         for _index, row in selected_items.iterrows()
     ]
@@ -1241,30 +1353,6 @@ def build_candidate_families(candidates: pd.DataFrame) -> pd.DataFrame:
         if column not in output.columns:
             output[column] = None
     output = output[CANDIDATE_FAMILY_COLUMNS].reset_index(drop=True)
-    member_counts = candidates.groupby("normalized_signature", sort=False, dropna=False).size()
-    print(f"family normalization: original_samples={len(candidates)}")
-    print("family normalization: old_signature_count=unavailable")
-    print(f"family normalization: normalized_signature_count={len(member_counts)}")
-    print(f"family normalization: family_count={len(output)}")
-    print("family normalization: normalization_merged_family_count=unavailable")
-    print(f"family normalization: multi_member_family_count={int((member_counts > 1).sum())}")
-    print(f"family normalization: max_family_members={int(member_counts.max()) if not member_counts.empty else 0}")
-    for signature in member_counts[member_counts > 1].head(20).index:
-        members = candidates[candidates["normalized_signature"].eq(signature)]
-        examples = [
-            {
-                "cost_item_name": cell_text(row.get("cost_item_name")),
-                "project_description": cell_text(row.get("project_description")),
-            }
-            for _index, row in members.head(5).iterrows()
-        ]
-        print(
-            "family normalization merge: "
-            + json.dumps(
-                {"normalized_signature": cell_text(signature), "member_count": int(len(members)), "members": examples},
-                ensure_ascii=False,
-            )
-        )
     return output
 
 
@@ -2779,6 +2867,12 @@ def build_parse_info(
     meta: dict[str, Any],
     sample_count: int,
     package_count: int,
+    project_packages_before_constraint: int,
+    project_packages_after_constraint: int,
+    samples_before_constraint: int,
+    samples_after_constraint: int,
+    invalid_sample_consultation_time_count: int,
+    invalid_project_package_consultation_time_count: int,
     retrieved_evidence_item_row_count: int,
     evidence_item_row_count: int,
     candidate_family_count: int,
@@ -2814,6 +2908,10 @@ def build_parse_info(
         ("原始用户需求", rewrite.raw_query),
         ("project_package_query_text", rewrite.project_package_query_text),
         ("item_query_text", rewrite.item_query_text),
+        ("query_location", rewrite.location),
+        ("query_start_date", rewrite.start_date),
+        ("query_end_date", rewrite.end_date),
+        ("query_constraint_notes", "；".join(rewrite.notes)),
         ("item_retrieval_text_fields", "cost_item_name + project_description + unit_normalized"),
         ("package_retrieval_text_fields", "工程名称 + project_name_text + cost_item_names_summary"),
         ("top_packages", top_packages),
@@ -2826,6 +2924,12 @@ def build_parse_info(
         ("embedding_model", meta.get("model", "")),
         ("sample_count", sample_count),
         ("package_count", package_count),
+        ("project_packages_before_constraint", project_packages_before_constraint),
+        ("project_packages_after_constraint", project_packages_after_constraint),
+        ("samples_before_constraint", samples_before_constraint),
+        ("samples_after_constraint", samples_after_constraint),
+        ("invalid_sample_consultation_time_count", invalid_sample_consultation_time_count),
+        ("invalid_project_package_consultation_time_count", invalid_project_package_consultation_time_count),
         ("LLM query rewrite 是否成功", "是" if rewrite.success else "否"),
         ("retrieved_evidence_item_row_count", retrieved_evidence_item_row_count),
         ("evidence_item_row_count", evidence_item_row_count),
@@ -2911,11 +3015,6 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
             sheet_name="matched_project_examples",
             index=False,
         )
-        display_frame(result.range_selection, display).to_excel(
-            writer,
-            sheet_name="range_selection",
-            index=False,
-        )
         display_frame(result.package_evidence_weights, display).to_excel(
             writer,
             sheet_name="package_evidence_weights",
@@ -2997,6 +3096,20 @@ def run_query(
     samples, project_packages, project_package_embeddings, item_embeddings, meta = load_index(index_dir)
     rewrite, rewrite_trace = query_rewrite_for_embedding(raw_text)
 
+    package_mask = build_constraint_mask(
+        project_packages, rewrite.location, rewrite.start_date, rewrite.end_date
+    )
+    item_mask = build_constraint_mask(
+        samples, rewrite.location, rewrite.start_date, rewrite.end_date
+    )
+    candidate_project_packages, candidate_project_package_embeddings = filter_rows_and_embeddings(
+        project_packages, project_package_embeddings, package_mask, "工程包"
+    )
+    candidate_samples, candidate_item_embeddings = filter_rows_and_embeddings(
+        samples, item_embeddings, item_mask, "清单样本"
+    )
+    ensure_project_package_candidates(candidate_project_packages, rewrite)
+
     model = load_embedding_model(str(meta.get("model") or "BAAI/bge-m3"))
     try:
         package_query_embedding = encode_query(model, rewrite.project_package_query_text)
@@ -3007,22 +3120,27 @@ def run_query(
         gc.collect()
         raise
 
-    if package_query_embedding.shape[0] != project_package_embeddings.shape[1]:
+    if package_query_embedding.shape[0] != candidate_project_package_embeddings.shape[1]:
         raise ValueError("package query embedding 维度与索引 embedding 维度不一致")
-    if item_query_embedding.shape[0] != item_embeddings.shape[1]:
+    if item_query_embedding.shape[0] != candidate_item_embeddings.shape[1]:
         raise ValueError("item query embedding 维度与索引 embedding 维度不一致")
 
-    package_query_similarities = project_package_embeddings @ package_query_embedding
-    package_query_similarity_by_id = project_package_similarity_map(project_packages, package_query_similarities)
+    package_query_similarities = candidate_project_package_embeddings @ package_query_embedding
+    package_query_similarity_by_id = project_package_similarity_map(candidate_project_packages, package_query_similarities)
     matched_raw = score_project_packages(
-        project_packages,
-        project_package_embeddings,
+        candidate_project_packages,
+        candidate_project_package_embeddings,
         package_query_embedding,
         top_packages,
         max_packages_per_cache_subject=max_packages_per_cache_subject,
     )
-    item_query_similarities = item_embeddings @ item_query_embedding
-    direct_item_hits = score_direct_items(samples, item_query_similarities, top_items)
+    candidate_item_query_similarities = candidate_item_embeddings @ item_query_embedding
+    direct_item_hits = score_direct_items(candidate_samples, candidate_item_query_similarities, top_items)
+    item_query_similarities = np.zeros(len(samples), dtype=np.float32)
+    constrained_sample_indices = pd.to_numeric(candidate_samples["sample_index"], errors="raise").astype(int).to_numpy()
+    item_query_similarities[constrained_sample_indices] = candidate_item_query_similarities
+    if direct_item_hits.empty:
+        append_warning(warnings, "direct_item_hits_empty_after_constraints")
     evidence_package_ids = evidence_package_universe(matched_raw, direct_item_hits)
     package_evidence_weights = build_package_evidence_weights(
         evidence_package_ids,
@@ -3083,22 +3201,6 @@ def run_query(
     if range_meta["fallback"]:
         append_warning(warnings, "range_selection_fallback_full_project")
     plan_items = selected_items.iloc[start : end + 1].copy()
-    range_selection = pd.DataFrame(
-        [{
-            "project_package_id": selected_project_package_id,
-            "工程名称": selected_project_name,
-            "project_item_count": len(selected_items),
-            "start_item_position": start,
-            "end_item_position": end,
-            "selected_item_count": len(plan_items),
-            "range_selection_status": range_meta["range_selection_status"],
-            "fallback": range_meta["fallback"],
-            "error_message": range_meta["error_message"],
-            "prompt": range_meta["prompt"],
-            "raw_response": range_meta["raw_response"],
-        }],
-        columns=RANGE_SELECTION_TRACE_COLUMNS,
-    )
     range_selection_trace = trace_row(
         "range_selection",
         "在确定性选中的完整历史工程内选择连续清单区间",
@@ -3165,6 +3267,12 @@ def run_query(
         meta=meta,
         sample_count=len(samples),
         package_count=len(project_packages),
+        project_packages_before_constraint=len(project_packages),
+        project_packages_after_constraint=len(candidate_project_packages),
+        samples_before_constraint=len(samples),
+        samples_after_constraint=len(candidate_samples),
+        invalid_sample_consultation_time_count=int(parse_consultation_dates(samples["consultation_time"]).isna().sum()),
+        invalid_project_package_consultation_time_count=int(parse_consultation_dates(project_packages["consultation_time"]).isna().sum()),
         retrieved_evidence_item_row_count=len(retrieved_evidence_items),
         evidence_item_row_count=len(evidence_items),
         candidate_family_count=len(candidate_families),
@@ -3218,7 +3326,6 @@ def run_query(
         display_group_families=display_group_families,
         display_option_grouping_trace=display_option_grouping_trace_frame,
         matched_project_examples=matched_project_examples_output,
-        range_selection=range_selection,
         evidence_items=evidence_items,
         parse_info=parse_info,
         llm_trace=llm_trace,
