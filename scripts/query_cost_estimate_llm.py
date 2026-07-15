@@ -210,26 +210,25 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "工程量",
     "工程量来源",
     "工程量说明",
-    "工程量样本数",
-    "工程量最低值",
-    "工程量中位数",
-    "工程量最高值",
-    "综合单价",
-    "暂估合价",
-    "合价P10",
-    "合价中位数",
-    "合价P90",
+    "价格证据样本数",
     "综合单价P10",
-    "综合单价中位数",
+    "综合单价",
     "综合单价P90",
+    "暂估合价",
     "其中包含人工费单价P10",
     "其中包含人工费单价中位数",
     "其中包含人工费单价P90",
     "其中包含机械费单价P10",
     "其中包含机械费单价中位数",
     "其中包含机械费单价P90",
-    "价格证据样本数",
+    "工程量最低值",
+    "工程量中位数",
+    "工程量最高值",
     "来源样本",
+    "合价P10",
+    "合价中位数",
+    "合价P90",
+    "综合单价中位数",
     "practice_option_id",
     "original_option_id",
     "original_family_id",
@@ -3728,6 +3727,16 @@ def build_scenario_outputs(
             validate_price_stats(price_stats, item.stable_sample_id, item.practice_option_id)
             amount_p10, amount_mid, amount_p90 = quantity_amounts(item.quantity, price_stats)
             quantity_value = quantity_display(item.quantity)
+            scenario_unit = cell_text(representative.get("unit_normalized")) or cell_text(
+                representative.get("unit")
+            )
+            price_evidence_count = int(numeric_or_none(price_stats.get("evidence_count")) or 0)
+            quantity_reason = item.quantity_reason
+            if item.quantity_source == "historical_median" and not item.quantity_fallback_used:
+                quantity_reason = (
+                    f"采用全库召回的{price_evidence_count}条同类历史样本"
+                    f"工程量中位数{format_number_cell(quantity_value)}{scenario_unit}暂估。"
+                )
             expanded_evidence = price_stats["expanded_evidence"]
             for _evidence_index, evidence in expanded_evidence.iterrows():
                 price_evidence_rows.append({
@@ -3755,14 +3764,13 @@ def build_scenario_outputs(
                 {
                     "清单名称": cell_text(representative.get("representative_cost_item_name")),
                     "项目特征": cell_text(representative.get("representative_project_description")),
-                    "单位": cell_text(representative.get("unit_normalized")) or cell_text(representative.get("unit")),
+                    "单位": scenario_unit,
                     "工程量": quantity_value,
                     "工程量来源": {
                         "user_explicit": "用户明确工程量",
                         "historical_median": "全库历史样本中位数",
                     }.get(item.quantity_source, item.quantity_source),
-                    "工程量说明": item.quantity_reason,
-                    "工程量样本数": item.quantity_sample_count,
+                    "工程量说明": quantity_reason,
                     "工程量最低值": item.quantity_minimum,
                     "工程量中位数": item.quantity_median,
                     "工程量最高值": item.quantity_maximum,
@@ -3780,7 +3788,7 @@ def build_scenario_outputs(
                     "其中包含机械费单价P10": price_stats.get("machinery_unit_price_p10"),
                     "其中包含机械费单价中位数": price_stats.get("machinery_unit_price_median"),
                     "其中包含机械费单价P90": price_stats.get("machinery_unit_price_p90"),
-                    "价格证据样本数": price_stats.get("evidence_count"),
+                    "价格证据样本数": price_evidence_count,
                     "来源样本": cell_text(price_stats.get("source_refs")),
                     "practice_option_id": item.practice_option_id,
                     "original_option_id": item.original_option_id,

@@ -2194,6 +2194,126 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(output.loc[0, "综合单价"], 120)
         self.assertEqual(output.loc[0, "暂估合价"], 1200)
         self.assertEqual(output.loc[0, "价格证据family"], "F1,F-extra")
+        self.assertEqual(
+            output.loc[0, "工程量说明"],
+            "采用全库召回的2条同类历史样本工程量中位数10m²暂估。",
+        )
+
+    def test_estimate_scenario_columns_remove_quantity_count_and_follow_display_order(self):
+        columns = query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS
+        self.assertNotIn("工程量样本数", columns)
+        for required in [
+            "工程量来源", "工程量说明", "价格证据样本数",
+            "工程量最低值", "工程量中位数", "工程量最高值",
+        ]:
+            self.assertIn(required, columns)
+        self.assertEqual(columns[:7], [
+            "清单名称", "项目特征", "单位", "工程量", "工程量来源", "工程量说明",
+            "价格证据样本数",
+        ])
+        self.assertEqual(columns[7:18], [
+            "综合单价P10", "综合单价", "综合单价P90", "暂估合价",
+            "其中包含人工费单价P10", "其中包含人工费单价中位数",
+            "其中包含人工费单价P90", "其中包含机械费单价P10",
+            "其中包含机械费单价中位数", "其中包含机械费单价P90",
+            "工程量最低值",
+        ])
+        self.assertLess(columns.index("工程量最低值"), columns.index("工程量中位数"))
+        self.assertLess(columns.index("工程量中位数"), columns.index("工程量最高值"))
+        self.assertLess(columns.index("工程量最高值"), columns.index("来源样本"))
+        self.assertEqual(columns[-6:], [
+            "practice_option_id", "original_option_id", "original_family_id",
+            "representative_family_id", "价格证据family", "display_id",
+        ])
+
+    def test_historical_quantity_display_uses_expanded_price_evidence_count(self):
+        item = query_estimate_llm.ScenarioItem(
+            "P1", "sid-selected", "selected-ref", "D1", "D1-O01", "D1-O01",
+            "F1", "F1", "", {"type": "exact", "value": 720},
+            "原说明包含4条同类历史样本", 5,
+            quantity_source="historical_median", quantity_sample_count=4,
+            quantity_minimum=600, quantity_median=720, quantity_maximum=900,
+        )
+        scenario = query_estimate_llm.EstimateScenario("S001", 1, "", "", [item])
+        displays = pd.DataFrame([{
+            "display_id": "D1", "unit": "m",
+            "practice_options": [{"practice_option_id": "D1-O01", "family_ids": ["F1"]}],
+        }])
+        families = pd.DataFrame([self.price_family("F1", "sig-1", unit="m")])
+        expanded_evidence = pd.DataFrame([
+            {
+                "stable_sample_id": f"price-{index}", "family_id": "F1",
+                "normalized_signature": "sig-1", "source_ref": f"ref-{index}",
+            }
+            for index in range(61)
+        ])
+        price_stats = {
+            "unit_price_p10": 10, "unit_price_median": 20, "unit_price_p90": 30,
+            "labor_unit_price_p10": 1, "labor_unit_price_median": 2,
+            "labor_unit_price_p90": 3, "machinery_unit_price_p10": 4,
+            "machinery_unit_price_median": 5, "machinery_unit_price_p90": 6,
+            "evidence_count": 61, "source_refs": "ref-0, ref-1",
+            "expanded_evidence": expanded_evidence,
+        }
+
+        with patch.object(query_estimate_llm, "price_stats_for_option", return_value=price_stats):
+            output, price_evidence = query_estimate_llm.build_scenario_outputs(
+                [scenario], displays, families, pd.DataFrame()
+            )
+
+        self.assertEqual(output.loc[0, "工程量"], 720)
+        self.assertEqual(output.loc[0, "工程量最低值"], 600)
+        self.assertEqual(output.loc[0, "工程量中位数"], 720)
+        self.assertEqual(output.loc[0, "工程量最高值"], 900)
+        self.assertEqual(output.loc[0, "价格证据样本数"], 61)
+        self.assertEqual(len(price_evidence), 61)
+        self.assertEqual(
+            output.loc[0, "工程量说明"],
+            "采用全库召回的61条同类历史样本工程量中位数720m暂估。",
+        )
+        self.assertNotIn("4条", output.loc[0, "工程量说明"])
+        self.assertEqual(output.loc[0, "综合单价"], 20)
+        self.assertEqual(output.loc[0, "暂估合价"], 14400)
+        self.assertEqual(output.loc[0, "display_id"], "D1")
+        self.assertEqual(output.loc[0, "practice_option_id"], "D1-O01")
+        self.assertEqual(output.loc[0, "original_option_id"], "D1-O01")
+        self.assertEqual(output.loc[0, "representative_family_id"], "F1")
+
+    def test_quantity_display_keeps_user_explicit_and_best_sample_fallback_reasons(self):
+        displays = pd.DataFrame([{
+            "display_id": "D1", "unit": "m",
+            "practice_options": [{"practice_option_id": "D1-O01", "family_ids": ["F1"]}],
+        }])
+        families = pd.DataFrame([self.price_family("F1", "sig-1", unit="m")])
+        price_stats = {
+            "unit_price_p10": 10, "unit_price_median": 20, "unit_price_p90": 30,
+            "labor_unit_price_p10": None, "labor_unit_price_median": None,
+            "labor_unit_price_p90": None, "machinery_unit_price_p10": None,
+            "machinery_unit_price_median": None, "machinery_unit_price_p90": None,
+            "evidence_count": 1, "source_refs": "ref-1",
+            "expanded_evidence": pd.DataFrame([{
+                "stable_sample_id": "price-1", "family_id": "F1",
+                "normalized_signature": "sig-1", "source_ref": "ref-1",
+            }]),
+        }
+        cases = [
+            ("user_explicit", False, "用户明确指定工程量为8m"),
+            ("historical_median", True, "全库同类样本无有效中位数，暂采用最佳召回样本工程量。"),
+        ]
+        for source, fallback_used, reason in cases:
+            item = query_estimate_llm.ScenarioItem(
+                "P1", "sid-selected", "selected-ref", "D1", "D1-O01", "D1-O01",
+                "F1", "F1", "", {"type": "exact", "value": 8}, reason, 1,
+                quantity_source=source, quantity_fallback_used=fallback_used,
+            )
+            scenario = query_estimate_llm.EstimateScenario("S001", 1, "", "", [item])
+            with self.subTest(source=source), patch.object(
+                query_estimate_llm, "price_stats_for_option", return_value=price_stats
+            ):
+                output, _price_evidence = query_estimate_llm.build_scenario_outputs(
+                    [scenario], displays, families, pd.DataFrame()
+                )
+            self.assertEqual(output.loc[0, "工程量说明"], reason)
 
     def price_family(self, family_id: str, signature: str, unit: str = "m²") -> dict[str, object]:
         return {

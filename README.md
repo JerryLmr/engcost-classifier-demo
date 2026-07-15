@@ -290,7 +290,7 @@ Query Rewrite 固定输出 `project_package_query_text`、`item_query_text`、`l
 输出 xlsx 固定包含：
 
 - `estimate_summary`：面向用户/领导的估价摘要，一行一个 scenario，展示推荐标记、方案说明、主要施工内容、计价项目数和合价区间。
-- `estimate_scenarios`：scenario 完整项目级主表，一行一个 scenario item，展示清单名称、项目特征、工程量、工程量来源与说明、历史工程量样本数及最低值/中位数/最高值、综合单价、暂估合价、价格区间、人工费/机械费单价组成参考和来源样本。用户明确工程量的统计列为空；历史暂估工程量等于全库同类有效样本中位数。工程量和单位继续使用独立列。
+- `estimate_scenarios`：scenario 完整项目级主表，一行一个 scenario item，展示清单名称、项目特征、工程量、工程量来源与说明、历史工程量最低值/中位数/最高值、价格证据样本数、综合单价、暂估合价、价格区间、人工费/机械费单价组成参考和来源样本。用户明确工程量的统计列为空；历史暂估工程量等于全库同类有效样本中位数。工程量和单位继续使用独立列。
 - `option_evidence_expansion`：展示每个最终清单的价格证据 family 和样本数在扩充前后的变化。
 - `matched_project_packages`：工程包级召回结果，包括 `package_query_similarity`、`project_package_id`、工程名称、`project_name_text`、`cost_item_names_summary`、`consultation_time`、`location`、`cache_subject` 和 `item_count`。
 - `direct_item_hits`：清单行级直接召回结果，参与生成 `retrieved_evidence_items`，不单独输出为 sheet。
