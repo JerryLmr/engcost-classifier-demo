@@ -2708,7 +2708,7 @@ def validate_quantity(value: Any) -> dict[str, Any]:
 
 
 def quantity_rule_payload(raw_text: str, plan_items: pd.DataFrame) -> dict[str, Any]:
-    items = [
+    records = [
         {
             "item_position": int(row["item_position"]),
             "cost_item_name": cell_text(row.get("cost_item_name")),
@@ -2718,7 +2718,9 @@ def quantity_rule_payload(raw_text: str, plan_items: pd.DataFrame) -> dict[str, 
         }
         for _index, row in plan_items.iterrows()
     ]
-    return {"user_query": raw_text, "items": items}
+    if not records:
+        raise ValueError("最终清单为空，无法确定工程量")
+    return {"user_query": raw_text, "anchor_item": records[0], "items": records[1:]}
 
 
 def build_quantity_determination_prompt(
@@ -2726,55 +2728,55 @@ def build_quantity_determination_prompt(
 ) -> str:
     payload = quantity_rule_payload(raw_text, plan_items)
     return f"""
-你只负责：
-1. 从 user_query 中识别用户明确给出的主体工程量；
-2. 在 items 中选择该工程量最直接对应的锚点清单；
-3. 判断其他清单是否应按锚点历史比例缩放。
+你只负责读取用户工程量，并判断每个非 anchor 清单的工程量规则。
 
-你不得计算最终工程量。
+anchor_item 已固定为最终清单第一项，不得重新选择。
+
+输出：
+- anchor_user_quantity
+- anchor_quantity_source
+- item_quantity_rules
 
 规则：
 
-- anchor_item_position：
-  用户工程量最直接对应的清单位置。
+- 用户明确给出主体工程量：
+  anchor_quantity_source=user_explicit，
+  anchor_user_quantity=用户数量。
 
-- anchor_user_quantity：
-  用户明确提供的工程量数值。
+- 用户未给主体工程量：
+  anchor_quantity_source=historical_fallback，
+  anchor_user_quantity=anchor_item.historical_quantity。
+
+- 不得把 anchor_item.historical_quantity 伪装成 user_explicit。
+
+- historical_fallback 时不得使用 scale_with_anchor。
 
 - use_user_exact：
-  仅用于 anchor。
+  用户明确给出当前项自身数量，
+  user_exact_quantity 填正数。
 
 - scale_with_anchor：
-  当前项与 anchor 属于同一施工范围，历史工程量应随主体规模同比例变化。
+  当前项应随主体规模同比例变化，
+  user_exact_quantity=null。
 
 - keep_historical：
-  当前项与 anchor 没有可靠同比例关系。
+  当前项保留历史数量，
+  user_exact_quantity=null。
 
-优先把数量绑定到用户明确描述的施工项。
-例如用户说“4mm SBS防水，面积500平”，应优先绑定到项目特征中包含 4mm SBS 的屋面卷材防水，而不是默认绑定第一项。
-
-只有用户提供了数量，但无法对应任何具体清单时，才使用 items 中第一项作为 anchor。
-
-用户完全没有提供工程量时：
-- anchor_item_position=null
-- anchor_user_quantity=null
-- 所有项 keep_historical
-
-同一维修范围内的拆除、基层处理、防水、面层恢复等面积型工序通常可以 scale_with_anchor。
-
-消防主机、按钮、模块、探测器、设备台数、系统、项、次等通常 keep_historical，除非它们本身就是用户数量直接对应的 anchor。
-
-必须完整覆盖全部 item_position，不得遗漏、重复或输出额外字段。
+必须完整覆盖所有非 anchor item_position。
+不得包含 anchor 自身。
+不得输出 reason 或其他字段。
 
 只输出：
 
 {{
-  "anchor_item_position": 4,
   "anchor_user_quantity": 500,
+  "anchor_quantity_source": "user_explicit",
   "item_quantity_rules": [
     {{
-      "item_position": 0,
-      "rule": "scale_with_anchor"
+      "item_position": 1,
+      "rule": "scale_with_anchor",
+      "user_exact_quantity": null
     }}
   ]
 }}
@@ -2787,84 +2789,77 @@ def build_quantity_determination_prompt(
 def parse_quantity_determination_result(
     result: Any,
     plan_items: pd.DataFrame,
-) -> tuple[dict[str, Any] | None, dict[int, str]]:
+) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
     return validate_quantity_rule_result(result, plan_items)
 
 
 def validate_quantity_rule_result(
     result: Any, plan_items: pd.DataFrame,
-    normalization_warnings: list[str] | None = None,
-) -> tuple[dict[str, Any] | None, dict[int, str]]:
-    allowed_top_keys = {"anchor_item_position", "anchor_user_quantity", "item_quantity_rules"}
+) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
+    if plan_items.empty:
+        raise ValueError("最终清单为空，无法确定工程量")
+    allowed_top_keys = {"anchor_user_quantity", "anchor_quantity_source", "item_quantity_rules"}
     if not isinstance(result, dict) or set(result) != allowed_top_keys:
         raise ValueError("quantity determination 顶层字段非法")
-    raw_anchor_position = result.get("anchor_item_position")
     raw_anchor_quantity = result.get("anchor_user_quantity")
-    position_is_null = raw_anchor_position is None
-    quantity_is_null = raw_anchor_quantity is None
-    if position_is_null != quantity_is_null:
-        raise ValueError("anchor_item_position 和 anchor_user_quantity 必须同时为空或同时非空")
+    anchor_source = cell_text(result.get("anchor_quantity_source"))
+    if anchor_source not in {"user_explicit", "historical_fallback"}:
+        raise ValueError("anchor_quantity_source 非法")
+    if isinstance(raw_anchor_quantity, bool) or not isinstance(raw_anchor_quantity, (int, float)):
+        raise ValueError("anchor_user_quantity 必须是数值")
+    anchor_quantity = numeric_or_none(raw_anchor_quantity)
+    if anchor_quantity is None or anchor_quantity <= 0:
+        raise ValueError("anchor_user_quantity 必须大于 0")
     raw_entries = result.get("item_quantity_rules")
     if not isinstance(raw_entries, list):
         raise ValueError("item_quantity_rules 必须是数组")
-    expected_positions = {int(value) for value in plan_items["item_position"].tolist()}
+    anchor_position = int(plan_items.iloc[0]["item_position"])
+    expected_positions = {int(value) for value in plan_items.iloc[1:]["item_position"].tolist()}
     historical = {int(row["item_position"]): numeric_or_none(row.get("quantity")) for _index, row in plan_items.iterrows()}
-    anchor_position: int | None = None
-    anchor_quantity: float | None = None
-    anchor_rule_auto_filled = False
-    if not position_is_null:
-        if isinstance(raw_anchor_position, bool) or not isinstance(raw_anchor_position, int):
-            raise ValueError("anchor_item_position 必须是整数或 null")
-        if raw_anchor_position not in expected_positions:
-            raise ValueError("anchor_item_position 不是现有 item_position")
-        if isinstance(raw_anchor_quantity, bool) or not isinstance(raw_anchor_quantity, (int, float)):
-            raise ValueError("anchor_user_quantity 必须是数值或 null")
-        anchor_quantity = numeric_or_none(raw_anchor_quantity)
-        if anchor_quantity is None or anchor_quantity <= 0:
-            raise ValueError("anchor_user_quantity 必须大于 0")
-        anchor_position = raw_anchor_position
-    parsed: dict[int, str] = {}
+    anchor_historical_quantity = historical.get(anchor_position)
+    if anchor_historical_quantity is None or anchor_historical_quantity <= 0:
+        raise ValueError("anchor_historical_quantity 必须大于 0")
+    if anchor_source == "historical_fallback" and anchor_quantity != anchor_historical_quantity:
+        raise ValueError("historical_fallback 的 anchor_user_quantity 必须等于 anchor 历史工程量")
+    parsed: dict[int, dict[str, Any]] = {}
     for entry in raw_entries:
-        if not isinstance(entry, dict) or set(entry) != {"item_position", "rule"}:
+        if not isinstance(entry, dict) or set(entry) != {"item_position", "rule", "user_exact_quantity"}:
             raise ValueError("item_quantity_rule 字段非法")
         position = entry.get("item_position")
         if isinstance(position, bool) or not isinstance(position, int):
             raise ValueError("quantity item_position 必须是整数")
         if position in parsed:
             raise ValueError(f"quantity item_position 重复: {position}")
+        if position == anchor_position:
+            raise ValueError("item_quantity_rules 不得包含 anchor 自身")
+        if position not in expected_positions:
+            raise ValueError(f"quantity item_position 非法: {position}")
         rule = cell_text(entry.get("rule"))
         if rule not in {"use_user_exact", "scale_with_anchor", "keep_historical"}:
             raise ValueError(f"quantity rule 非法: item_position={position}")
+        user_exact_quantity = entry.get("user_exact_quantity")
+        if rule == "use_user_exact":
+            if isinstance(user_exact_quantity, bool) or not isinstance(user_exact_quantity, (int, float)):
+                raise ValueError(f"use_user_exact 必须提供正数 user_exact_quantity: item_position={position}")
+            user_exact_quantity = numeric_or_none(user_exact_quantity)
+            if user_exact_quantity is None or user_exact_quantity <= 0:
+                raise ValueError(f"use_user_exact 必须提供正数 user_exact_quantity: item_position={position}")
+        elif user_exact_quantity is not None:
+            raise ValueError(f"非 use_user_exact 的 user_exact_quantity 必须为 null: item_position={position}")
+        if anchor_source == "historical_fallback" and rule == "scale_with_anchor":
+            raise ValueError("historical_fallback 时不得使用 scale_with_anchor")
         if rule in {"scale_with_anchor", "keep_historical"} and (historical.get(position) is None or historical[position] <= 0):
             raise ValueError(f"historical_quantity 必须大于 0: item_position={position}")
-        parsed[position] = rule
-    if anchor_position is not None:
-        if anchor_position not in parsed:
-            parsed[anchor_position] = "use_user_exact"
-            anchor_rule_auto_filled = True
-        elif parsed[anchor_position] != "use_user_exact":
-            raise ValueError("anchor 必须使用 use_user_exact")
+        parsed[position] = {"rule": rule, "user_exact_quantity": user_exact_quantity}
     actual_positions = set(parsed)
     if actual_positions != expected_positions:
-        raise ValueError("quantity 必须覆盖选定区间内全部清单")
-    if anchor_position is None and set(parsed.values()) != {"keep_historical"}:
-        raise ValueError("anchor 为 null 时全部清单必须 keep_historical")
-    if anchor_position is not None:
-        extra_exact = [position for position, rule in parsed.items() if rule == "use_user_exact" and position != anchor_position]
-        if extra_exact:
-            raise ValueError("use_user_exact 只能用于 anchor")
-        anchor_historical_quantity = historical.get(anchor_position)
-        if anchor_historical_quantity is None or anchor_historical_quantity <= 0:
-            raise ValueError("anchor_historical_quantity 必须大于 0")
-        anchor = {
-            "item_position": anchor_position,
-            "user_quantity": anchor_quantity,
-            "historical_quantity": anchor_historical_quantity,
-        }
-    else:
-        anchor = None
-    if anchor_rule_auto_filled:
-        append_warning(normalization_warnings, f"quantity_anchor_rule_auto_filled:{anchor_position}")
+        raise ValueError("quantity 必须完整覆盖全部非 anchor 清单")
+    anchor = {
+        "item_position": anchor_position,
+        "user_quantity": anchor_quantity,
+        "historical_quantity": anchor_historical_quantity,
+        "quantity_source": anchor_source,
+    }
     return anchor, parsed
 
 
@@ -2876,17 +2871,31 @@ QUANTITY_REASONS = {
 
 
 def calculate_quantities(
-    plan_items: pd.DataFrame, anchor: dict[str, Any] | None,
-    rules: dict[int, str],
+    plan_items: pd.DataFrame, anchor: dict[str, Any],
+    rules: dict[int, dict[str, Any]],
 ) -> dict[int, tuple[dict[str, Any], str]]:
-    scale_factor = None if anchor is None else float(anchor["user_quantity"]) / float(anchor["historical_quantity"])
+    anchor_source = cell_text(anchor.get("quantity_source"))
+    scale_factor = (
+        float(anchor["user_quantity"]) / float(anchor["historical_quantity"])
+        if anchor_source == "user_explicit" else None
+    )
     quantities: dict[int, tuple[dict[str, Any], str]] = {}
+    anchor_position = int(anchor["item_position"])
+    anchor_value = anchor["user_quantity"] if anchor_source == "user_explicit" else anchor["historical_quantity"]
+    anchor_reason_rule = "use_user_exact" if anchor_source == "user_explicit" else "keep_historical"
+    quantities[anchor_position] = (
+        {"type": "exact", "value": round(float(anchor_value), 4)},
+        QUANTITY_REASONS[anchor_reason_rule],
+    )
     for _index, row in plan_items.iterrows():
         position = int(row["item_position"])
-        rule = rules[position]
+        if position == anchor_position:
+            continue
+        rule_entry = rules[position]
+        rule = cell_text(rule_entry.get("rule"))
         historical = numeric_or_none(row.get("quantity"))
         if rule == "use_user_exact":
-            value = None if anchor is None or position != int(anchor["item_position"]) else anchor["user_quantity"]
+            value = numeric_or_none(rule_entry.get("user_exact_quantity"))
         elif rule == "scale_with_anchor":
             value = None if historical is None or scale_factor is None else historical * scale_factor
         else:
@@ -2895,12 +2904,6 @@ def calculate_quantities(
         if rounded is None or rounded <= 0:
             raise ValueError(f"最终工程量必须大于 0: item_position={position}")
         quantities[position] = ({"type": "exact", "value": rounded}, QUANTITY_REASONS[rule])
-    if anchor is not None:
-        anchor_position = int(anchor["item_position"])
-        quantities[anchor_position] = (
-            {"type": "exact", "value": float(anchor["user_quantity"])},
-            QUANTITY_REASONS["use_user_exact"],
-        )
     return quantities
 
 
@@ -2952,24 +2955,29 @@ def generate_quantity_determination(
     max_tokens = 4096
     response = None
     error_message = ""
-    normalization_warnings: list[str] = []
     try:
         response = request_llm_json_with_usage(
             prompt,
             max_tokens=max_tokens,
             system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
         )
-        anchor, rules = validate_quantity_rule_result(
-            response.content, plan_items, normalization_warnings
-        )
-        for warning in normalization_warnings:
-            append_warning(warnings, warning)
+        anchor, rules = validate_quantity_rule_result(response.content, plan_items)
     except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
         error_message = str(exc)
-        anchor = None
+        anchor_row = plan_items.iloc[0]
+        anchor_position = int(anchor_row["item_position"])
+        anchor_historical_quantity = numeric_or_none(anchor_row.get("quantity"))
+        if anchor_historical_quantity is None or anchor_historical_quantity <= 0:
+            raise ValueError(f"anchor_historical_quantity 必须大于 0: item_position={anchor_position}")
+        anchor = {
+            "item_position": anchor_position,
+            "user_quantity": anchor_historical_quantity,
+            "historical_quantity": anchor_historical_quantity,
+            "quantity_source": "historical_fallback",
+        }
         rules = {
-            int(row["item_position"]): "keep_historical"
-            for _index, row in plan_items.iterrows()
+            int(row["item_position"]): {"rule": "keep_historical", "user_exact_quantity": None}
+            for _index, row in plan_items.iloc[1:].iterrows()
         }
         append_warning(warnings, "quantity_determination_fallback_keep_historical")
     quantities = calculate_quantities(plan_items, anchor, rules)
@@ -2986,14 +2994,12 @@ def generate_quantity_determination(
         input_summary=json_text({
             "selected_project_package_id": project_package_id,
             "expected_item_positions": plan_items["item_position"].tolist(),
-            "normalization_applied": bool(normalization_warnings),
         }),
         usage=response.usage if response is not None else None,
         raw_response=getattr(response, "raw_content", "") if response is not None else "",
         scenario_count=1,
         scenario_item_count=len(scenario.items),
     )
-    trace["normalization_applied"] = bool(normalization_warnings)
     trace["fallback"] = bool(error_message)
     return scenario, prompt, trace
 
