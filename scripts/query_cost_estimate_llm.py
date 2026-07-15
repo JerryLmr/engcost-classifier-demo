@@ -3292,40 +3292,68 @@ def generate_optional_final_explanation(
     )
 
 
-def build_option_evidence_expansion_prompt(
-    target_option: dict[str, Any],
+def build_option_evidence_tag_prompt(
+    representative_family: dict[str, Any],
     candidate_families: list[dict[str, Any]],
 ) -> str:
     payload = {
-        "target_option": target_option,
+        "representative_family": representative_family,
         "candidate_families": candidate_families,
     }
 
     return f"""
-任务：判断哪些候选 family 可以加入目标 option 的价格证据。
+任务：为代表 Family 和候选 Family 提取用于价格证据扩充的严格匹配标签。
 
-只有在以下内容基本一致时才可加入：
-- 维修对象
-- 施工动作
-- 主要工作范围
-- 材料或关键规格
-- 单位
+这些标签将由程序进行完全一致比较。只有全部标签一致的候选 Family，才可能加入代表 Family 的价格证据。
 
-判断原则：
+必须提取以下字段：
 
-1. 名称写法不同，不代表不能合并。
-2. “含人工”“含安装”“含拆除及安装”“含运输”等附带说明不同，可以合并。
-3. 维修对象不同，不得合并。
-4. 施工动作或主要工作范围明显不同，不得合并。
-5. 材料、型号、尺寸或关键规格存在冲突，不得合并。
-6. 单位不兼容，不得合并。
-7. 信息不足或无法确认时，不要加入。
-8. 只能返回输入中存在的 family_id，不得重复。
+- object_action：维修对象与施工动作的标准化表达。
+- thickness：明确出现的厚度或核心尺寸规格。
+- material：明确出现的主要材料类别。
+- level：明确出现的楼层、层数或高度条件。
 
-只输出合法 JSON：
+提取规则：
+
+1. object_action 必须同时体现维修对象和主要施工动作。
+2. 维修对象不同，object_action 必须不同。
+3. 主体设备与其部件、附件或配套系统，object_action 必须不同。
+4. 更换、维修、拆除、新做、安装、调试、改造等不同动作必须区分。
+5. 不得仅按共同用途、共同专业、共同系统或相似关键词生成相同 object_action。
+6. 不得将消防报警主机、消防广播主机、消防电话主机、多线盘、回路板等统一为同一对象。
+7. 不得将曳引钢丝绳、限速器钢丝绳、钢带、曳引轮、绳轮组件统一为同一对象。
+8. 不得将瓦屋面、卷材防水、涂膜防水、涂料面层统一为同一对象。
+9. thickness 只填写明确出现的厚度或核心尺寸；没有时填写空字符串。
+10. 厚度表达需要标准化，例如 3.0mm、3mm、3厚统一为 3mm。
+11. material 只填写明确的主要材料类别；没有时填写空字符串。
+12. 材料不同必须区分，例如：
+    - SBS改性沥青
+    - 自粘卷材
+    - 高分子卷材
+    - 聚氨酯
+    - 聚合物水泥基
+    - 水泥基
+    - JS
+    - 非固化防水涂料
+13. level 只填写明确的楼层、层数或高度条件，例如 1层、2层、5层、高度20m以内；没有时填写空字符串。
+14. “含人工”“含安装”“含拆除及安装人工”“含运输”“基层清理”“垃圾清运”等一般附带说明，不应改变标签。
+15. 型号、尺寸、规格会影响维修对象或计价口径时，应体现在 object_action 或 thickness 中。
+16. 信息不足时不得猜测，填写空字符串。
+17. 每个输入 family_id 必须且只能返回一次，不得遗漏、重复或新增。
+18. 不判断是否接受候选，不输出 accepted_family_ids，程序会自行比较标签。
+
+只输出合法 JSON，顶层只能包含 families：
 
 {{
-  "accepted_family_ids": []
+  "families": [
+    {{
+      "family_id": "F001",
+      "object_action": "曳引钢丝绳更换",
+      "thickness": "",
+      "material": "",
+      "level": ""
+    }}
+  ]
 }}
 
 输入：
@@ -3333,29 +3361,60 @@ def build_option_evidence_expansion_prompt(
 """.strip()
 
 
-def validate_option_evidence_expansion_result(
+def validate_option_evidence_tag_result(
     result: Any,
-    allowed_family_ids: list[str],
-) -> list[str]:
-    if not isinstance(result, dict) or set(result) != {"accepted_family_ids"}:
+    expected_family_ids: list[str],
+) -> dict[str, dict[str, str]]:
+    if not isinstance(result, dict) or set(result) != {"families"}:
         raise ValueError("option evidence expansion 顶层字段非法")
-    accepted = result.get("accepted_family_ids")
-    if not isinstance(accepted, list):
-        raise ValueError("option evidence expansion accepted_family_ids 必须是数组")
-    allowed = set(allowed_family_ids)
-    parsed: list[str] = []
+    families = result.get("families")
+    if not isinstance(families, list):
+        raise ValueError("option evidence expansion families 必须是数组")
+    expected_fields = {"family_id", "object_action", "thickness", "material", "level"}
+    parsed: dict[str, dict[str, str]] = {}
     seen: set[str] = set()
-    for value in accepted:
-        if not isinstance(value, str) or not value.strip():
+    for family in families:
+        if not isinstance(family, dict) or set(family) != expected_fields:
+            raise ValueError("option evidence expansion family 字段非法")
+        if any(not isinstance(family[field], str) for field in expected_fields):
+            raise ValueError("option evidence expansion family 字段必须为字符串")
+        family_id = family["family_id"]
+        if not family_id:
             raise ValueError("option evidence expansion family_id 必须是非空字符串")
-        family_id = value.strip()
         if family_id in seen:
             raise ValueError(f"option evidence expansion family_id 重复: {family_id}")
-        if family_id not in allowed:
-            raise ValueError(f"option evidence expansion family_id 非法: {family_id}")
         seen.add(family_id)
-        parsed.append(family_id)
+        parsed[family_id] = {
+            "object_action": family["object_action"],
+            "thickness": family["thickness"],
+            "material": family["material"],
+            "level": family["level"],
+        }
+    if seen != set(expected_family_ids) or len(families) != len(expected_family_ids):
+        raise ValueError("option evidence expansion family_id 集合与输入不一致")
     return parsed
+
+
+def matching_option_evidence_family_ids(
+    representative_family: dict[str, Any],
+    candidate_families: list[dict[str, Any]],
+    tags_by_family_id: dict[str, dict[str, str]],
+) -> list[str]:
+    representative_family_id = representative_family["family_id"]
+    representative_unit = representative_family["unit"]
+    representative_tags = tags_by_family_id[representative_family_id]
+    tag_fields = ("object_action", "thickness", "material", "level")
+    return [
+        candidate["family_id"]
+        for candidate in candidate_families
+        if (
+            candidate["unit"] == representative_unit
+            and all(
+                tags_by_family_id[candidate["family_id"]][field] == representative_tags[field]
+                for field in tag_fields
+            )
+        )
+    ]
 
 
 def option_evidence_expansion_candidates(
@@ -3368,6 +3427,10 @@ def option_evidence_expansion_candidates(
     ))
     if not original_family_ids:
         raise ValueError(f"Option 缺少 family_ids: option_id={item.practice_option_id}")
+    if not item.representative_family_id or item.representative_family_id not in original_family_ids:
+        raise ValueError(
+            f"代表 Family 不属于原 Option: family_id={item.representative_family_id}"
+        )
 
     family_ids = candidate_families.get("family_id", pd.Series(dtype=object)).map(cell_text)
     representative_rows = candidate_families[family_ids.eq(item.representative_family_id)]
@@ -3378,7 +3441,8 @@ def option_evidence_expansion_candidates(
         )
     representative = representative_rows.iloc[0]
     target_unit = cell_text(representative.get("unit_normalized"))
-    target_option = {
+    representative_family = {
+        "family_id": item.representative_family_id,
         "cost_item_name": normalize_evidence_expansion_name(
             representative.get("representative_cost_item_name")
         ),
@@ -3409,7 +3473,7 @@ def option_evidence_expansion_candidates(
         })
         if len(candidates) >= 20:
             break
-    return original_family_ids, target_option, candidates
+    return original_family_ids, representative_family, candidates
 
 
 def expand_option_price_evidence_families(
@@ -3432,60 +3496,102 @@ def expand_option_price_evidence_families(
     for item in final_items:
         display = display_map.get(item.display_id)
         option = option_map.get((item.display_id, item.practice_option_id))
-        representative = family_map.get(item.representative_family_id)
-        if display is None or option is None or representative is None:
+        if display is None or option is None:
             raise ValueError(
-                f"价格证据扩充 display/option/family 回查失败: item_position={item.item_position}"
+                f"价格证据扩充 display/option 回查失败: item_position={item.item_position}"
             )
-        original_family_ids, target_option, candidates = option_evidence_expansion_candidates(
-            item, option, candidate_families
+        original_family_ids = list(dict.fromkeys(
+            cell_text(value) for value in option.get("family_ids", []) if cell_text(value)
+        ))
+        if not original_family_ids:
+            raise ValueError(f"Option 缺少 family_ids: option_id={item.practice_option_id}")
+        original_option = {**option, "family_ids": original_family_ids}
+        original_evidence = expand_samples_for_option(
+            original_option, display, candidate_families, samples
         )
-        candidate_ids = [candidate["family_id"] for candidate in candidates]
-        prompt = build_option_evidence_expansion_prompt(target_option, candidates) if candidates else ""
+        original_evidence_count = len(original_evidence)
+
+        representative = family_map.get(item.representative_family_id)
+        representative_family: dict[str, Any] = {}
+        candidates: list[dict[str, Any]] = []
+        candidate_ids: list[str] = []
+        prompt = ""
         response = None
         accepted_family_ids: list[str] = []
         error_message = ""
-        max_tokens = 512 if candidates else 0
-        try:
-            if candidates:
-                response = request_llm_json_with_usage(
-                    prompt,
-                    max_tokens=max_tokens,
-                    system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
+        max_tokens = 0
+        skipped_reason = ""
+
+        if original_evidence_count >= 10:
+            skipped_reason = "threshold"
+        else:
+            try:
+                (
+                    checked_original_family_ids,
+                    representative_family,
+                    candidates,
+                ) = option_evidence_expansion_candidates(item, option, candidate_families)
+                if checked_original_family_ids != original_family_ids:
+                    raise ValueError("option evidence expansion 原 family_ids 不一致")
+                candidate_ids = [candidate["family_id"] for candidate in candidates]
+                if not candidates:
+                    skipped_reason = "no_candidates"
+                else:
+                    prompt = build_option_evidence_tag_prompt(
+                        representative_family, candidates
+                    )
+                    max_tokens = 2048
+                    response = request_llm_json_with_usage(
+                        prompt,
+                        max_tokens=max_tokens,
+                        system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
+                    )
+                    expected_family_ids = [item.representative_family_id, *candidate_ids]
+                    tags_by_family_id = validate_option_evidence_tag_result(
+                        response.content, expected_family_ids
+                    )
+                    accepted_family_ids = matching_option_evidence_family_ids(
+                        representative_family,
+                        candidates,
+                        tags_by_family_id,
+                    )
+            except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+                error_message = str(exc)
+                accepted_family_ids = []
+                candidates = candidates if representative_family else []
+                candidate_ids = [candidate["family_id"] for candidate in candidates]
+                append_warning(
+                    warnings,
+                    f"option_evidence_expansion_failed:item_position={item.item_position}",
                 )
-                accepted_family_ids = validate_option_evidence_expansion_result(
-                    response.content, candidate_ids
-                )
-        except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-            error_message = str(exc)
-            accepted_family_ids = []
-            append_warning(
-                warnings,
-                f"option_evidence_expansion_failed:item_position={item.item_position}",
-            )
 
         expanded_family_ids = list(dict.fromkeys([
             *original_family_ids,
             *accepted_family_ids,
         ]))
         expanded_by_position[item.item_position] = expanded_family_ids
-        original_option = {**option, "family_ids": original_family_ids}
         expanded_option = {**option, "family_ids": expanded_family_ids}
-        original_evidence = expand_samples_for_option(
-            original_option, display, candidate_families, samples
+        expanded_evidence = (
+            original_evidence
+            if not accepted_family_ids
+            else expand_samples_for_option(
+                expanded_option, display, candidate_families, samples
+            )
         )
-        expanded_evidence = expand_samples_for_option(
-            expanded_option, display, candidate_families, samples
-        )
+        sheet_name = ""
+        if representative is not None and item.representative_family_id in original_family_ids:
+            sheet_name = cell_text(representative.get("representative_cost_item_name"))
+        if not sheet_name:
+            sheet_name = cell_text(display.get("display_name"))
         sheet_rows.append({
             "final_item_position": item.item_position,
-            "清单名称": cell_text(representative.get("representative_cost_item_name")),
+            "清单名称": sheet_name,
             "practice_option_id": item.practice_option_id,
             "原family数": len(original_family_ids),
-            "候选family数": len(candidates),
+            "候选family数": len(candidates) if prompt else 0,
             "新增family数": len(accepted_family_ids),
             "扩展后family数": len(expanded_family_ids),
-            "原价格证据样本数": len(original_evidence),
+            "原价格证据样本数": original_evidence_count,
             "扩展后价格证据样本数": len(expanded_evidence),
             "新增family_ids": ",".join(accepted_family_ids),
         })
@@ -3494,23 +3600,40 @@ def expand_option_price_evidence_families(
             raw_response = cell_text(getattr(response, "raw_content", ""))
             if not raw_response:
                 raw_response = json_text(response.content)
+
+        if skipped_reason == "threshold":
+            input_summary = (
+                f"item_position={item.item_position}; "
+                f"original_evidence={original_evidence_count}; skipped=threshold"
+            )
+        elif skipped_reason == "no_candidates":
+            input_summary = (
+                f"item_position={item.item_position}; "
+                f"original_evidence={original_evidence_count}; candidates=0; "
+                "skipped=no_candidates"
+            )
+        else:
+            input_summary = (
+                f"item_position={item.item_position}; "
+                f"original_evidence={original_evidence_count}; "
+                f"original_families={len(original_family_ids)}; "
+                f"candidates={len(candidate_ids)}; accepted={len(accepted_family_ids)}"
+            )
         trace = trace_row(
             "option_evidence_expansion",
-            "判断可加入最终 option 价格证据的等价 family",
+            "提取严格标签并扩充与代表 Family 完全一致的价格证据",
             not error_message,
             error=error_message,
             prompt=prompt,
             max_tokens=max_tokens,
-            input_summary=(
-                f"item_position={item.item_position}; "
-                f"original_families={len(original_family_ids)}; "
-                f"candidates={len(candidates)}; accepted={len(accepted_family_ids)}"
-            ),
+            input_summary=input_summary,
             usage=response.usage if response is not None else None,
             raw_response=raw_response,
             scenario_count=1,
             scenario_item_count=1,
         )
+        if skipped_reason:
+            trace["parsed_status"] = "skipped"
         trace["fallback"] = bool(error_message)
         traces.append(trace)
 

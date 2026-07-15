@@ -2372,22 +2372,145 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {"family_id", "cost_item_name", "project_description", "unit"},
         )
 
-    def test_evidence_expansion_validates_accepted_ids_strictly(self):
-        self.assertEqual(
-            query_estimate_llm.validate_option_evidence_expansion_result(
-                {"accepted_family_ids": ["F2"]}, ["F2", "F3"]
-            ),
-            ["F2"],
+    def evidence_tags(self, family_id: str, **overrides: str) -> dict[str, str]:
+        tags = {
+            "family_id": family_id,
+            "object_action": "曳引钢丝绳更换",
+            "thickness": "",
+            "material": "",
+            "level": "",
+        }
+        tags.update(overrides)
+        return tags
+
+    def test_evidence_expansion_validates_tag_output_strictly(self):
+        parsed = query_estimate_llm.validate_option_evidence_tag_result(
+            {"families": [self.evidence_tags("F1"), self.evidence_tags("F2")]},
+            ["F1", "F2"],
         )
+        self.assertEqual(parsed["F1"]["object_action"], "曳引钢丝绳更换")
+
         invalid_results = [
-            {"accepted_family_ids": ["F9"]},
-            {"accepted_family_ids": ["F2", "F2"]},
-            {"accepted_family_ids": "F2"},
-            {"accepted_family_ids": [], "extra": True},
+            {},
+            {"families": [], "extra": True},
+            {"families": "not-an-array"},
+            {"families": [{"family_id": "F1"}]},
+            {"families": [{**self.evidence_tags("F1"), "extra": "x"}]},
+            {"families": [{**self.evidence_tags("F1"), "level": 1}]},
+            {"families": [self.evidence_tags("F1"), self.evidence_tags("F1")]},
+            {"families": [self.evidence_tags("F2")]},
+            {"families": [self.evidence_tags("F1")]},
+            {"families": [self.evidence_tags("F1"), self.evidence_tags("F9")]},
+            {"accepted_family_ids": ["F2"]},
         ]
         for result in invalid_results:
             with self.subTest(result=result), self.assertRaises(ValueError):
-                query_estimate_llm.validate_option_evidence_expansion_result(result, ["F2", "F3"])
+                query_estimate_llm.validate_option_evidence_tag_result(result, ["F1", "F2"])
+
+    def test_evidence_expansion_matches_all_tags_by_exact_string_equality(self):
+        tags = {
+            "F1": {key: value for key, value in self.evidence_tags("F1").items() if key != "family_id"},
+            "F2": {key: value for key, value in self.evidence_tags("F2").items() if key != "family_id"},
+            "F3": {key: value for key, value in self.evidence_tags(
+                "F3", object_action="限速器钢丝绳更换"
+            ).items() if key != "family_id"},
+            "F4": {key: value for key, value in self.evidence_tags(
+                "F4", thickness="10mm"
+            ).items() if key != "family_id"},
+            "F5": {key: value for key, value in self.evidence_tags(
+                "F5", object_action="曳引钢丝绳维修"
+            ).items() if key != "family_id"},
+            "F6": {key: value for key, value in self.evidence_tags("F6").items() if key != "family_id"},
+        }
+        self.assertEqual(
+            query_estimate_llm.matching_option_evidence_family_ids(
+                {"family_id": "F1", "unit": "m²"},
+                [{"family_id": family_id, "unit": "m²"} for family_id in ["F2", "F3", "F4", "F5"]]
+                + [{"family_id": "F6", "unit": "m"}],
+                tags,
+            ),
+            ["F2"],
+        )
+
+        waterproof_tags = {
+            "F1": {"object_action": "卷材防水新做", "thickness": "3mm", "material": "SBS改性沥青", "level": ""},
+            "F2": {"object_action": "卷材防水新做", "thickness": "3mm", "material": "SBS改性沥青", "level": ""},
+            "F3": {"object_action": "卷材防水新做", "thickness": "4mm", "material": "SBS改性沥青", "level": ""},
+            "F4": {"object_action": "卷材防水新做", "thickness": "3mm", "material": "自粘卷材", "level": ""},
+            "F5": {"object_action": "瓦屋面新做", "thickness": "3mm", "material": "SBS改性沥青", "level": ""},
+        }
+        self.assertEqual(
+            query_estimate_llm.matching_option_evidence_family_ids(
+                {"family_id": "F1", "unit": "m²"},
+                [
+                    {"family_id": "F2", "unit": "m²"},
+                    {"family_id": "F3", "unit": "m²"},
+                    {"family_id": "F4", "unit": "m²"},
+                    {"family_id": "F5", "unit": "m²"},
+                ],
+                waterproof_tags,
+            ),
+            ["F2"],
+        )
+
+        fire_tags = {
+            "F1": {"object_action": "消防广播主机更换", "thickness": "", "material": "", "level": ""},
+            "F2": {"object_action": "消防广播主机更换", "thickness": "", "material": "", "level": ""},
+            "F3": {"object_action": "消防报警主机更换", "thickness": "", "material": "", "level": ""},
+            "F4": {"object_action": "多线盘更换", "thickness": "", "material": "", "level": ""},
+            "F5": {"object_action": "回路板更换", "thickness": "", "material": "", "level": ""},
+        }
+        self.assertEqual(
+            query_estimate_llm.matching_option_evidence_family_ids(
+                {"family_id": "F1", "unit": "台"},
+                [{"family_id": family_id, "unit": "台"} for family_id in ["F2", "F3", "F4", "F5"]],
+                fire_tags,
+            ),
+            ["F2"],
+        )
+
+    def test_evidence_expansion_uses_selected_representative_without_reselection(self):
+        original = self.evidence_expansion_item()
+        item = query_estimate_llm.ScenarioItem(
+            original.project_package_id, original.stable_sample_id, original.source_ref,
+            original.display_id, original.practice_option_id, original.original_option_id,
+            original.original_family_id, "F2", original.selection_reason, original.quantity,
+            original.quantity_reason, original.item_position,
+            quantity_source=original.quantity_source,
+        )
+        option = {"practice_option_id": "D1-O01", "family_ids": ["F1", "F2"]}
+        families = pd.DataFrame([
+            self.price_family("F1", "sig-1", unit="m"),
+            self.price_family("F2", "sig-2", unit="台"),
+            self.price_family("F3", "sig-3", unit="台"),
+        ])
+
+        original_family_ids, representative, candidates = (
+            query_estimate_llm.option_evidence_expansion_candidates(item, option, families)
+        )
+
+        self.assertEqual(original_family_ids, ["F1", "F2"])
+        self.assertEqual(representative["family_id"], "F2")
+        self.assertEqual(representative["unit"], "台")
+        self.assertEqual([candidate["family_id"] for candidate in candidates], ["F3"])
+
+    def test_evidence_expansion_prompt_payload_is_minimal(self):
+        representative = {
+            "family_id": "F1", "cost_item_name": "清单F1",
+            "project_description": "特征F1", "unit": "m²",
+        }
+        candidates = [{
+            "family_id": "F2", "cost_item_name": "清单F2",
+            "project_description": "特征F2", "unit": "m²",
+        }]
+        prompt = query_estimate_llm.build_option_evidence_tag_prompt(representative, candidates)
+        payload = json.loads(prompt.split("输入：\n", 1)[1])
+        self.assertEqual(payload, {
+            "representative_family": representative,
+            "candidate_families": candidates,
+        })
+        for forbidden in ["price", "sample_count", "similarity", "source_refs", "accepted"]:
+            self.assertNotIn(forbidden, json.dumps(payload, ensure_ascii=False))
 
     def test_evidence_expansion_success_updates_counts_and_deduplicates_samples(self):
         item = self.evidence_expansion_item()
@@ -2406,8 +2529,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             self.price_sample("sid-2", "sig-2", 999, source_ref="duplicate-ref"),
             self.price_sample("sid-3", "sig-2", 30, source_ref="ref-3"),
         ])
+        response_content = {"families": [
+            self.evidence_tags("F1"),
+            self.evidence_tags("F2"),
+            self.evidence_tags("F3", object_action="限速器钢丝绳更换"),
+        ]}
         response = types.SimpleNamespace(
-            content={"accepted_family_ids": ["F2"]}, usage={}, raw_content='{"accepted_family_ids":["F2"]}'
+            content=response_content, usage={}, raw_content=json.dumps(response_content, ensure_ascii=False)
         )
 
         with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response):
@@ -2423,6 +2551,112 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(sheet.loc[0, "新增family_ids"], "F2")
         self.assertEqual(traces[0]["stage"], "option_evidence_expansion")
         self.assertFalse(traces[0]["fallback"])
+
+    def test_evidence_expansion_threshold_uses_original_evidence_count(self):
+        item = self.evidence_expansion_item()
+        displays = pd.DataFrame([{
+            "display_id": "D1", "unit": "m²",
+            "practice_options": [{"practice_option_id": "D1-O01", "family_ids": ["F1"]}],
+        }])
+        families = pd.DataFrame([
+            self.price_family("F1", "sig-1"), self.price_family("F2", "sig-2"),
+        ])
+        samples = pd.DataFrame([
+            self.price_sample(f"sid-{index}", "sig-1", index)
+            for index in range(1, 11)
+        ])
+
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage") as llm:
+            expanded, sheet, traces = query_estimate_llm.expand_option_price_evidence_families(
+                [item], displays, families, samples, []
+            )
+
+        llm.assert_not_called()
+        self.assertEqual(expanded, {3: ["F1"]})
+        self.assertEqual(sheet.loc[0, "候选family数"], 0)
+        self.assertEqual(sheet.loc[0, "原价格证据样本数"], 10)
+        self.assertEqual(sheet.loc[0, "扩展后价格证据样本数"], 10)
+        self.assertEqual(traces[0]["parsed_status"], "skipped")
+        self.assertIn("original_evidence=10; skipped=threshold", traces[0]["input_summary"])
+        self.assertFalse(traces[0]["fallback"])
+
+    def test_evidence_expansion_nine_samples_calls_llm_once(self):
+        item = self.evidence_expansion_item()
+        displays = pd.DataFrame([{
+            "display_id": "D1", "unit": "m²",
+            "practice_options": [{"practice_option_id": "D1-O01", "family_ids": ["F1"]}],
+        }])
+        families = pd.DataFrame([
+            self.price_family("F1", "sig-1"), self.price_family("F2", "sig-2"),
+        ])
+        samples = pd.DataFrame([
+            self.price_sample(f"sid-{index}", "sig-1", index)
+            for index in range(1, 10)
+        ] + [self.price_sample("sid-10", "sig-2", 10)])
+        response_content = {"families": [self.evidence_tags("F1"), self.evidence_tags("F2")]}
+        response = types.SimpleNamespace(content=response_content, usage={}, raw_content="")
+
+        with patch.object(
+            query_estimate_llm, "request_llm_json_with_usage", return_value=response
+        ) as llm:
+            expanded, _sheet, _traces = query_estimate_llm.expand_option_price_evidence_families(
+                [item], displays, families, samples, []
+            )
+
+        llm.assert_called_once()
+        self.assertEqual(expanded, {3: ["F1", "F2"]})
+
+    def test_evidence_expansion_no_candidates_is_normal_skip(self):
+        item = self.evidence_expansion_item()
+        displays = pd.DataFrame([{
+            "display_id": "D1", "unit": "m²",
+            "practice_options": [{"practice_option_id": "D1-O01", "family_ids": ["F1"]}],
+        }])
+        families = pd.DataFrame([self.price_family("F1", "sig-1")])
+        samples = pd.DataFrame([self.price_sample("sid-1", "sig-1", 10)])
+        warnings = []
+
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage") as llm:
+            expanded, sheet, traces = query_estimate_llm.expand_option_price_evidence_families(
+                [item], displays, families, samples, warnings
+            )
+
+        llm.assert_not_called()
+        self.assertEqual(expanded, {3: ["F1"]})
+        self.assertEqual(sheet.loc[0, "候选family数"], 0)
+        self.assertEqual(traces[0]["parsed_status"], "skipped")
+        self.assertIn("skipped=no_candidates", traces[0]["input_summary"])
+        self.assertFalse(traces[0]["fallback"])
+        self.assertEqual(warnings, [])
+
+    def test_evidence_expansion_invalid_representative_falls_back_without_reselection(self):
+        original = self.evidence_expansion_item()
+        item = query_estimate_llm.ScenarioItem(
+            original.project_package_id, original.stable_sample_id, original.source_ref,
+            original.display_id, original.practice_option_id, original.original_option_id,
+            original.original_family_id, "F2", original.selection_reason, original.quantity,
+            original.quantity_reason, original.item_position,
+            quantity_source=original.quantity_source,
+        )
+        displays = pd.DataFrame([{
+            "display_id": "D1", "display_name": "清单F1", "unit": "m²",
+            "practice_options": [{"practice_option_id": "D1-O01", "family_ids": ["F1"]}],
+        }])
+        families = pd.DataFrame([
+            self.price_family("F1", "sig-1"), self.price_family("F2", "sig-2"),
+        ])
+        samples = pd.DataFrame([self.price_sample("sid-1", "sig-1", 10)])
+        warnings = []
+
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage") as llm:
+            expanded, _sheet, traces = query_estimate_llm.expand_option_price_evidence_families(
+                [item], displays, families, samples, warnings
+            )
+
+        llm.assert_not_called()
+        self.assertEqual(expanded, {3: ["F1"]})
+        self.assertEqual(warnings, ["option_evidence_expansion_failed:item_position=3"])
+        self.assertTrue(traces[0]["fallback"])
 
     def test_evidence_expansion_failure_falls_back_without_blocking(self):
         item = self.evidence_expansion_item()
