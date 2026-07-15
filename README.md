@@ -214,7 +214,7 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
   --text "屋面漏水，想做3mm SBS防水，面积大概500平"
 ```
 
-项目级和清单级解释默认关闭；需要生成说明时显式增加 `--with-explanations`。
+方案生成默认关闭；需要生成说明时显式增加 `--with-explanations`。
 
 默认读取索引目录：
 
