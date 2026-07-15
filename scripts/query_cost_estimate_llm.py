@@ -3292,7 +3292,7 @@ def generate_optional_final_explanation(
     )
 
 
-def build_option_evidence_tag_prompt(
+def build_option_evidence_expansion_prompt(
     representative_family: dict[str, Any],
     candidate_families: list[dict[str, Any]],
 ) -> str:
@@ -3302,47 +3302,59 @@ def build_option_evidence_tag_prompt(
     }
 
     return f"""
-任务：为代表 Family 和候选 Family 提取用于价格证据扩充的严格匹配标签。
+任务：判断哪些候选 Family 可以与代表 Family 使用同一个价格统计口径。
 
-这些标签将由程序进行完全一致比较。只有全部标签一致的候选 Family，才可能加入代表 Family 的价格证据。
+你需要先为代表 Family 和每个候选 Family 提取辅助标签，再结合清单名称、项目特征、单位和辅助标签，判断候选是否可以加入代表 Family 的价格证据。
 
-必须提取以下字段：
+判断目标：
 
-- object_action：维修对象与施工动作的标准化表达。
-- thickness：明确出现的厚度或核心尺寸规格。
-- material：明确出现的主要材料类别。
-- level：明确出现的楼层、层数或高度条件。
+只有候选 Family 与代表 Family 表示同一种维修对象、同一种主要施工动作，并且能够作为同一类清单直接替换计价时，才可以接受。
 
-提取规则：
+辅助标签：
 
-1. object_action 必须同时体现维修对象和主要施工动作。
-2. 维修对象不同，object_action 必须不同。
-3. 主体设备与其部件、附件或配套系统，object_action 必须不同。
-4. 更换、维修、拆除、新做、安装、调试、改造等不同动作必须区分。
-5. 不得仅按共同用途、共同专业、共同系统或相似关键词生成相同 object_action。
-6. 不得将消防报警主机、消防广播主机、消防电话主机、多线盘、回路板等统一为同一对象。
-7. 不得将曳引钢丝绳、限速器钢丝绳、钢带、曳引轮、绳轮组件统一为同一对象。
-8. 不得将瓦屋面、卷材防水、涂膜防水、涂料面层统一为同一对象。
-9. thickness 只填写明确出现的厚度或核心尺寸；没有时填写空字符串。
-10. 厚度表达需要标准化，例如 3.0mm、3mm、3厚统一为 3mm。
-11. material 只填写明确的主要材料类别；没有时填写空字符串。
-12. 材料不同必须区分，例如：
-    - SBS改性沥青
-    - 自粘卷材
-    - 高分子卷材
-    - 聚氨酯
-    - 聚合物水泥基
-    - 水泥基
-    - JS
-    - 非固化防水涂料
-13. level 只填写明确的楼层、层数或高度条件，例如 1层、2层、5层、高度20m以内；没有时填写空字符串。
-14. “含人工”“含安装”“含拆除及安装人工”“含运输”“基层清理”“垃圾清运”等一般附带说明，不应改变标签。
-15. 型号、尺寸、规格会影响维修对象或计价口径时，应体现在 object_action 或 thickness 中。
-16. 信息不足时不得猜测，填写空字符串。
-17. 每个输入 family_id 必须且只能返回一次，不得遗漏、重复或新增。
-18. 不判断是否接受候选，不输出 accepted_family_ids，程序会自行比较标签。
+- object_action：维修对象与主要施工动作的标准化表达。
+- thickness：明确出现的厚度或核心尺寸规格，没有时为 ""。
+- material：明确出现的主要材料类别，没有时为 ""。
+- level：明确出现的楼层、层数或高度条件，没有时为 ""。
 
-只输出合法 JSON，顶层只能包含 families：
+判断原则：
+
+1. 标签仅用于辅助判断，不得只机械比较标签字符串。
+2. 名称表达、语序、标点、OCR、空格或普通文字详略不同，不影响合并。
+3. “含人工”“含安装”“含拆除及安装人工”“含运输”“基层清理”“垃圾清运”等一般附带说明不同，可以忽略。
+4. 如果候选可以直接替换代表 Family，且不会改变用户所选择的维修对象、工艺或计价范围，可以接受。
+5. 如果用户明确某个参数后，需要保留其中一个、排除另一个，则不能接受。
+6. 不得仅因为属于同一专业、同一系统、同一工程、单位相同或关键词相似而接受。
+7. 主体设备与部件、附件、配套设备不得互相替代。
+8. 维修对象不同，不得接受。
+9. 主要施工动作不同，不得接受，例如更换、维修、拆除、新做、安装、调试、改造必须区分。
+10. 明确材料不同，不得接受。
+11. 明确厚度、核心尺寸或规格冲突，不得接受。
+12. 明确楼层、层数或高度条件不同，不得接受；明确值与空值也应谨慎，不得因信息缺失直接视为一致。
+13. 普通品牌、设备编号、图纸编号或内部型号，如不改变维修对象和主要计价口径，可以忽略。
+14. 直径、长度、根数、结构类型、材料类别、厚度等会明显影响计价口径的核心规格，不得忽略。
+15. 信息不足、对象关系不清楚或是否可直接替换无法确认时，不接受。
+
+典型不得接受的关系包括：
+
+- 消防报警主机、消防广播主机、消防电话主机之间；
+- 主机与多线盘、回路板、电话盘、广播盘之间；
+- 主体设备与配套附件之间；
+- 曳引钢丝绳、限速器钢丝绳、钢带、曳引轮、绳轮组件之间；
+- 瓦屋面、卷材防水、涂膜防水、涂料面层之间；
+- 设备更换与设备维修、系统调试、线路改造之间。
+
+每个输入 family_id 必须且只能在 families 中出现一次，不得遗漏、重复或新增。
+
+accepted_family_ids：
+
+- 只能包含 candidate_families 中存在的 family_id；
+- 不得包含代表 Family；
+- 不得重复；
+- 只填写可以与代表 Family 使用同一价格统计口径的候选；
+- 宁可少选，不要扩大到相关但不可直接替换的清单。
+
+只输出合法 JSON，顶层只能包含 families 和 accepted_family_ids：
 
 {{
   "families": [
@@ -3353,7 +3365,8 @@ def build_option_evidence_tag_prompt(
       "material": "",
       "level": ""
     }}
-  ]
+  ],
+  "accepted_family_ids": ["F002"]
 }}
 
 输入：
@@ -3361,11 +3374,12 @@ def build_option_evidence_tag_prompt(
 """.strip()
 
 
-def validate_option_evidence_tag_result(
+def validate_option_evidence_expansion_result(
     result: Any,
-    expected_family_ids: list[str],
-) -> dict[str, dict[str, str]]:
-    if not isinstance(result, dict) or set(result) != {"families"}:
+    representative_family_id: str,
+    candidate_family_ids: list[str],
+) -> tuple[dict[str, dict[str, str]], list[str]]:
+    if not isinstance(result, dict) or set(result) != {"families", "accepted_family_ids"}:
         raise ValueError("option evidence expansion 顶层字段非法")
     families = result.get("families")
     if not isinstance(families, list):
@@ -3390,31 +3404,59 @@ def validate_option_evidence_tag_result(
             "material": family["material"],
             "level": family["level"],
         }
+    expected_family_ids = [representative_family_id, *candidate_family_ids]
     if seen != set(expected_family_ids) or len(families) != len(expected_family_ids):
         raise ValueError("option evidence expansion family_id 集合与输入不一致")
-    return parsed
+    accepted = result.get("accepted_family_ids")
+    if not isinstance(accepted, list):
+        raise ValueError("option evidence expansion accepted_family_ids 必须是数组")
+    candidate_set = set(candidate_family_ids)
+    accepted_family_ids: list[str] = []
+    accepted_seen: set[str] = set()
+    for family_id in accepted:
+        if not isinstance(family_id, str) or not family_id:
+            raise ValueError("option evidence expansion accepted family_id 必须是非空字符串")
+        if family_id in accepted_seen:
+            raise ValueError(f"option evidence expansion accepted family_id 重复: {family_id}")
+        if family_id not in candidate_set:
+            raise ValueError(f"option evidence expansion accepted family_id 非法: {family_id}")
+        accepted_seen.add(family_id)
+        accepted_family_ids.append(family_id)
+    return parsed, accepted_family_ids
 
 
-def matching_option_evidence_family_ids(
-    representative_family: dict[str, Any],
-    candidate_families: list[dict[str, Any]],
+def filter_option_evidence_hard_conflicts(
+    accepted_family_ids: list[str],
+    representative_family_id: str,
     tags_by_family_id: dict[str, dict[str, str]],
+    representative_unit: str,
+    candidate_unit_map: dict[str, str],
 ) -> list[str]:
-    representative_family_id = representative_family["family_id"]
-    representative_unit = representative_family["unit"]
     representative_tags = tags_by_family_id[representative_family_id]
-    tag_fields = ("object_action", "thickness", "material", "level")
-    return [
-        candidate["family_id"]
-        for candidate in candidate_families
+    filtered: list[str] = []
+    for family_id in accepted_family_ids:
+        candidate_tags = tags_by_family_id[family_id]
+        if candidate_unit_map[family_id] != representative_unit:
+            continue
         if (
-            candidate["unit"] == representative_unit
-            and all(
-                tags_by_family_id[candidate["family_id"]][field] == representative_tags[field]
-                for field in tag_fields
-            )
-        )
-    ]
+            representative_tags["thickness"]
+            and candidate_tags["thickness"]
+            and representative_tags["thickness"] != candidate_tags["thickness"]
+        ):
+            continue
+        if (
+            representative_tags["material"]
+            and candidate_tags["material"]
+            and representative_tags["material"] != candidate_tags["material"]
+        ):
+            continue
+        if (
+            representative_tags["level"] != candidate_tags["level"]
+            and (representative_tags["level"] or candidate_tags["level"])
+        ):
+            continue
+        filtered.append(family_id)
+    return filtered
 
 
 def option_evidence_expansion_candidates(
@@ -3518,6 +3560,7 @@ def expand_option_price_evidence_families(
         prompt = ""
         response = None
         accepted_family_ids: list[str] = []
+        llm_accepted_count = 0
         error_message = ""
         max_tokens = 0
         skipped_reason = ""
@@ -3537,7 +3580,7 @@ def expand_option_price_evidence_families(
                 if not candidates:
                     skipped_reason = "no_candidates"
                 else:
-                    prompt = build_option_evidence_tag_prompt(
+                    prompt = build_option_evidence_expansion_prompt(
                         representative_family, candidates
                     )
                     max_tokens = 2048
@@ -3546,15 +3589,25 @@ def expand_option_price_evidence_families(
                         max_tokens=max_tokens,
                         system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
                     )
-                    expected_family_ids = [item.representative_family_id, *candidate_ids]
-                    tags_by_family_id = validate_option_evidence_tag_result(
-                        response.content, expected_family_ids
+                    tags_by_family_id, llm_accepted_family_ids = (
+                        validate_option_evidence_expansion_result(
+                            response.content,
+                            item.representative_family_id,
+                            candidate_ids,
+                        )
                     )
-                    accepted_family_ids = matching_option_evidence_family_ids(
-                        representative_family,
-                        candidates,
+                    llm_accepted_count = len(llm_accepted_family_ids)
+                    filtered_accepted_family_ids = filter_option_evidence_hard_conflicts(
+                        llm_accepted_family_ids,
+                        item.representative_family_id,
                         tags_by_family_id,
+                        representative_family["unit"],
+                        {candidate["family_id"]: candidate["unit"] for candidate in candidates},
                     )
+                    accepted_set = set(filtered_accepted_family_ids)
+                    accepted_family_ids = [
+                        family_id for family_id in candidate_ids if family_id in accepted_set
+                    ]
             except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
                 error_message = str(exc)
                 accepted_family_ids = []
@@ -3616,12 +3669,12 @@ def expand_option_price_evidence_families(
             input_summary = (
                 f"item_position={item.item_position}; "
                 f"original_evidence={original_evidence_count}; "
-                f"original_families={len(original_family_ids)}; "
-                f"candidates={len(candidate_ids)}; accepted={len(accepted_family_ids)}"
+                f"candidates={len(candidate_ids)}; llm_accepted={llm_accepted_count}; "
+                f"accepted_after_guard={len(accepted_family_ids)}"
             )
         trace = trace_row(
             "option_evidence_expansion",
-            "提取严格标签并扩充与代表 Family 完全一致的价格证据",
+            "由 LLM 结合辅助标签判断同一价格统计口径并执行硬冲突兜底",
             not error_message,
             error=error_message,
             prompt=prompt,

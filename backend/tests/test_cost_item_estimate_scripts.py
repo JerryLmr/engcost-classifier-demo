@@ -2383,90 +2383,96 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         tags.update(overrides)
         return tags
 
-    def test_evidence_expansion_validates_tag_output_strictly(self):
-        parsed = query_estimate_llm.validate_option_evidence_tag_result(
-            {"families": [self.evidence_tags("F1"), self.evidence_tags("F2")]},
-            ["F1", "F2"],
+    def test_evidence_expansion_validates_llm_output_strictly(self):
+        parsed, accepted = query_estimate_llm.validate_option_evidence_expansion_result(
+            {
+                "families": [self.evidence_tags("F1"), self.evidence_tags("F2")],
+                "accepted_family_ids": ["F2"],
+            },
+            "F1",
+            ["F2"],
         )
         self.assertEqual(parsed["F1"]["object_action"], "曳引钢丝绳更换")
+        self.assertEqual(accepted, ["F2"])
 
         invalid_results = [
             {},
-            {"families": [], "extra": True},
-            {"families": "not-an-array"},
-            {"families": [{"family_id": "F1"}]},
-            {"families": [{**self.evidence_tags("F1"), "extra": "x"}]},
-            {"families": [{**self.evidence_tags("F1"), "level": 1}]},
-            {"families": [self.evidence_tags("F1"), self.evidence_tags("F1")]},
-            {"families": [self.evidence_tags("F2")]},
-            {"families": [self.evidence_tags("F1")]},
-            {"families": [self.evidence_tags("F1"), self.evidence_tags("F9")]},
-            {"accepted_family_ids": ["F2"]},
+            {"families": [], "accepted_family_ids": [], "extra": True},
+            {"families": "not-an-array", "accepted_family_ids": []},
+            {"families": [{"family_id": "F1"}], "accepted_family_ids": []},
+            {"families": [{**self.evidence_tags("F1"), "extra": "x"}], "accepted_family_ids": []},
+            {"families": [{**self.evidence_tags("F1"), "level": 1}], "accepted_family_ids": []},
+            {"families": [self.evidence_tags("F1"), self.evidence_tags("F1")], "accepted_family_ids": []},
+            {"families": [self.evidence_tags("F2")], "accepted_family_ids": []},
+            {"families": [self.evidence_tags("F1")], "accepted_family_ids": []},
+            {"families": [self.evidence_tags("F1"), self.evidence_tags("F9")], "accepted_family_ids": []},
+            {"families": [self.evidence_tags("F1"), self.evidence_tags("F2")], "accepted_family_ids": "F2"},
+            {"families": [self.evidence_tags("F1"), self.evidence_tags("F2")], "accepted_family_ids": ["F1"]},
+            {"families": [self.evidence_tags("F1"), self.evidence_tags("F2")], "accepted_family_ids": ["F9"]},
+            {"families": [self.evidence_tags("F1"), self.evidence_tags("F2")], "accepted_family_ids": ["F2", "F2"]},
         ]
         for result in invalid_results:
             with self.subTest(result=result), self.assertRaises(ValueError):
-                query_estimate_llm.validate_option_evidence_tag_result(result, ["F1", "F2"])
+                query_estimate_llm.validate_option_evidence_expansion_result(
+                    result, "F1", ["F2"]
+                )
 
-    def test_evidence_expansion_matches_all_tags_by_exact_string_equality(self):
+    def test_evidence_expansion_hard_conflicts_do_not_compare_object_action(self):
         tags = {
-            "F1": {key: value for key, value in self.evidence_tags("F1").items() if key != "family_id"},
-            "F2": {key: value for key, value in self.evidence_tags("F2").items() if key != "family_id"},
-            "F3": {key: value for key, value in self.evidence_tags(
-                "F3", object_action="限速器钢丝绳更换"
-            ).items() if key != "family_id"},
-            "F4": {key: value for key, value in self.evidence_tags(
-                "F4", thickness="10mm"
-            ).items() if key != "family_id"},
-            "F5": {key: value for key, value in self.evidence_tags(
-                "F5", object_action="曳引钢丝绳维修"
-            ).items() if key != "family_id"},
-            "F6": {key: value for key, value in self.evidence_tags("F6").items() if key != "family_id"},
+            "F1": {"object_action": "更换曳引钢丝绳", "thickness": "", "material": "", "level": ""},
+            "F2": {"object_action": "曳引钢丝绳更换", "thickness": "", "material": "", "level": ""},
+            "F3": {"object_action": "限速器钢丝绳更换", "thickness": "", "material": "", "level": ""},
         }
         self.assertEqual(
-            query_estimate_llm.matching_option_evidence_family_ids(
-                {"family_id": "F1", "unit": "m²"},
-                [{"family_id": family_id, "unit": "m²"} for family_id in ["F2", "F3", "F4", "F5"]]
-                + [{"family_id": "F6", "unit": "m"}],
+            query_estimate_llm.filter_option_evidence_hard_conflicts(
+                ["F2", "F3"], "F1", tags, "m", {"F2": "m", "F3": "m"}
+            ),
+            ["F2", "F3"],
+        )
+
+    def test_evidence_expansion_hard_conflict_rules(self):
+        tags = {
+            "F1": {"object_action": "卷材防水新做", "thickness": "3mm", "material": "SBS", "level": "2层"},
+            "F2": {"object_action": "卷材防水新做", "thickness": "4mm", "material": "SBS", "level": "2层"},
+            "F3": {"object_action": "卷材防水新做", "thickness": "3mm", "material": "自粘卷材", "level": "2层"},
+            "F4": {"object_action": "卷材防水新做", "thickness": "3mm", "material": "SBS", "level": "5层"},
+            "F5": {"object_action": "卷材防水新做", "thickness": "3mm", "material": "SBS", "level": ""},
+            "F6": {"object_action": "卷材防水新做", "thickness": "", "material": "", "level": "2层"},
+            "F7": {"object_action": "卷材防水新做", "thickness": "3mm", "material": "SBS", "level": "2层"},
+        }
+        self.assertEqual(
+            query_estimate_llm.filter_option_evidence_hard_conflicts(
+                ["F2", "F3", "F4", "F5", "F6", "F7"],
+                "F1",
                 tags,
+                "m²",
+                {family_id: ("m" if family_id == "F7" else "m²") for family_id in tags if family_id != "F1"},
             ),
-            ["F2"],
+            ["F6"],
         )
 
-        waterproof_tags = {
-            "F1": {"object_action": "卷材防水新做", "thickness": "3mm", "material": "SBS改性沥青", "level": ""},
-            "F2": {"object_action": "卷材防水新做", "thickness": "3mm", "material": "SBS改性沥青", "level": ""},
-            "F3": {"object_action": "卷材防水新做", "thickness": "4mm", "material": "SBS改性沥青", "level": ""},
-            "F4": {"object_action": "卷材防水新做", "thickness": "3mm", "material": "自粘卷材", "level": ""},
-            "F5": {"object_action": "瓦屋面新做", "thickness": "3mm", "material": "SBS改性沥青", "level": ""},
-        }
-        self.assertEqual(
-            query_estimate_llm.matching_option_evidence_family_ids(
-                {"family_id": "F1", "unit": "m²"},
-                [
-                    {"family_id": "F2", "unit": "m²"},
-                    {"family_id": "F3", "unit": "m²"},
-                    {"family_id": "F4", "unit": "m²"},
-                    {"family_id": "F5", "unit": "m²"},
-                ],
-                waterproof_tags,
-            ),
-            ["F2"],
-        )
-
+    def test_evidence_expansion_llm_decision_controls_semantic_acceptance(self):
         fire_tags = {
             "F1": {"object_action": "消防广播主机更换", "thickness": "", "material": "", "level": ""},
-            "F2": {"object_action": "消防广播主机更换", "thickness": "", "material": "", "level": ""},
+            "F2": {"object_action": "更换消防广播主机", "thickness": "", "material": "", "level": ""},
             "F3": {"object_action": "消防报警主机更换", "thickness": "", "material": "", "level": ""},
             "F4": {"object_action": "多线盘更换", "thickness": "", "material": "", "level": ""},
-            "F5": {"object_action": "回路板更换", "thickness": "", "material": "", "level": ""},
         }
         self.assertEqual(
-            query_estimate_llm.matching_option_evidence_family_ids(
-                {"family_id": "F1", "unit": "台"},
-                [{"family_id": family_id, "unit": "台"} for family_id in ["F2", "F3", "F4", "F5"]],
+            query_estimate_llm.filter_option_evidence_hard_conflicts(
+                ["F2"],
+                "F1",
                 fire_tags,
+                "台",
+                {"F2": "台", "F3": "台", "F4": "台"},
             ),
             ["F2"],
+        )
+        self.assertEqual(
+            query_estimate_llm.filter_option_evidence_hard_conflicts(
+                [], "F1", fire_tags, "台", {"F2": "台", "F3": "台", "F4": "台"}
+            ),
+            [],
         )
 
     def test_evidence_expansion_uses_selected_representative_without_reselection(self):
@@ -2503,7 +2509,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "family_id": "F2", "cost_item_name": "清单F2",
             "project_description": "特征F2", "unit": "m²",
         }]
-        prompt = query_estimate_llm.build_option_evidence_tag_prompt(representative, candidates)
+        prompt = query_estimate_llm.build_option_evidence_expansion_prompt(representative, candidates)
         payload = json.loads(prompt.split("输入：\n", 1)[1])
         self.assertEqual(payload, {
             "representative_family": representative,
@@ -2522,18 +2528,21 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             self.price_family("F1", "sig-1"),
             self.price_family("F2", "sig-2"),
             self.price_family("F3", "sig-3"),
+            self.price_family("F4", "sig-4"),
         ])
         samples = pd.DataFrame([
             self.price_sample("sid-1", "sig-1", 10, source_ref="ref-1"),
             self.price_sample("sid-2", "sig-1", 20, source_ref="ref-2"),
             self.price_sample("sid-2", "sig-2", 999, source_ref="duplicate-ref"),
             self.price_sample("sid-3", "sig-2", 30, source_ref="ref-3"),
+            self.price_sample("sid-4", "sig-3", 40, source_ref="ref-4"),
         ])
         response_content = {"families": [
-            self.evidence_tags("F1"),
-            self.evidence_tags("F2"),
-            self.evidence_tags("F3", object_action="限速器钢丝绳更换"),
-        ]}
+            self.evidence_tags("F1", material="SBS改性沥青"),
+            self.evidence_tags("F2", material="SBS改性沥青"),
+            self.evidence_tags("F3", material="SBS改性沥青"),
+            self.evidence_tags("F4", material="自粘卷材"),
+        ], "accepted_family_ids": ["F4", "F3", "F2"]}
         response = types.SimpleNamespace(
             content=response_content, usage={}, raw_content=json.dumps(response_content, ensure_ascii=False)
         )
@@ -2543,13 +2552,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 [item], displays, families, samples, []
             )
 
-        self.assertEqual(expanded, {3: ["F1", "F2"]})
-        self.assertEqual(sheet.loc[0, "新增family数"], 1)
-        self.assertEqual(sheet.loc[0, "扩展后family数"], 2)
+        self.assertEqual(expanded, {3: ["F1", "F2", "F3"]})
+        self.assertEqual(sheet.loc[0, "新增family数"], 2)
+        self.assertEqual(sheet.loc[0, "扩展后family数"], 3)
         self.assertEqual(sheet.loc[0, "原价格证据样本数"], 2)
-        self.assertEqual(sheet.loc[0, "扩展后价格证据样本数"], 3)
-        self.assertEqual(sheet.loc[0, "新增family_ids"], "F2")
+        self.assertEqual(sheet.loc[0, "扩展后价格证据样本数"], 4)
+        self.assertEqual(sheet.loc[0, "新增family_ids"], "F2,F3")
         self.assertEqual(traces[0]["stage"], "option_evidence_expansion")
+        self.assertIn("llm_accepted=3; accepted_after_guard=2", traces[0]["input_summary"])
         self.assertFalse(traces[0]["fallback"])
 
     def test_evidence_expansion_threshold_uses_original_evidence_count(self):
@@ -2593,7 +2603,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             self.price_sample(f"sid-{index}", "sig-1", index)
             for index in range(1, 10)
         ] + [self.price_sample("sid-10", "sig-2", 10)])
-        response_content = {"families": [self.evidence_tags("F1"), self.evidence_tags("F2")]}
+        response_content = {
+            "families": [
+                self.evidence_tags("F1", object_action="更换曳引钢丝绳"),
+                self.evidence_tags("F2", object_action="曳引钢丝绳更换"),
+            ],
+            "accepted_family_ids": ["F2"],
+        }
         response = types.SimpleNamespace(content=response_content, usage={}, raw_content="")
 
         with patch.object(
