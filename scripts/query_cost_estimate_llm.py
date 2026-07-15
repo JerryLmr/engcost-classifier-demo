@@ -257,6 +257,19 @@ PRICE_EVIDENCE_ITEM_COLUMNS = [
     "machinery_unit_price",
 ]
 
+OPTION_EVIDENCE_EXPANSION_COLUMNS = [
+    "final_item_position",
+    "清单名称",
+    "practice_option_id",
+    "原family数",
+    "候选family数",
+    "新增family数",
+    "扩展后family数",
+    "原价格证据样本数",
+    "扩展后价格证据样本数",
+    "新增family_ids",
+]
+
 LLM_TRACE_COLUMNS = [
     "stage",
     "purpose",
@@ -337,6 +350,7 @@ class QueryResult:
     option_selection_trace: pd.DataFrame
     matched_project_examples: pd.DataFrame
     evidence_items: pd.DataFrame
+    option_evidence_expansion: pd.DataFrame
     price_evidence_items: pd.DataFrame
     parse_info: pd.DataFrame
     llm_trace: pd.DataFrame
@@ -433,6 +447,28 @@ def normalize_display_name(value: Any) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     text = text.strip(" \t\r\n,.;:!?，。；：、()[]【】")
     return text
+
+
+EVIDENCE_EXPANSION_SCOPE_PATTERN = re.compile(
+    r"^(?:含)?(?:人工费?|安装|拆除及安装(?:人工费?)?|拆机及安装(?:人工费?)?|运输|运费|起吊费)$"
+)
+
+
+def normalize_evidence_expansion_name(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", cell_text(value))
+    text = text.replace("（", "(").replace("）", ")")
+
+    def remove_scope_parentheses(match: re.Match[str]) -> str:
+        content = re.sub(r"\s+", "", match.group(1))
+        if EVIDENCE_EXPANSION_SCOPE_PATTERN.fullmatch(content):
+            return ""
+        return match.group(0)
+
+    previous = None
+    while previous != text:
+        previous = text
+        text = re.sub(r"\(([^()]*)\)", remove_scope_parentheses, text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def normalize_display_description(value: Any) -> str:
@@ -3257,6 +3293,235 @@ def generate_optional_final_explanation(
     )
 
 
+def build_option_evidence_expansion_prompt(
+    target_option: dict[str, Any],
+    candidate_families: list[dict[str, Any]],
+) -> str:
+    payload = {
+        "target_option": target_option,
+        "candidate_families": candidate_families,
+    }
+
+    return f"""
+任务：判断哪些候选 family 可以加入目标 option 的价格证据。
+
+只有在以下内容基本一致时才可加入：
+- 维修对象
+- 施工动作
+- 主要工作范围
+- 材料或关键规格
+- 单位
+
+判断原则：
+
+1. 名称写法不同，不代表不能合并。
+2. “含人工”“含安装”“含拆除及安装”“含运输”等附带说明不同，可以合并。
+3. 维修对象不同，不得合并。
+4. 施工动作或主要工作范围明显不同，不得合并。
+5. 材料、型号、尺寸或关键规格存在冲突，不得合并。
+6. 单位不兼容，不得合并。
+7. 信息不足或无法确认时，不要加入。
+8. 只能返回输入中存在的 family_id，不得重复。
+
+只输出合法 JSON：
+
+{{
+  "accepted_family_ids": []
+}}
+
+输入：
+{json.dumps(payload, ensure_ascii=False)}
+""".strip()
+
+
+def validate_option_evidence_expansion_result(
+    result: Any,
+    allowed_family_ids: list[str],
+) -> list[str]:
+    if not isinstance(result, dict) or set(result) != {"accepted_family_ids"}:
+        raise ValueError("option evidence expansion 顶层字段非法")
+    accepted = result.get("accepted_family_ids")
+    if not isinstance(accepted, list):
+        raise ValueError("option evidence expansion accepted_family_ids 必须是数组")
+    allowed = set(allowed_family_ids)
+    parsed: list[str] = []
+    seen: set[str] = set()
+    for value in accepted:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("option evidence expansion family_id 必须是非空字符串")
+        family_id = value.strip()
+        if family_id in seen:
+            raise ValueError(f"option evidence expansion family_id 重复: {family_id}")
+        if family_id not in allowed:
+            raise ValueError(f"option evidence expansion family_id 非法: {family_id}")
+        seen.add(family_id)
+        parsed.append(family_id)
+    return parsed
+
+
+def option_evidence_expansion_candidates(
+    item: ScenarioItem,
+    option: dict[str, Any],
+    candidate_families: pd.DataFrame,
+) -> tuple[list[str], dict[str, Any], list[dict[str, Any]]]:
+    original_family_ids = list(dict.fromkeys(
+        cell_text(value) for value in option.get("family_ids", []) if cell_text(value)
+    ))
+    if not original_family_ids:
+        raise ValueError(f"Option 缺少 family_ids: option_id={item.practice_option_id}")
+
+    family_ids = candidate_families.get("family_id", pd.Series(dtype=object)).map(cell_text)
+    representative_rows = candidate_families[family_ids.eq(item.representative_family_id)]
+    if len(representative_rows) != 1:
+        raise ValueError(
+            f"代表 Family 无法唯一回查: family_id={item.representative_family_id}, "
+            f"matched_rows={len(representative_rows)}"
+        )
+    representative = representative_rows.iloc[0]
+    target_unit = cell_text(representative.get("unit_normalized"))
+    target_option = {
+        "cost_item_name": normalize_evidence_expansion_name(
+            representative.get("representative_cost_item_name")
+        ),
+        "project_description": cell_text(
+            representative.get("representative_project_description")
+        ),
+        "unit": target_unit,
+    }
+
+    candidates: list[dict[str, Any]] = []
+    seen = set(original_family_ids)
+    for _index, family in candidate_families.iterrows():
+        family_id = cell_text(family.get("family_id"))
+        if not family_id or family_id in seen:
+            continue
+        seen.add(family_id)
+        if cell_text(family.get("unit_normalized")) != target_unit:
+            continue
+        candidates.append({
+            "family_id": family_id,
+            "cost_item_name": normalize_evidence_expansion_name(
+                family.get("representative_cost_item_name")
+            ),
+            "project_description": cell_text(
+                family.get("representative_project_description")
+            ),
+            "unit": cell_text(family.get("unit_normalized")),
+        })
+        if len(candidates) >= 20:
+            break
+    return original_family_ids, target_option, candidates
+
+
+def expand_option_price_evidence_families(
+    final_items: list[ScenarioItem],
+    displays_with_options: pd.DataFrame,
+    candidate_families: pd.DataFrame,
+    samples: pd.DataFrame,
+    warnings: list[str] | None = None,
+) -> tuple[dict[int, list[str]], pd.DataFrame, list[dict[str, Any]]]:
+    display_map, option_map = display_option_maps(displays_with_options)
+    family_map = {
+        cell_text(row.get("family_id")): row
+        for _index, row in candidate_families.iterrows()
+        if cell_text(row.get("family_id"))
+    }
+    expanded_by_position: dict[int, list[str]] = {}
+    sheet_rows: list[dict[str, Any]] = []
+    traces: list[dict[str, Any]] = []
+
+    for item in final_items:
+        display = display_map.get(item.display_id)
+        option = option_map.get((item.display_id, item.practice_option_id))
+        representative = family_map.get(item.representative_family_id)
+        if display is None or option is None or representative is None:
+            raise ValueError(
+                f"价格证据扩充 display/option/family 回查失败: item_position={item.item_position}"
+            )
+        original_family_ids, target_option, candidates = option_evidence_expansion_candidates(
+            item, option, candidate_families
+        )
+        candidate_ids = [candidate["family_id"] for candidate in candidates]
+        prompt = build_option_evidence_expansion_prompt(target_option, candidates) if candidates else ""
+        response = None
+        accepted_family_ids: list[str] = []
+        error_message = ""
+        max_tokens = 512 if candidates else 0
+        try:
+            if candidates:
+                response = request_llm_json_with_usage(
+                    prompt,
+                    max_tokens=max_tokens,
+                    system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
+                )
+                accepted_family_ids = validate_option_evidence_expansion_result(
+                    response.content, candidate_ids
+                )
+        except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+            error_message = str(exc)
+            accepted_family_ids = []
+            append_warning(
+                warnings,
+                f"option_evidence_expansion_failed:item_position={item.item_position}",
+            )
+
+        expanded_family_ids = list(dict.fromkeys([
+            *original_family_ids,
+            *accepted_family_ids,
+        ]))
+        expanded_by_position[item.item_position] = expanded_family_ids
+        original_option = {**option, "family_ids": original_family_ids}
+        expanded_option = {**option, "family_ids": expanded_family_ids}
+        original_evidence = expand_samples_for_option(
+            original_option, display, candidate_families, samples
+        )
+        expanded_evidence = expand_samples_for_option(
+            expanded_option, display, candidate_families, samples
+        )
+        sheet_rows.append({
+            "final_item_position": item.item_position,
+            "清单名称": cell_text(representative.get("representative_cost_item_name")),
+            "practice_option_id": item.practice_option_id,
+            "原family数": len(original_family_ids),
+            "候选family数": len(candidates),
+            "新增family数": len(accepted_family_ids),
+            "扩展后family数": len(expanded_family_ids),
+            "原价格证据样本数": len(original_evidence),
+            "扩展后价格证据样本数": len(expanded_evidence),
+            "新增family_ids": ",".join(accepted_family_ids),
+        })
+        raw_response = ""
+        if response is not None:
+            raw_response = cell_text(getattr(response, "raw_content", ""))
+            if not raw_response:
+                raw_response = json_text(response.content)
+        trace = trace_row(
+            "option_evidence_expansion",
+            "判断可加入最终 option 价格证据的等价 family",
+            not error_message,
+            error=error_message,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            input_summary=(
+                f"item_position={item.item_position}; "
+                f"original_families={len(original_family_ids)}; "
+                f"candidates={len(candidates)}; accepted={len(accepted_family_ids)}"
+            ),
+            usage=response.usage if response is not None else None,
+            raw_response=raw_response,
+            scenario_count=1,
+            scenario_item_count=1,
+        )
+        trace["fallback"] = bool(error_message)
+        traces.append(trace)
+
+    return (
+        expanded_by_position,
+        pd.DataFrame(sheet_rows, columns=OPTION_EVIDENCE_EXPANSION_COLUMNS).fillna(""),
+        traces,
+    )
+
+
 def expand_samples_for_option(
     option: dict[str, Any],
     display: pd.Series,
@@ -3301,11 +3566,6 @@ def expand_samples_for_option(
                 f"family_id={family_id}, normalized_signature={signature}"
             )
 
-    stable_ids = expanded.get("stable_sample_id", pd.Series("", index=expanded.index)).map(cell_text)
-    if stable_ids.eq("").any():
-        raise ValueError(f"全库价格证据 stable_sample_id 为空: option_id={option_id}")
-    expanded = expanded.loc[~stable_ids.duplicated(keep="first")].copy()
-
     display_unit = normalized_unit(display.get("unit"))
     for row_index, row in expanded.iterrows():
         signature = cell_text(row.get("normalized_signature"))
@@ -3324,6 +3584,13 @@ def expand_samples_for_option(
     for _row_index, row in expanded.iterrows():
         source_refs.append(cell_text(row.get("source_ref")) or source_identity_for_row(row)[2])
     expanded["source_ref"] = source_refs
+
+    stable_ids = expanded.get("stable_sample_id", pd.Series("", index=expanded.index)).map(cell_text)
+    dedupe_keys = [
+        f"stable:{stable_sample_id}" if stable_sample_id else f"source:{source_ref}"
+        for stable_sample_id, source_ref in zip(stable_ids.tolist(), source_refs)
+    ]
+    expanded = expanded.loc[~pd.Series(dedupe_keys, index=expanded.index).duplicated(keep="first")].copy()
 
     signature_family = {}
     for family_id, signature in family_signatures:
@@ -3432,6 +3699,7 @@ def build_scenario_outputs(
     displays_with_options: pd.DataFrame,
     candidate_families: pd.DataFrame,
     samples: pd.DataFrame,
+    expanded_family_ids_by_position: dict[int, list[str]] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     display_map, option_map = display_option_maps(displays_with_options)
     family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
@@ -3450,11 +3718,16 @@ def build_scenario_outputs(
             representative_unit_normalized = cell_text(representative.get("unit_normalized"))
             if not representative_unit and not representative_unit_normalized:
                 continue
-            price_stats = price_stats_for_option(option, display_row, candidate_families, samples)
+            family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
+            if expanded_family_ids_by_position is not None:
+                family_ids = list(expanded_family_ids_by_position.get(item.item_position, family_ids))
+            price_option = {**option, "family_ids": family_ids}
+            price_stats = price_stats_for_option(
+                price_option, display_row, candidate_families, samples
+            )
             validate_price_stats(price_stats, item.stable_sample_id, item.practice_option_id)
             amount_p10, amount_mid, amount_p90 = quantity_amounts(item.quantity, price_stats)
             quantity_value = quantity_display(item.quantity)
-            family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
             expanded_evidence = price_stats["expanded_evidence"]
             for _evidence_index, evidence in expanded_evidence.iterrows():
                 price_evidence_rows.append({
@@ -3857,6 +4130,12 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         display_frame(result.estimate_summary, display).to_excel(writer, sheet_name="estimate_summary", index=False)
         display_frame(result.estimate_scenarios, display).to_excel(writer, sheet_name="estimate_scenarios", index=False)
+        display_frame(result.option_evidence_expansion, display).to_excel(
+            writer, sheet_name="option_evidence_expansion", index=False
+        )
+        display_frame(result.price_evidence_items, display).to_excel(
+            writer, sheet_name="price_evidence_items", index=False
+        )
         display_frame(result.candidate_display_groups, display).to_excel(
             writer,
             sheet_name="candidate_display_groups",
@@ -3891,9 +4170,6 @@ def write_query_result_workbook(output_path: Path, result: QueryResult, display:
             index=False,
         )
         display_frame(result.evidence_items, display).to_excel(writer, sheet_name="evidence_items", index=False)
-        display_frame(result.price_evidence_items, display).to_excel(
-            writer, sheet_name="price_evidence_items", index=False
-        )
         result.parse_info.to_excel(writer, sheet_name="parse_info", index=False)
         result.llm_trace.to_excel(writer, sheet_name="llm_trace", index=False)
     apply_workbook_style(output_path)
@@ -4113,8 +4389,23 @@ def run_query(
         warnings,
     )
     scenarios = [scenario]
+    (
+        expanded_family_ids_by_position,
+        option_evidence_expansion,
+        option_evidence_expansion_traces,
+    ) = expand_option_price_evidence_families(
+        scenario.items,
+        displays_with_options,
+        candidate_families,
+        candidate_samples,
+        warnings,
+    )
     estimate_scenarios, _price_evidence_items = build_scenario_outputs(
-        scenarios, displays_with_options, candidate_families, candidate_samples
+        scenarios,
+        displays_with_options,
+        candidate_families,
+        candidate_samples,
+        expanded_family_ids_by_position,
     )
     (
         scenario,
@@ -4132,7 +4423,11 @@ def run_query(
     )
     scenarios = [scenario]
     estimate_scenarios, price_evidence_items = build_scenario_outputs(
-        scenarios, displays_with_options, candidate_families, candidate_samples
+        scenarios,
+        displays_with_options,
+        candidate_families,
+        candidate_samples,
+        expanded_family_ids_by_position,
     )
     estimate_summary = build_estimate_summary(scenarios, estimate_scenarios)
     if warnings:
@@ -4199,6 +4494,7 @@ def run_query(
             range_selection_trace,
             *option_selection_llm_traces,
             quantity_trace,
+            *option_evidence_expansion_traces,
             final_explanation_trace,
         ],
         columns=LLM_TRACE_COLUMNS,
@@ -4217,6 +4513,7 @@ def run_query(
         option_selection_trace=option_selection_trace_frame,
         matched_project_examples=matched_project_examples_output,
         evidence_items=evidence_items,
+        option_evidence_expansion=option_evidence_expansion,
         price_evidence_items=price_evidence_items,
         parse_info=parse_info,
         llm_trace=llm_trace,

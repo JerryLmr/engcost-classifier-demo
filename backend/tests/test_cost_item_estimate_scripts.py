@@ -2175,11 +2175,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         with patch.object(query_estimate_llm, "price_stats_for_option", return_value=price_stats) as price_lookup:
             output, price_evidence = query_estimate_llm.build_scenario_outputs(
-                [scenario], displays, families, pd.DataFrame()
+                [scenario], displays, families, pd.DataFrame(), {17: ["F1", "F-extra"]}
             )
 
         price_lookup.assert_called_once()
         self.assertEqual(price_lookup.call_args.args[0]["practice_option_id"], "D1-O01")
+        self.assertEqual(price_lookup.call_args.args[0]["family_ids"], ["F1", "F-extra"])
         self.assertEqual(len(output), 1)
         self.assertEqual(len(price_evidence), 2)
         self.assertEqual(output.loc[0, "价格证据样本数"], len(price_evidence))
@@ -2192,14 +2193,139 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(output.loc[0, "工程量中位数"], 10)
         self.assertEqual(output.loc[0, "综合单价"], 120)
         self.assertEqual(output.loc[0, "暂估合价"], 1200)
+        self.assertEqual(output.loc[0, "价格证据family"], "F1,F-extra")
 
     def price_family(self, family_id: str, signature: str, unit: str = "m²") -> dict[str, object]:
         return {
             "family_id": family_id,
             "normalized_signature": signature,
+            "representative_cost_item_name": f"清单{family_id}",
+            "representative_project_description": f"特征{family_id}",
             "unit": unit,
             "unit_normalized": unit,
         }
+
+    def evidence_expansion_item(self) -> object:
+        return query_estimate_llm.ScenarioItem(
+            "P1", "selected", "selected-ref", "D1", "D1-O01", "D1-O01",
+            "F1", "F1", "", {"type": "exact", "value": 1}, "", 3,
+            quantity_source="historical_median",
+        )
+
+    def test_evidence_expansion_name_normalization_is_separate_from_display_normalization(self):
+        plain = "更换曳引钢丝绳(含人工)"
+        model = "更换曳引钢丝绳(P185012C000-01L221)(含人工)"
+
+        self.assertEqual(query_estimate_llm.normalize_evidence_expansion_name(plain), "更换曳引钢丝绳")
+        self.assertEqual(
+            query_estimate_llm.normalize_evidence_expansion_name("更换曳引钢丝绳(含拆除及安装人工费)"),
+            "更换曳引钢丝绳",
+        )
+        self.assertEqual(
+            query_estimate_llm.normalize_evidence_expansion_name(model),
+            "更换曳引钢丝绳(P185012C000-01L221)",
+        )
+        self.assertEqual(query_estimate_llm.normalize_display_name(plain), "更换曳引钢丝绳(含人工")
+
+    def test_evidence_expansion_candidates_are_deduplicated_unit_exact_and_limited(self):
+        item = self.evidence_expansion_item()
+        option = {"practice_option_id": "D1-O01", "family_ids": ["F1"]}
+        rows = [self.price_family("F1", "sig-1")]
+        rows.append(self.price_family("F2", "sig-2", unit="㎡"))
+        for index in range(3, 26):
+            rows.append(self.price_family(f"F{index}", f"sig-{index}"))
+        rows.insert(3, self.price_family("F3", "duplicate-signature"))
+
+        original, target, candidates = query_estimate_llm.option_evidence_expansion_candidates(
+            item, option, pd.DataFrame(rows)
+        )
+
+        self.assertEqual(original, ["F1"])
+        self.assertEqual(target["unit"], "m²")
+        self.assertEqual(len(candidates), 20)
+        self.assertNotIn("F1", [row["family_id"] for row in candidates])
+        self.assertNotIn("F2", [row["family_id"] for row in candidates])
+        self.assertEqual([row["family_id"] for row in candidates[:2]], ["F3", "F4"])
+        self.assertEqual(len({row["family_id"] for row in candidates}), 20)
+        self.assertEqual(
+            set(candidates[0]),
+            {"family_id", "cost_item_name", "project_description", "unit"},
+        )
+
+    def test_evidence_expansion_validates_accepted_ids_strictly(self):
+        self.assertEqual(
+            query_estimate_llm.validate_option_evidence_expansion_result(
+                {"accepted_family_ids": ["F2"]}, ["F2", "F3"]
+            ),
+            ["F2"],
+        )
+        invalid_results = [
+            {"accepted_family_ids": ["F9"]},
+            {"accepted_family_ids": ["F2", "F2"]},
+            {"accepted_family_ids": "F2"},
+            {"accepted_family_ids": [], "extra": True},
+        ]
+        for result in invalid_results:
+            with self.subTest(result=result), self.assertRaises(ValueError):
+                query_estimate_llm.validate_option_evidence_expansion_result(result, ["F2", "F3"])
+
+    def test_evidence_expansion_success_updates_counts_and_deduplicates_samples(self):
+        item = self.evidence_expansion_item()
+        displays = pd.DataFrame([{
+            "display_id": "D1", "unit": "m²",
+            "practice_options": [{"practice_option_id": "D1-O01", "family_ids": ["F1"]}],
+        }])
+        families = pd.DataFrame([
+            self.price_family("F1", "sig-1"),
+            self.price_family("F2", "sig-2"),
+            self.price_family("F3", "sig-3"),
+        ])
+        samples = pd.DataFrame([
+            self.price_sample("sid-1", "sig-1", 10, source_ref="ref-1"),
+            self.price_sample("sid-2", "sig-1", 20, source_ref="ref-2"),
+            self.price_sample("sid-2", "sig-2", 999, source_ref="duplicate-ref"),
+            self.price_sample("sid-3", "sig-2", 30, source_ref="ref-3"),
+        ])
+        response = types.SimpleNamespace(
+            content={"accepted_family_ids": ["F2"]}, usage={}, raw_content='{"accepted_family_ids":["F2"]}'
+        )
+
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response):
+            expanded, sheet, traces = query_estimate_llm.expand_option_price_evidence_families(
+                [item], displays, families, samples, []
+            )
+
+        self.assertEqual(expanded, {3: ["F1", "F2"]})
+        self.assertEqual(sheet.loc[0, "新增family数"], 1)
+        self.assertEqual(sheet.loc[0, "扩展后family数"], 2)
+        self.assertEqual(sheet.loc[0, "原价格证据样本数"], 2)
+        self.assertEqual(sheet.loc[0, "扩展后价格证据样本数"], 3)
+        self.assertEqual(sheet.loc[0, "新增family_ids"], "F2")
+        self.assertEqual(traces[0]["stage"], "option_evidence_expansion")
+        self.assertFalse(traces[0]["fallback"])
+
+    def test_evidence_expansion_failure_falls_back_without_blocking(self):
+        item = self.evidence_expansion_item()
+        displays = pd.DataFrame([{
+            "display_id": "D1", "unit": "m²",
+            "practice_options": [{"practice_option_id": "D1-O01", "family_ids": ["F1"]}],
+        }])
+        families = pd.DataFrame([
+            self.price_family("F1", "sig-1"), self.price_family("F2", "sig-2"),
+        ])
+        samples = pd.DataFrame([self.price_sample("sid-1", "sig-1", 10)])
+        warnings = []
+
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage", side_effect=RuntimeError("down")):
+            expanded, sheet, traces = query_estimate_llm.expand_option_price_evidence_families(
+                [item], displays, families, samples, warnings
+            )
+
+        self.assertEqual(expanded, {3: ["F1"]})
+        self.assertEqual(sheet.loc[0, "新增family数"], 0)
+        self.assertEqual(sheet.loc[0, "扩展后价格证据样本数"], 1)
+        self.assertEqual(warnings, ["option_evidence_expansion_failed:item_position=3"])
+        self.assertTrue(traces[0]["fallback"])
 
     def price_sample(
         self,
@@ -2387,18 +2513,26 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             self.assertIn("F001", str(raised.exception))
             self.assertIn("D001-O01", str(raised.exception))
 
-    def test_option_price_stats_reject_empty_ids_and_incompatible_units(self):
+    def test_option_price_stats_falls_back_to_source_ref_and_rejects_incompatible_units(self):
         option = {"practice_option_id": "D001-O01", "family_ids": ["F001"]}
         families = pd.DataFrame([self.price_family("F001", "sig-1")])
-        invalid_samples = [
-            ([self.price_sample("", "sig-1", 10)], "为空"),
-            ([self.price_sample("sid-1", "sig-1", 10, unit="m")], "单位不兼容"),
-        ]
-        for rows, expected in invalid_samples:
-            with self.subTest(expected=expected), self.assertRaisesRegex(ValueError, expected):
-                query_estimate_llm.price_stats_for_option(
-                    option, pd.Series({"unit": "m²"}), families, pd.DataFrame(rows)
-                )
+        source_deduplicated = query_estimate_llm.price_stats_for_option(
+            option,
+            pd.Series({"unit": "m²"}),
+            families,
+            pd.DataFrame([
+                self.price_sample("", "sig-1", 10, source_ref="same-ref"),
+                self.price_sample("", "sig-1", 20, source_ref="same-ref"),
+            ]),
+        )
+        self.assertEqual(source_deduplicated["evidence_count"], 1)
+        with self.assertRaisesRegex(ValueError, "单位不兼容"):
+            query_estimate_llm.price_stats_for_option(
+                option,
+                pd.Series({"unit": "m²"}),
+                families,
+                pd.DataFrame([self.price_sample("sid-1", "sig-1", 10, unit="m")]),
+            )
 
         duplicate_stats = query_estimate_llm.price_stats_for_option(
             option,
@@ -2541,6 +2675,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             option_selection_trace=pd.DataFrame(columns=query_estimate_llm.OPTION_SELECTION_TRACE_COLUMNS),
             matched_project_examples=pd.DataFrame(columns=query_estimate_llm.MATCHED_PROJECT_EXAMPLE_COLUMNS),
             evidence_items=pd.DataFrame(columns=query_estimate_llm.EVIDENCE_ITEM_COLUMNS),
+            option_evidence_expansion=pd.DataFrame(
+                columns=query_estimate_llm.OPTION_EVIDENCE_EXPANSION_COLUMNS
+            ),
             price_evidence_items=pd.DataFrame(columns=query_estimate_llm.PRICE_EVIDENCE_ITEM_COLUMNS),
             parse_info=pd.DataFrame([{"字段": "final_explanation_status", "值": "failed"}]),
             llm_trace=pd.DataFrame(
@@ -2555,8 +2692,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             query_estimate_llm.write_query_result_workbook(path, result)
             workbook = openpyxl.load_workbook(path, data_only=True)
             scenario_headers = [cell.value for cell in workbook["estimate_scenarios"][1]]
+            expansion_headers = [cell.value for cell in workbook["option_evidence_expansion"][1]]
             price_evidence_headers = [cell.value for cell in workbook["price_evidence_items"][1]]
             trace_stages = [workbook["llm_trace"].cell(row=row, column=1).value for row in range(2, 7)]
+            sheetnames = workbook.sheetnames
             self.assertNotIn("range_selection", workbook.sheetnames)
             workbook.close()
 
@@ -2565,6 +2704,11 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS,
         )
         self.assertEqual(price_evidence_headers, query_estimate_llm.PRICE_EVIDENCE_ITEM_COLUMNS)
+        self.assertEqual(expansion_headers, query_estimate_llm.OPTION_EVIDENCE_EXPANSION_COLUMNS)
+        self.assertEqual(
+            sheetnames[1:4],
+            ["estimate_scenarios", "option_evidence_expansion", "price_evidence_items"],
+        )
         self.assertEqual(scenario_headers[-1], "display_id")
         self.assertEqual(trace_stages, ["query_rewrite_for_embedding", "display_option_grouping", "range_selection", "quantity_determination", "final_explanation"])
 
