@@ -570,7 +570,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         check_mock.assert_called_once_with(timeout_seconds=1.5)
         run_mock.assert_called_once()
 
-    def test_query_main_returns_nonzero_after_final_explanation_failure(self):
+    def test_query_main_keeps_success_after_final_explanation_fallback(self):
         result = types.SimpleNamespace(success=False, error_message="invalid explanation")
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / "query.xlsx"
@@ -583,10 +583,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ), patch.object(query_estimate_llm, "print_terminal_summary"), patch("builtins.print") as print_mock:
                 exit_code = query_estimate_llm.main()
 
-        self.assertEqual(exit_code, 1)
-        print_mock.assert_called_once_with(
-            "[ERROR] final_explanation 失败，已输出无说明估价: invalid explanation"
-        )
+        self.assertEqual(exit_code, 0)
+        print_mock.assert_not_called()
 
     def test_query_main_returns_before_run_query_when_llm_service_unavailable(self):
         with patch.object(sys, "argv", ["query_cost_estimate_llm.py", "--text", "屋面漏水"]), patch.object(
@@ -2116,7 +2114,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 False, "需求", scenario, pd.DataFrame(), []
             )
         generator.assert_not_called()
-        self.assertIs(output, scenario)
+        self.assertEqual(output.scenario_summary, "当前结果根据保留清单形成一套历史常见维修组合，估价区间由组合内各清单的历史价格证据汇总形成，具体清单和价格见明细表。")
         self.assertTrue(success)
         self.assertEqual((error, prompt), ("", ""))
         self.assertEqual(trace["stage"], "final_explanation")
@@ -2124,7 +2122,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         expected = (scenario, True, "", "prompt", {"stage": "final_explanation"})
         with patch.object(query_estimate_llm, "generate_final_explanation", return_value=expected) as generator:
             actual = query_estimate_llm.generate_optional_final_explanation(
-                True, "需求", scenario, pd.DataFrame(), []
+                True, "需求", scenario, pd.DataFrame()
             )
         generator.assert_called_once()
         self.assertEqual(actual, expected)
@@ -2189,29 +2187,22 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(output.loc[0, "综合单价中位数"], 120)
         self.assertEqual(output.loc[0, "合价中位数"], 1200)
         self.assertEqual(output.loc[0, "工程量"], 10)
-        self.assertEqual(output.loc[0, "工程量来源"], "全库历史样本中位数")
+        self.assertNotIn("工程量来源", output.columns)
         self.assertEqual(output.loc[0, "工程量中位数"], 10)
         self.assertEqual(output.loc[0, "综合单价"], 120)
         self.assertEqual(output.loc[0, "暂估合价"], 1200)
         self.assertEqual(output.loc[0, "价格证据family"], "F1,F-extra")
-        self.assertEqual(
-            output.loc[0, "工程量说明"],
-            "采用全库召回的2条同类历史样本工程量中位数10m²暂估。",
-        )
+        self.assertNotIn("工程量说明", output.columns)
 
     def test_estimate_scenario_columns_remove_quantity_count_and_follow_display_order(self):
         columns = query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS
         self.assertNotIn("工程量样本数", columns)
-        for required in [
-            "工程量来源", "工程量说明", "价格证据样本数",
-            "工程量最低值", "工程量中位数", "工程量最高值",
-        ]:
+        self.assertNotIn("工程量来源", columns)
+        self.assertNotIn("工程量说明", columns)
+        for required in ["价格证据样本数", "工程量最低值", "工程量中位数", "工程量最高值"]:
             self.assertIn(required, columns)
-        self.assertEqual(columns[:7], [
-            "清单名称", "项目特征", "单位", "工程量", "工程量来源", "工程量说明",
-            "价格证据样本数",
-        ])
-        self.assertEqual(columns[7:18], [
+        self.assertEqual(columns[:5], ["清单名称", "项目特征", "单位", "工程量", "价格证据样本数"])
+        self.assertEqual(columns[5:16], [
             "综合单价P10", "综合单价", "综合单价P90", "暂估合价",
             "其中包含人工费单价P10", "其中包含人工费单价中位数",
             "其中包含人工费单价P90", "其中包含机械费单价P10",
@@ -2267,11 +2258,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(output.loc[0, "工程量最高值"], 900)
         self.assertEqual(output.loc[0, "价格证据样本数"], 61)
         self.assertEqual(len(price_evidence), 61)
-        self.assertEqual(
-            output.loc[0, "工程量说明"],
-            "采用全库召回的61条同类历史样本工程量中位数720m暂估。",
-        )
-        self.assertNotIn("4条", output.loc[0, "工程量说明"])
+        self.assertNotIn("工程量说明", output.columns)
         self.assertEqual(output.loc[0, "综合单价"], 20)
         self.assertEqual(output.loc[0, "暂估合价"], 14400)
         self.assertEqual(output.loc[0, "display_id"], "D1")
@@ -2313,7 +2300,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 output, _price_evidence = query_estimate_llm.build_scenario_outputs(
                     [scenario], displays, families, pd.DataFrame()
                 )
-            self.assertEqual(output.loc[0, "工程量说明"], reason)
+            self.assertNotIn("工程量说明", output.columns)
 
     def price_family(self, family_id: str, signature: str, unit: str = "m²") -> dict[str, object]:
         return {
@@ -3014,22 +3001,173 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_estimate_summary_uses_final_columns_and_sums_all_items(self):
         scenario = query_estimate_llm.EstimateScenario(
-            "S001", 1, "维修方案", "方案说明", []
+            "S001", 1, "维修方案", "方案说明", [], "确认现场"
         )
         estimate_scenarios = pd.DataFrame([
-            {"清单名称": "清单A", "项目特征": "特征A", "合价P10": 10, "合价中位数": 20, "合价P90": 30},
-            {"清单名称": "清单B", "项目特征": "特征B", "合价P10": 1.5, "合价中位数": 2.5, "合价P90": 3.5},
+            {"清单名称": "清单A", "工程量": 2, "综合单价P10": 5, "综合单价中位数": 10, "综合单价P90": 15},
+            {"清单名称": "清单B", "工程量": 0.5, "综合单价P10": 3, "综合单价中位数": 5, "综合单价P90": 7},
+        ])
+        price_evidence = pd.DataFrame([
+            {"project_key": "P1", "project_package_id": "PKG1", "工程名称": "重复名称"},
+            {"project_key": "P1", "project_package_id": "PKG1", "工程名称": "重复名称"},
+            {"project_key": "P2", "project_package_id": "PKG2", "工程名称": "重复名称"},
+            {"project_key": "", "project_package_id": "PKG3", "工程名称": "独立名称"},
         ])
 
-        summary = query_estimate_llm.build_estimate_summary([scenario], estimate_scenarios)
+        summary = query_estimate_llm.build_estimate_summary("原始问题", [scenario], estimate_scenarios, price_evidence)
 
         self.assertEqual(summary.columns.tolist(), query_estimate_llm.ESTIMATE_SUMMARY_COLUMNS)
         self.assertEqual(
             summary.loc[0, ["合价P10", "合价中位数", "合价P90"]].tolist(),
             [11.5, 22.5, 33.5],
         )
+        self.assertEqual(summary.loc[0, "用户问题"], "原始问题")
+        self.assertEqual(summary.loc[0, "参考项目数"], 2)
+        self.assertEqual(summary.loc[0, "参考样本数"], 4)
         for removed in ["方案顺序", "方案编号", "是否推荐方案", "与其他方案的核心差异", "合价最低值", "合价最高值"]:
             self.assertNotIn(removed, summary.columns)
+
+    def test_customer_display_filter_keeps_threshold_and_complete_debug_evidence(self):
+        items = [
+            query_estimate_llm.ScenarioItem(
+                "PKG", f"sid-{position}", f"ref-{position}", f"D{position}", f"O{position}",
+                f"O{position}", f"F{position}", f"F{position}", "", {"type": "exact", "value": 1}, "", position,
+            )
+            for position in [1, 2, 3]
+        ]
+        scenario = query_estimate_llm.EstimateScenario("S001", 1, "", "", items)
+        rows = pd.DataFrame([
+            {"final_item_position": 1, "清单名称": "A", "价格证据样本数": 2},
+            {"final_item_position": 2, "清单名称": "B", "价格证据样本数": 3},
+            {"final_item_position": 3, "清单名称": "C", "价格证据样本数": 10},
+        ])
+        all_evidence = pd.DataFrame([
+            {"final_item_position": position, "stable_sample_id": f"e-{position}-{index}"}
+            for position, count in [(1, 2), (2, 3), (3, 10)]
+            for index in range(count)
+        ])
+
+        filtered_scenario, display_rows, display_evidence = query_estimate_llm.filter_customer_display_outputs(
+            scenario, rows, all_evidence
+        )
+
+        self.assertEqual(display_rows["清单名称"].tolist(), ["B", "C"])
+        self.assertEqual([item.item_position for item in filtered_scenario.items], [2, 3])
+        self.assertEqual(len(display_evidence), 13)
+        self.assertEqual(len(all_evidence), 15)
+        self.assertNotIn("final_item_position", display_rows.columns)
+
+    def test_summary_component_amounts_missing_values_and_reference_project_fallback(self):
+        rows = pd.DataFrame([
+            {
+                "清单名称": "A", "工程量": 10,
+                "综合单价P10": 1, "综合单价中位数": 2, "综合单价P90": 3,
+                "其中包含人工费单价P10": 4, "其中包含人工费单价中位数": 5, "其中包含人工费单价P90": 6,
+                "其中包含机械费单价P10": "", "其中包含机械费单价中位数": "", "其中包含机械费单价P90": "",
+            },
+            {
+                "清单名称": "A", "工程量": 2,
+                "综合单价P10": 10, "综合单价中位数": 20, "综合单价P90": 30,
+                "其中包含人工费单价P10": "", "其中包含人工费单价中位数": 20, "其中包含人工费单价P90": "",
+                "其中包含机械费单价P10": "", "其中包含机械费单价中位数": "", "其中包含机械费单价P90": "",
+            },
+        ])
+        evidence = pd.DataFrame([
+            {"project_key": "", "project_package_id": "PKG1"},
+            {"project_key": "", "project_package_id": "PKG1"},
+            {"project_key": "", "project_package_id": "PKG2"},
+        ])
+        scenario = query_estimate_llm.EstimateScenario("S001", 1, "方案", "说明", [], "确认")
+
+        summary = query_estimate_llm.build_estimate_summary("问题", [scenario], rows, evidence).iloc[0]
+
+        self.assertEqual(summary["主要施工内容"], "A")
+        self.assertEqual(summary["计价项目数"], 2)
+        self.assertEqual(summary["参考项目数"], 2)
+        self.assertEqual(summary["其中包含人工费中位数"], 90)
+        self.assertEqual(summary["其中包含人工费P10"], 40)
+        self.assertEqual(summary["其中包含人工费P90"], 60)
+        self.assertEqual(summary["其中包含机械费中位数"], "")
+
+    def test_final_explanation_prompt_and_strict_result_validation(self):
+        final_items = [{
+            "cost_item_name": "B", "project_description": "3mm", "unit": "m²",
+            "quantity": 10, "unit_price": 20, "estimated_amount": 200,
+        }]
+        prompt = query_estimate_llm.build_final_explanation_prompt("原始问题", final_items, 100, 200, 300)
+        payload = json.loads(prompt.split("输入：\n", 1)[1])
+        self.assertEqual(set(payload), {"user_query", "final_items", "total_price"})
+        self.assertEqual(payload["final_items"], final_items)
+        self.assertNotIn("evidence_count", prompt.split("输入：\n", 1)[1])
+
+        scenario = query_estimate_llm.EstimateScenario("S001", 1, "", "", [])
+        valid = {"scenario_name": "方案", "scenario_summary": "说明", "site_confirmation": "确认"}
+        parsed = query_estimate_llm.parse_final_explanation_result(valid, scenario)
+        self.assertEqual(parsed.site_confirmation, "确认")
+        invalid_results = [
+            {**valid, "extra": "x"},
+            {"scenario_name": "方案", "scenario_summary": "说明"},
+            {**valid, "scenario_name": ""},
+            {**valid, "scenario_summary": []},
+            {**valid, "scenario_summary": "**Markdown**"},
+            [valid],
+        ]
+        for invalid in invalid_results:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                query_estimate_llm.parse_final_explanation_result(invalid, scenario)
+
+    def test_invalid_final_explanation_uses_filtered_fallback_without_failing_query(self):
+        item = query_estimate_llm.ScenarioItem(
+            "PKG", "sid-b", "ref-b", "D2", "O2", "O2", "F2", "F2", "",
+            {"type": "exact", "value": 2}, "", 2,
+        )
+        scenario = query_estimate_llm.EstimateScenario("S001", 1, "", "", [item])
+        rows = pd.DataFrame([{
+            "清单名称": "清单B", "项目特征": "特征B", "单位": "m", "工程量": 2,
+            "综合单价P10": 10, "综合单价中位数": 20, "综合单价P90": 30,
+        }])
+        response = types.SimpleNamespace(
+            content={"scenario_name": "方案", "scenario_summary": "说明", "site_confirmation": "确认", "extra": "x"},
+            usage={}, raw_content="{}",
+        )
+        warnings = []
+
+        with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response):
+            output, success, error, prompt, trace = query_estimate_llm.generate_final_explanation(
+                "原始问题", scenario, rows, warnings
+            )
+
+        self.assertFalse(success)
+        self.assertIn("顶层字段非法", error)
+        self.assertEqual(output.scenario_name, "清单B维修组合参考方案")
+        self.assertNotIn("清单A", prompt)
+        self.assertIn("final_explanation_failed", warnings)
+        self.assertEqual(trace["parsed_status"], "failed")
+
+    def test_all_filtered_summary_is_one_fixed_row_and_no_amounts(self):
+        base = query_estimate_llm.EstimateScenario("S001", 1, "", "", [])
+        scenario = query_estimate_llm.insufficient_evidence_scenario(base)
+        rows = pd.DataFrame(columns=query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS)
+        evidence = pd.DataFrame(columns=query_estimate_llm.PRICE_EVIDENCE_ITEM_COLUMNS)
+
+        summary = query_estimate_llm.build_estimate_summary("原始问题", [scenario], rows, evidence)
+
+        self.assertEqual(len(summary), 1)
+        self.assertEqual(summary.loc[0, "方案名称"], "历史价格证据不足")
+        self.assertEqual(summary.loc[0, "计价项目数"], 0)
+        self.assertEqual(summary.loc[0, "参考项目数"], 0)
+        self.assertEqual(summary.loc[0, "参考样本数"], 0)
+        self.assertEqual(summary.loc[0, "合价中位数"], "")
+
+        with patch.object(query_estimate_llm, "generate_optional_final_explanation") as generator:
+            explained, success, error, prompt, trace = query_estimate_llm.generate_customer_explanation(
+                True, "原始问题", base, rows
+            )
+        generator.assert_not_called()
+        self.assertTrue(success)
+        self.assertEqual((error, prompt), ("", ""))
+        self.assertEqual(explained.scenario_name, "历史价格证据不足")
+        self.assertEqual(trace["parsed_status"], "skipped")
 
     def test_workbook_includes_new_columns_and_two_stage_trace(self):
         result = query_estimate_llm.QueryResult(

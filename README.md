@@ -263,7 +263,9 @@ backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
 → quantity_determination 只绑定能直接匹配最终清单的用户明确数量
 → 其余清单按选用 practice option 的全库同类样本工程量中位数暂估
 → 程序按选用的 practice option 回填单价并计算合价
-→ 可选 final_explanation 仅补充单方案名称、整体说明和逐项说明
+→ 客户展示后处理过滤价格证据样本数小于 3 的最终项
+→ 仅按保留项重新汇总方案金额、人工费、机械费和参考证据
+→ 可选 final_explanation 生成基于历史清单的组合维修参考方案说明
 → estimate_summary / estimate_scenarios
 ```
 
@@ -289,9 +291,11 @@ Query Rewrite 固定输出 `project_package_query_text`、`item_query_text`、`l
 
 输出 xlsx 固定包含：
 
-- `estimate_summary`：面向用户/领导的估价摘要，一行一个 scenario，展示推荐标记、方案说明、主要施工内容、计价项目数和合价区间。
-- `estimate_scenarios`：scenario 完整项目级主表，一行一个 scenario item，展示清单名称、项目特征、工程量、工程量来源与说明、历史工程量最低值/中位数/最高值、价格证据样本数、综合单价、暂估合价、价格区间、人工费/机械费单价组成参考和来源样本。用户明确工程量的统计列为空；历史暂估工程量等于全库同类有效样本中位数。工程量和单位继续使用独立列。
+- `estimate_summary`：面向客户的单方案估价摘要，保留用户原始问题，展示历史清单组合说明、主要施工内容、计价项目数、参考项目数、参考样本数、合价区间以及方案级人工费和机械费金额汇总。
+- `estimate_scenarios`：面向客户的项目级主表，展示清单名称、项目特征、工程量、历史工程量统计、价格证据样本数、综合单价、暂估合价、价格区间、人工费/机械费单价组成参考和来源样本；不再展示工程量来源和工程量说明。
+- 价格证据样本数小于 3 的最终项不进入上述两个客户表，也不参与方案金额或 final explanation；其完整计算结果和价格证据仍保留在调试 sheet 中。
 - `option_evidence_expansion`：展示每个最终清单的价格证据 family 和样本数在扩充前后的变化。扩充只对原 practice option 去重价格证据少于 10 条的最终项执行；LLM 结合清单名称、项目特征和辅助标签综合判断最多 20 个同单位候选是否与代表 family 属于同一价格统计口径。程序严格校验候选白名单，并对明确的单位、厚度、材料和楼层/高度冲突进行兜底拒绝，不再以四项标签字符串完全一致作为最终判断。原证据不少于 10 条或没有候选时不调用 LLM，仍保留 sheet 与 trace 记录。
+- `price_evidence_items`：保留所有最终计算项的完整去重价格证据，包括在客户展示中因样本数不足而被过滤的项；同时保留 `project_key` 和 `project_package_id` 用于参考工程去重与调试回查。
 - `matched_project_packages`：工程包级召回结果，包括 `package_query_similarity`、`project_package_id`、工程名称、`project_name_text`、`cost_item_names_summary`、`consultation_time`、`location`、`cache_subject` 和 `item_count`。
 - `direct_item_hits`：清单行级直接召回结果，参与生成 `retrieved_evidence_items`，不单独输出为 sheet。
 - `retrieved_evidence_items`：工程包召回与清单行召回合并后的逐行结果；输出时体现为回填 `family_id` 后的 `evidence_items`。
@@ -319,7 +323,7 @@ LLM 职责边界：
 - display_option_grouping：把全部候选 display 内的 family 按具体工艺和价格统计口径完整整理为 practice_options，不选择默认 option。
 - range_selection：只在程序选定的完整历史工程中返回一个连续起止区间；调用、解析或校验失败时回退完整工程。
 - quantity_determination：只为最终区间的每个绝对 `item_position` 判断 `user_explicit` 或 `historical_median`。用户明确数量只绑定部位、项目名称、材料、规格和单位直接匹配的清单，其余项目由程序采用全库同类历史样本工程量中位数，不在项目之间推导或复制数量。
-- final_explanation：仅在传入 `--with-explanations` 时调用，只读取最终清单及其已锁定工艺、工程量和价格，按最终 items 原顺序生成单方案名称、整体说明和逐项说明。
+- final_explanation：仅在传入 `--with-explanations` 且存在达到最低证据要求的展示清单时调用，只读取过滤后的清单、工程量、价格和汇总金额，生成“历史清单驱动的组合维修参考方案”。未开启或调用失败时使用程序 fallback，不影响主查询成功。
 - LLM 不生成单价、来源、清单名称、单位或合价。综合单价和合价由程序根据 scenario 选用的 practice option 回填和计算。
 
 历史工程量中位数只用于初步估算，不代表现场确认工程量。综合单价始终来自检索样本；若同类证据没有有效工程量，程序仅可明确标记后采用最佳召回样本的有效工程量，最佳样本也无有效值时直接失败。

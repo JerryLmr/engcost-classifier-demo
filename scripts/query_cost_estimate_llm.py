@@ -26,6 +26,7 @@ from classifier.llm_client import LLMServiceError, check_lmstudio_service, reque
 
 
 DEFAULT_PACKAGE_WEIGHT_TEMPERATURE = 0.10
+MIN_DISPLAY_PRICE_EVIDENCE_COUNT = 3
 MUNICIPALITIES = {"北京市", "上海市", "天津市", "重庆市"}
 PREFECTURE_LOCATION_PATTERN = re.compile(
     r"^(?:[^,，/、]+省|[^,，/、]+自治区)[^,，/、省市]+市$"
@@ -208,8 +209,6 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "项目特征",
     "单位",
     "工程量",
-    "工程量来源",
-    "工程量说明",
     "价格证据样本数",
     "综合单价P10",
     "综合单价",
@@ -238,20 +237,29 @@ ESTIMATE_SCENARIO_COLUMNS = [
 ]
 
 ESTIMATE_SUMMARY_COLUMNS = [
+    "用户问题",
     "方案名称",
     "方案说明",
     "主要施工内容",
     "计价项目数",
+    "参考项目数",
+    "参考样本数",
     "合价P10",
     "合价中位数",
     "合价P90",
+    "其中包含人工费P10",
+    "其中包含人工费中位数",
+    "其中包含人工费P90",
+    "其中包含机械费P10",
+    "其中包含机械费中位数",
+    "其中包含机械费P90",
     "待现场确认事项",
 ]
 
 PRICE_EVIDENCE_ITEM_COLUMNS = [
     "final_item_position", "清单名称", "display_id", "practice_option_id",
     "family_id", "normalized_signature", "stable_sample_id", "project_key",
-    "source_ref", "工程名称", "location", "consultation_time", "cost_item_name",
+    "project_package_id", "source_ref", "工程名称", "location", "consultation_time", "cost_item_name",
     "project_description", "unit", "quantity", "unit_price", "labor_unit_price",
     "machinery_unit_price",
 ]
@@ -333,6 +341,7 @@ class EstimateScenario:
     scenario_name: str
     scenario_summary: str
     items: list[ScenarioItem]
+    site_confirmation: str = ""
 
 
 @dataclass(frozen=True)
@@ -3146,96 +3155,131 @@ def build_stable_sample_lookup(
 
 
 def build_final_explanation_prompt(
-    raw_text: str,
-    scenario: EstimateScenario,
-    estimate_scenarios: pd.DataFrame,
-    matched_project_examples: list[dict[str, Any]],
+    raw_query: str,
+    final_items: list[dict[str, Any]],
+    total_p10: float | None,
+    total_median: float | None,
+    total_p90: float | None,
 ) -> str:
-    selected_project_name = next(
-        (example for example in matched_project_examples if cell_text(example.get("project_package_id")) == scenario.items[0].project_package_id),
-        {},
-    )
-    selected_project_name = cell_text(selected_project_name.get("project_name")) or cell_text(
-        selected_project_name.get("project_name_text")
-    )
-    item_columns = [
-        "清单名称", "项目特征", "单位",
-        "工程量", "工程量来源", "工程量说明", "综合单价P10", "综合单价中位数", "综合单价P90",
-        "合价P10", "合价中位数", "合价P90", "价格证据样本数",
-    ]
-    items = replace_nan_records(estimate_scenarios[item_columns])
-    return f"""
-清单、工艺、工程量、价格和金额均已确定。只补充方案名称、整体说明和逐项说明。
-不得增加、删除、重排或修改任何清单、工艺、工程量或价格，不得提及输入中不存在的维修对象。
+    payload = {
+        "user_query": raw_query,
+        "final_items": final_items,
+        "total_price": {
+            "p10": total_p10,
+            "median": total_median,
+            "p90": total_p90,
+        },
+    }
 
-item_explanations 必须与 final_items 数量和原顺序完全一致，只输出：
+    return f"""
+任务：根据已经确定的维修清单和估价结果，生成面向客户的组合维修参考方案说明。
+
+你只负责解释输入中已经存在的最终结果，不得修改或补充计价内容。
+
+方案定位：
+
+当前结果是一套根据相似历史维修清单形成的常见组合参考，不代表已经完成现场勘察，也不代表唯一或最终施工方案。
+
+要求：
+
+1. 方案名称应简短、客观，概括维修对象和主要处理方式。
+2. 方案说明使用2至3句话，清楚说明：
+   - 当前方案针对什么维修需求；
+   - 输入中的清单组合成什么常见维修做法；
+   - 组合中主要项目分别承担什么作用；
+   - 估价区间根据当前组合内各清单的历史价格证据汇总形成。
+3. 可以整理输入清单之间明显且合理的先后关系。
+4. 可以解释输入中已有项目的作用。
+5. 不得增加输入中不存在的工序、材料、设备或计价项目。
+6. 不得推断损坏原因、现场状态或故障结论。
+7. 不得把当前参考组合写成唯一方案、最优方案或已经确定的施工方案。
+8. 不介绍模型、检索、Family、Option、样本数或内部计算过程。
+9. 待现场确认事项只写可能明显影响最终维修范围、工程量或价格的关键缺失信息。
+10. 待现场确认事项应具体，不重复“仅供参考”“以现场实际为准”等空泛表达。
+11. 不得编造用户未提供、清单中也无法确认的型号、规格、数量或施工条件。
+12. 语言简洁、自然，适合直接展示给客户。
+
+只输出合法 JSON，顶层只能包含以下字段：
+
 {{
-  "scenario_name": "方案名称",
-  "scenario_summary": "方案整体说明",
-  "item_explanations": [
-    {{"item_explanation": "逐项说明"}}
-  ]
+  "scenario_name": "",
+  "scenario_summary": "",
+  "site_confirmation": ""
 }}
 
 输入：
-{json_text({"user_query": raw_text, "selected_project_name": selected_project_name, "final_items": items})}
+{json.dumps(payload, ensure_ascii=False)}
 """.strip()
 
 
 def parse_final_explanation_result(result: dict[str, Any], scenario: EstimateScenario) -> EstimateScenario:
-    if not isinstance(result, dict) or set(result) != {"scenario_name", "scenario_summary", "item_explanations"}:
+    required_fields = {"scenario_name", "scenario_summary", "site_confirmation"}
+    if not isinstance(result, dict) or set(result) != required_fields:
         raise ValueError("final_explanation 顶层字段非法")
-    scenario_name = cell_text(result.get("scenario_name"))
-    scenario_summary = cell_text(result.get("scenario_summary"))
-    if not scenario_name or not scenario_summary:
-        raise ValueError("scenario_name 和 scenario_summary 不得为空")
-    raw_items = result.get("item_explanations")
-    if not isinstance(raw_items, list) or len(raw_items) != len(scenario.items):
-        raise ValueError("item_explanations 数量必须等于最终 items 数量")
-    explanations: list[str] = []
-    for position, raw_item in enumerate(raw_items):
-        if not isinstance(raw_item, dict) or set(raw_item) != {"item_explanation"}:
-            raise ValueError("item_explanation 只允许 item_explanation")
-        explanation = cell_text(raw_item.get("item_explanation"))
-        if not explanation:
-            raise ValueError(f"item_explanation 不得为空: position={position}")
-        explanations.append(explanation)
-    items = [
-        ScenarioItem(
-            project_package_id=item.project_package_id,
-            stable_sample_id=item.stable_sample_id,
-            source_ref=item.source_ref,
-            display_id=item.display_id,
-            practice_option_id=item.practice_option_id,
-            original_option_id=item.original_option_id,
-            original_family_id=item.original_family_id,
-            representative_family_id=item.representative_family_id,
-            selection_reason=explanations[position],
-            quantity=item.quantity,
-            quantity_reason=item.quantity_reason,
-            item_position=item.item_position,
-            quantity_source=item.quantity_source,
-            quantity_explanation=item.quantity_explanation,
-            quantity_sample_count=item.quantity_sample_count,
-            quantity_minimum=item.quantity_minimum,
-            quantity_median=item.quantity_median,
-            quantity_maximum=item.quantity_maximum,
-            quantity_fallback_used=item.quantity_fallback_used,
-            quantity_fallback_reason=item.quantity_fallback_reason,
-        )
-        for position, item in enumerate(scenario.items)
-    ]
-    return EstimateScenario("S001", 1, scenario_name, scenario_summary, items)
+    values: dict[str, str] = {}
+    for field in required_fields:
+        value = result.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{field} 必须为非空字符串")
+        if re.search(r"(?:```|\*\*|__|(?:^|\n)\s*(?:#{1,6}\s|[-*+]\s|\d+\.\s|>\s))", value):
+            raise ValueError(f"{field} 不得包含 Markdown")
+        values[field] = value.strip()
+    return EstimateScenario(
+        scenario.scenario_id,
+        scenario.scenario_order,
+        values["scenario_name"],
+        values["scenario_summary"],
+        scenario.items,
+        values["site_confirmation"],
+    )
+
+
+def final_explanation_items(estimate_scenarios: pd.DataFrame) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for _index, row in estimate_scenarios.iterrows():
+        rows.append({
+            "cost_item_name": cell_text(row.get("清单名称")),
+            "project_description": cell_text(row.get("项目特征")),
+            "unit": cell_text(row.get("单位")),
+            "quantity": numeric_or_none(row.get("工程量")),
+            "unit_price": numeric_or_none(row.get("综合单价中位数")),
+            "estimated_amount": calc_amount(row.get("工程量"), row.get("综合单价中位数")),
+        })
+    return rows
+
+
+def fallback_scenario(scenario: EstimateScenario, estimate_scenarios: pd.DataFrame) -> EstimateScenario:
+    first_name = next(
+        (cell_text(value) for value in estimate_scenarios.get("清单名称", pd.Series(dtype=object)).tolist() if cell_text(value)),
+        "",
+    )
+    scenario_name = f"{short_description(first_name, 18)}维修组合参考方案" if first_name else "维修组合初步估价"
+    return EstimateScenario(
+        scenario.scenario_id,
+        scenario.scenario_order,
+        scenario_name,
+        "当前结果根据保留清单形成一套历史常见维修组合，估价区间由组合内各清单的历史价格证据汇总形成，具体清单和价格见明细表。",
+        scenario.items,
+        "需确认实际维修部位、范围、规格、数量及现场施工条件。",
+    )
 
 
 def generate_final_explanation(
     raw_text: str,
     scenario: EstimateScenario,
     estimate_scenarios: pd.DataFrame,
-    matched_project_examples: list[dict[str, Any]],
     warnings: list[str] | None = None,
 ) -> tuple[EstimateScenario, bool, str, str, dict[str, Any]]:
-    prompt = build_final_explanation_prompt(raw_text, scenario, estimate_scenarios, matched_project_examples)
+    total_p10 = sum_component_amount(estimate_scenarios, "综合单价P10")
+    total_median = sum_component_amount(estimate_scenarios, "综合单价中位数")
+    total_p90 = sum_component_amount(estimate_scenarios, "综合单价P90")
+    prompt = build_final_explanation_prompt(
+        raw_text,
+        final_explanation_items(estimate_scenarios),
+        total_p10,
+        total_median,
+        total_p90,
+    )
     max_tokens = 4096
     try:
         response = request_llm_json_with_usage(
@@ -3244,11 +3288,9 @@ def generate_final_explanation(
         )
         explained = parse_final_explanation_result(response.content, scenario)
         trace = trace_row(
-            "final_explanation", "补充唯一估价方案的整体和逐项说明", True,
+            "final_explanation", "生成历史清单驱动的组合维修参考方案说明", True,
             prompt=prompt, max_tokens=max_tokens,
             input_summary=json_text({
-                "selected_project_package_id": scenario.items[0].project_package_id,
-                "selected_stable_sample_ids": [item.stable_sample_id for item in scenario.items],
                 "item_count": len(scenario.items),
             }),
             usage=response.usage, raw_response=getattr(response, "raw_content", ""),
@@ -3258,7 +3300,7 @@ def generate_final_explanation(
     except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
         append_warning(warnings, "final_explanation_failed")
         trace = trace_row(
-            "final_explanation", "补充唯一估价方案的整体和逐项说明", False,
+            "final_explanation", "生成历史清单驱动的组合维修参考方案说明", False,
             error=str(exc), prompt=prompt, max_tokens=max_tokens,
             input_summary=json_text({
                 "selected_project_package_id": scenario.items[0].project_package_id,
@@ -3267,7 +3309,7 @@ def generate_final_explanation(
             }),
             scenario_count=1, scenario_item_count=len(scenario.items),
         )
-        return scenario, False, str(exc), prompt, trace
+        return fallback_scenario(scenario, estimate_scenarios), False, str(exc), prompt, trace
 
 
 def generate_optional_final_explanation(
@@ -3275,21 +3317,50 @@ def generate_optional_final_explanation(
     raw_text: str,
     scenario: EstimateScenario,
     estimate_scenarios: pd.DataFrame,
-    matched_project_examples: list[dict[str, Any]],
     warnings: list[str] | None = None,
 ) -> tuple[EstimateScenario, bool, str, str, dict[str, Any]]:
     if with_explanations:
         return generate_final_explanation(
-            raw_text, scenario, estimate_scenarios, matched_project_examples, warnings=warnings
+            raw_text, scenario, estimate_scenarios, warnings=warnings
         )
-    return scenario, True, "", "", trace_row(
+    trace = trace_row(
         "final_explanation",
-        "项目级和清单级解释已按运行配置跳过",
+        "客户方案说明已按运行配置使用程序 fallback",
         True,
         input_summary=json_text({"with_explanations": False}),
         scenario_count=1,
         scenario_item_count=len(scenario.items),
     )
+    trace["fallback"] = True
+    return fallback_scenario(scenario, estimate_scenarios), True, "", "", trace
+
+
+def generate_customer_explanation(
+    with_explanations: bool,
+    raw_query: str,
+    scenario: EstimateScenario,
+    estimate_scenarios: pd.DataFrame,
+    warnings: list[str] | None = None,
+) -> tuple[EstimateScenario, bool, str, str, dict[str, Any]]:
+    if not estimate_scenarios.empty:
+        return generate_optional_final_explanation(
+            with_explanations,
+            raw_query,
+            scenario,
+            estimate_scenarios,
+            warnings=warnings,
+        )
+    trace = trace_row(
+        "final_explanation",
+        "全部最终项因历史价格证据不足而跳过客户方案说明",
+        True,
+        input_summary=json_text({"skip_reason": "no_display_items"}),
+        scenario_count=1,
+        scenario_item_count=0,
+    )
+    trace["fallback"] = True
+    trace["parsed_status"] = "skipped"
+    return insufficient_evidence_scenario(scenario), True, "", "", trace
 
 
 def build_option_evidence_expansion_prompt(
@@ -3875,6 +3946,7 @@ def build_scenario_outputs(
     candidate_families: pd.DataFrame,
     samples: pd.DataFrame,
     expanded_family_ids_by_position: dict[int, list[str]] | None = None,
+    include_internal_positions: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     display_map, option_map = display_option_maps(displays_with_options)
     family_map = {cell_text(row.get("family_id")): row for _index, row in candidate_families.iterrows()}
@@ -3924,6 +3996,7 @@ def build_scenario_outputs(
                     "normalized_signature": cell_text(evidence.get("normalized_signature")),
                     "stable_sample_id": cell_text(evidence.get("stable_sample_id")),
                     "project_key": cell_text(evidence.get("project_key")),
+                    "project_package_id": cell_text(evidence.get("project_package_id")),
                     "source_ref": cell_text(evidence.get("source_ref")),
                     "工程名称": cell_text(evidence.get("工程名称")) or cell_text(evidence.get("来源工程名称")) or cell_text(evidence.get("project_name_text")),
                     "location": cell_text(evidence.get("location")),
@@ -3938,15 +4011,11 @@ def build_scenario_outputs(
                 })
             scenario_rows.append(
                 {
+                    "final_item_position": item.item_position,
                     "清单名称": cell_text(representative.get("representative_cost_item_name")),
                     "项目特征": cell_text(representative.get("representative_project_description")),
                     "单位": scenario_unit,
                     "工程量": quantity_value,
-                    "工程量来源": {
-                        "user_explicit": "用户明确工程量",
-                        "historical_median": "全库历史样本中位数",
-                    }.get(item.quantity_source, item.quantity_source),
-                    "工程量说明": quantity_reason,
                     "工程量最低值": item.quantity_minimum,
                     "工程量中位数": item.quantity_median,
                     "工程量最高值": item.quantity_maximum,
@@ -3974,8 +4043,9 @@ def build_scenario_outputs(
                     "display_id": item.display_id,
                 }
             )
+    scenario_columns = ["final_item_position", *ESTIMATE_SCENARIO_COLUMNS] if include_internal_positions else ESTIMATE_SCENARIO_COLUMNS
     return (
-        pd.DataFrame(scenario_rows, columns=ESTIMATE_SCENARIO_COLUMNS).fillna(""),
+        pd.DataFrame(scenario_rows, columns=scenario_columns).fillna(""),
         pd.DataFrame(price_evidence_rows, columns=PRICE_EVIDENCE_ITEM_COLUMNS).fillna(""),
     )
 
@@ -4058,6 +4128,12 @@ DECIMAL_VALUE_COLUMNS = {
 
 AMOUNT_VALUE_COLUMNS = {
     "total_price",
+    "其中包含人工费P10",
+    "其中包含人工费中位数",
+    "其中包含人工费P90",
+    "其中包含机械费P10",
+    "其中包含机械费中位数",
+    "其中包含机械费P90",
 }
 
 AMOUNT_WIDTH_COLUMNS = {
@@ -4065,6 +4141,7 @@ AMOUNT_WIDTH_COLUMNS = {
     "合价P10",
     "合价中位数",
     "合价P90",
+    *AMOUNT_VALUE_COLUMNS,
 }
 
 
@@ -4131,6 +4208,80 @@ def amount_sum(frame: pd.DataFrame, column: str) -> float | None:
     return round(float(values.sum()), 2)
 
 
+def sum_component_amount(
+    scenario_rows: pd.DataFrame,
+    unit_price_column: str,
+) -> float | None:
+    amounts: list[float] = []
+    for _index, row in scenario_rows.iterrows():
+        amount = calc_amount(row.get("工程量"), row.get(unit_price_column))
+        if amount is not None:
+            amounts.append(amount)
+    if not amounts:
+        return None
+    return round(sum(amounts), 2)
+
+
+def count_reference_projects(price_evidence_items: pd.DataFrame) -> int:
+    for column in ["project_key", "project_package_id"]:
+        if column not in price_evidence_items.columns:
+            continue
+        values = price_evidence_items[column].map(cell_text)
+        non_empty = values[values.ne("")]
+        if not non_empty.empty:
+            return int(non_empty.nunique())
+    return 0
+
+
+def filter_customer_display_outputs(
+    scenario: EstimateScenario,
+    scenario_rows_with_positions: pd.DataFrame,
+    all_price_evidence_items: pd.DataFrame,
+) -> tuple[EstimateScenario, pd.DataFrame, pd.DataFrame]:
+    if "final_item_position" not in scenario_rows_with_positions.columns:
+        raise ValueError("最终展示过滤缺少 final_item_position")
+    evidence_counts = pd.to_numeric(
+        scenario_rows_with_positions.get("价格证据样本数"), errors="coerce"
+    ).fillna(0)
+    retained_rows = scenario_rows_with_positions[
+        evidence_counts.ge(MIN_DISPLAY_PRICE_EVIDENCE_COUNT)
+    ].copy()
+    retained_positions = {
+        int(value)
+        for value in pd.to_numeric(retained_rows["final_item_position"], errors="coerce").dropna().tolist()
+    }
+    filtered_scenario = EstimateScenario(
+        scenario.scenario_id,
+        scenario.scenario_order,
+        scenario.scenario_name,
+        scenario.scenario_summary,
+        [item for item in scenario.items if item.item_position in retained_positions],
+        scenario.site_confirmation,
+    )
+    display_evidence = all_price_evidence_items[
+        pd.to_numeric(
+            all_price_evidence_items.get("final_item_position", pd.Series(dtype=float)),
+            errors="coerce",
+        ).isin(retained_positions)
+    ].copy()
+    return (
+        filtered_scenario,
+        retained_rows.drop(columns=["final_item_position"]).reset_index(drop=True),
+        display_evidence.reset_index(drop=True),
+    )
+
+
+def insufficient_evidence_scenario(scenario: EstimateScenario) -> EstimateScenario:
+    return EstimateScenario(
+        scenario.scenario_id,
+        scenario.scenario_order,
+        "历史价格证据不足",
+        "当前检索结果中没有清单达到最低历史价格证据要求，暂不形成可展示的估价组合。",
+        [],
+        "建议补充具体维修对象、部位、规格、数量及现场检测信息后重新估价。",
+    )
+
+
 def short_description(value: Any, limit: int = 28) -> str:
     text = re.sub(r"\s+", " ", cell_text(value)).strip()
     if len(text) <= limit:
@@ -4147,23 +4298,32 @@ def display_item_label(row: pd.Series) -> str:
 
 
 def build_estimate_summary(
+    raw_query: str,
     scenarios: list[EstimateScenario],
     estimate_scenarios: pd.DataFrame,
+    display_price_evidence_items: pd.DataFrame,
 ) -> pd.DataFrame:
-    if estimate_scenarios.empty:
-        return pd.DataFrame(columns=ESTIMATE_SUMMARY_COLUMNS)
     scenario = scenarios[0] if scenarios else None
     row = {
+        "用户问题": raw_query,
         "方案名称": scenario.scenario_name if scenario is not None else "",
         "方案说明": scenario.scenario_summary if scenario is not None else "",
         "主要施工内容": join_non_empty([
-            display_item_label(item) for _index, item in estimate_scenarios.iterrows()
+            item.get("清单名称") for _index, item in estimate_scenarios.iterrows()
         ]),
         "计价项目数": int(len(estimate_scenarios)),
-        "合价P10": amount_sum(estimate_scenarios, "合价P10"),
-        "合价中位数": amount_sum(estimate_scenarios, "合价中位数"),
-        "合价P90": amount_sum(estimate_scenarios, "合价P90"),
-        "待现场确认事项": "",
+        "参考项目数": count_reference_projects(display_price_evidence_items),
+        "参考样本数": int(len(display_price_evidence_items)),
+        "合价P10": sum_component_amount(estimate_scenarios, "综合单价P10"),
+        "合价中位数": sum_component_amount(estimate_scenarios, "综合单价中位数"),
+        "合价P90": sum_component_amount(estimate_scenarios, "综合单价P90"),
+        "其中包含人工费P10": sum_component_amount(estimate_scenarios, "其中包含人工费单价P10"),
+        "其中包含人工费中位数": sum_component_amount(estimate_scenarios, "其中包含人工费单价中位数"),
+        "其中包含人工费P90": sum_component_amount(estimate_scenarios, "其中包含人工费单价P90"),
+        "其中包含机械费P10": sum_component_amount(estimate_scenarios, "其中包含机械费单价P10"),
+        "其中包含机械费中位数": sum_component_amount(estimate_scenarios, "其中包含机械费单价中位数"),
+        "其中包含机械费P90": sum_component_amount(estimate_scenarios, "其中包含机械费单价P90"),
+        "待现场确认事项": scenario.site_confirmation if scenario is not None else "",
     }
     return pd.DataFrame([row], columns=ESTIMATE_SUMMARY_COLUMNS).fillna("")
 
@@ -4286,7 +4446,12 @@ def build_parse_info(
         ("quantity_determination_prompt_tokens", quantity_trace.get("prompt_tokens") or quantity_trace.get("estimated_tokens", "")),
         ("quantity_determination_completion_tokens", quantity_trace.get("completion_tokens", "")),
         ("with_explanations", with_explanations),
-        ("final_explanation_status", "skipped" if not with_explanations else ("failed" if final_explanation_error else "success")),
+        (
+            "final_explanation_status",
+            "skipped" if not with_explanations
+            else ("skipped_insufficient_evidence" if final_explanation_trace.get("parsed_status") == "skipped"
+                  else ("fallback" if final_explanation_error else "success")),
+        ),
         ("final_explanation_prompt_chars", final_explanation_trace.get("prompt_chars", "")),
         ("final_explanation_prompt_tokens", final_explanation_trace.get("prompt_tokens") or final_explanation_trace.get("estimated_tokens", "")),
         ("final_explanation_completion_tokens", final_explanation_trace.get("completion_tokens", "")),
@@ -4584,12 +4749,18 @@ def run_query(
         candidate_samples,
         warnings,
     )
-    estimate_scenarios, _price_evidence_items = build_scenario_outputs(
+    scenario_rows_with_positions, all_price_evidence_items = build_scenario_outputs(
         scenarios,
         displays_with_options,
         candidate_families,
         candidate_samples,
         expanded_family_ids_by_position,
+        include_internal_positions=True,
+    )
+    scenario, estimate_scenarios, display_price_evidence_items = filter_customer_display_outputs(
+        scenario,
+        scenario_rows_with_positions,
+        all_price_evidence_items,
     )
     (
         scenario,
@@ -4597,23 +4768,20 @@ def run_query(
         final_explanation_error,
         final_explanation_prompt,
         final_explanation_trace,
-    ) = generate_optional_final_explanation(
+    ) = generate_customer_explanation(
         with_explanations,
-        raw_text,
+        rewrite.raw_query,
         scenario,
         estimate_scenarios,
-        matched_project_examples,
         warnings=warnings,
     )
     scenarios = [scenario]
-    estimate_scenarios, price_evidence_items = build_scenario_outputs(
+    estimate_summary = build_estimate_summary(
+        rewrite.raw_query,
         scenarios,
-        displays_with_options,
-        candidate_families,
-        candidate_samples,
-        expanded_family_ids_by_position,
+        estimate_scenarios,
+        display_price_evidence_items,
     )
-    estimate_summary = build_estimate_summary(scenarios, estimate_scenarios)
     if warnings:
         append_trace_warnings(display_option_grouping_trace, warnings)
         append_trace_warnings(range_selection_trace, warnings)
@@ -4698,10 +4866,10 @@ def run_query(
         matched_project_examples=matched_project_examples_output,
         evidence_items=evidence_items,
         option_evidence_expansion=option_evidence_expansion,
-        price_evidence_items=price_evidence_items,
+        price_evidence_items=all_price_evidence_items,
         parse_info=parse_info,
         llm_trace=llm_trace,
-        success=final_explanation_success,
+        success=True,
         error_message=final_explanation_error,
     )
     if output:
@@ -4763,9 +4931,6 @@ def main() -> int:
         return 1
 
     print_terminal_summary(result, output_path)
-    if not getattr(result, "success", True):
-        print(f"[ERROR] final_explanation 失败，已输出无说明估价: {getattr(result, 'error_message', '')}")
-        return 1
     return 0
 
 
