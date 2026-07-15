@@ -207,8 +207,15 @@ ESTIMATE_SCENARIO_COLUMNS = [
     "清单名称",
     "项目特征",
     "单位",
-    "工程量预估",
-    "工程量依据",
+    "工程量",
+    "工程量来源",
+    "工程量说明",
+    "工程量样本数",
+    "工程量最低值",
+    "工程量中位数",
+    "工程量最高值",
+    "综合单价",
+    "暂估合价",
     "合价P10",
     "合价中位数",
     "合价P90",
@@ -266,6 +273,8 @@ LLM_TRACE_COLUMNS = [
     "prompt_tokens",
     "completion_tokens",
     "total_tokens",
+    "fallback",
+    "quantity_items",
 ]
 
 
@@ -295,6 +304,14 @@ class ScenarioItem:
     quantity: dict[str, Any]
     quantity_reason: str
     item_position: int = 0
+    quantity_source: str = ""
+    quantity_explanation: str = ""
+    quantity_sample_count: int | None = None
+    quantity_minimum: float | None = None
+    quantity_median: float | None = None
+    quantity_maximum: float | None = None
+    quantity_fallback_used: bool = False
+    quantity_fallback_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -2708,19 +2725,18 @@ def validate_quantity(value: Any) -> dict[str, Any]:
 
 
 def quantity_rule_payload(raw_text: str, plan_items: pd.DataFrame) -> dict[str, Any]:
-    records = [
+    items = [
         {
             "item_position": int(row["item_position"]),
             "cost_item_name": cell_text(row.get("cost_item_name")),
             "project_description": cell_text(row.get("project_description")),
-            "unit": cell_text(row.get("unit")) or cell_text(row.get("unit_normalized")),
-            "historical_quantity": numeric_or_none(row.get("quantity")),
+            "unit": cell_text(row.get("unit")),
         }
         for _index, row in plan_items.iterrows()
     ]
-    if not records:
+    if not items:
         raise ValueError("最终清单为空，无法确定工程量")
-    return {"user_query": raw_text, "anchor_item": records[0], "items": records[1:]}
+    return {"user_query": raw_text, "items": items}
 
 
 def build_quantity_determination_prompt(
@@ -2728,55 +2744,45 @@ def build_quantity_determination_prompt(
 ) -> str:
     payload = quantity_rule_payload(raw_text, plan_items)
     return f"""
-你只负责读取用户工程量，并判断每个非 anchor 清单的工程量规则。
+任务：判断每条清单的工程量来源。
 
-anchor_item 已固定为最终清单第一项，不得重新选择。
+工程量来源只能是：
 
-输出：
-- anchor_user_quantity
-- anchor_quantity_source
-- item_quantity_rules
+- user_explicit
+  用户明确给出数量，且该数量能根据部位、项目名称、材料、规格和单位直接对应当前清单。
+  quantity 填用户给出的数量。
+
+- historical_median
+  当前清单没有可直接采用的用户数量。
+  可能是用户未提供数量，也可能是用户提供的数量对应其他清单。
+  quantity 必须为 null，具体工程量由程序使用全库同类历史样本中位数计算。
 
 规则：
 
-- 用户明确给出主体工程量：
-  anchor_quantity_source=user_explicit，
-  anchor_user_quantity=用户数量。
+1. 只把用户数量绑定到直接匹配的清单。
+2. 不得把同一个数量无依据地用于多个清单。
+3. 不得根据不同清单之间的历史工程量关系推导数量。
+4. 材料、规格、部位和单位的匹配优先于清单顺序。
+5. 模糊的总体数量无法对应具体清单时，使用 historical_median。
+6. 必须完整覆盖全部 item_position，不得遗漏或重复。
+7. explanation 必须结合当前清单说明原因，不得所有项目重复同一句模板。
+8. 只输出合法 JSON，不得增加其他字段。
 
-- 用户未给主体工程量：
-  anchor_quantity_source=historical_fallback，
-  anchor_user_quantity=anchor_item.historical_quantity。
-
-- 不得把 anchor_item.historical_quantity 伪装成 user_explicit。
-
-- historical_fallback 时不得使用 scale_with_anchor。
-
-- use_user_exact：
-  用户明确给出当前项自身数量，
-  user_exact_quantity 填正数。
-
-- scale_with_anchor：
-  当前项应随主体规模同比例变化，
-  user_exact_quantity=null。
-
-- keep_historical：
-  当前项保留历史数量，
-  user_exact_quantity=null。
-
-必须完整覆盖所有非 anchor item_position。
-不得包含 anchor 自身。
-不得输出 reason 或其他字段。
-
-只输出：
+输出：
 
 {{
-  "anchor_user_quantity": 500,
-  "anchor_quantity_source": "user_explicit",
-  "item_quantity_rules": [
+  "items": [
+    {{
+      "item_position": 0,
+      "quantity_source": "user_explicit",
+      "quantity": 100,
+      "explanation": "用户给出的数量与当前清单的部位、材料和规格直接对应"
+    }},
     {{
       "item_position": 1,
-      "rule": "scale_with_anchor",
-      "user_exact_quantity": null
+      "quantity_source": "historical_median",
+      "quantity": null,
+      "explanation": "用户给出的数量对应其他施工内容，当前清单缺少可直接采用的数量依据"
     }}
   ]
 }}
@@ -2789,121 +2795,129 @@ anchor_item 已固定为最终清单第一项，不得重新选择。
 def parse_quantity_determination_result(
     result: Any,
     plan_items: pd.DataFrame,
-) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
-    return validate_quantity_rule_result(result, plan_items)
+) -> dict[int, dict[str, Any]]:
+    return validate_quantity_determination_result(result, plan_items)
 
 
-def validate_quantity_rule_result(
+def validate_quantity_determination_result(
     result: Any, plan_items: pd.DataFrame,
-) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
+) -> dict[int, dict[str, Any]]:
     if plan_items.empty:
         raise ValueError("最终清单为空，无法确定工程量")
-    allowed_top_keys = {"anchor_user_quantity", "anchor_quantity_source", "item_quantity_rules"}
-    if not isinstance(result, dict) or set(result) != allowed_top_keys:
+    if not isinstance(result, dict) or set(result) != {"items"}:
         raise ValueError("quantity determination 顶层字段非法")
-    raw_anchor_quantity = result.get("anchor_user_quantity")
-    anchor_source = cell_text(result.get("anchor_quantity_source"))
-    if anchor_source not in {"user_explicit", "historical_fallback"}:
-        raise ValueError("anchor_quantity_source 非法")
-    if isinstance(raw_anchor_quantity, bool) or not isinstance(raw_anchor_quantity, (int, float)):
-        raise ValueError("anchor_user_quantity 必须是数值")
-    anchor_quantity = numeric_or_none(raw_anchor_quantity)
-    if anchor_quantity is None or anchor_quantity <= 0:
-        raise ValueError("anchor_user_quantity 必须大于 0")
-    raw_entries = result.get("item_quantity_rules")
+    raw_entries = result.get("items")
     if not isinstance(raw_entries, list):
-        raise ValueError("item_quantity_rules 必须是数组")
-    anchor_position = int(plan_items.iloc[0]["item_position"])
-    expected_positions = {int(value) for value in plan_items.iloc[1:]["item_position"].tolist()}
-    historical = {int(row["item_position"]): numeric_or_none(row.get("quantity")) for _index, row in plan_items.iterrows()}
-    anchor_historical_quantity = historical.get(anchor_position)
-    if anchor_historical_quantity is None or anchor_historical_quantity <= 0:
-        raise ValueError("anchor_historical_quantity 必须大于 0")
-    if anchor_source == "historical_fallback" and anchor_quantity != anchor_historical_quantity:
-        raise ValueError("historical_fallback 的 anchor_user_quantity 必须等于 anchor 历史工程量")
+        raise ValueError("quantity determination items 必须是数组")
+    expected_positions = {int(value) for value in plan_items["item_position"].tolist()}
     parsed: dict[int, dict[str, Any]] = {}
     for entry in raw_entries:
-        if not isinstance(entry, dict) or set(entry) != {"item_position", "rule", "user_exact_quantity"}:
-            raise ValueError("item_quantity_rule 字段非法")
+        if not isinstance(entry, dict) or set(entry) != {
+            "item_position", "quantity_source", "quantity", "explanation",
+        }:
+            raise ValueError("quantity determination item 字段非法")
         position = entry.get("item_position")
         if isinstance(position, bool) or not isinstance(position, int):
             raise ValueError("quantity item_position 必须是整数")
         if position in parsed:
             raise ValueError(f"quantity item_position 重复: {position}")
-        if position == anchor_position:
-            raise ValueError("item_quantity_rules 不得包含 anchor 自身")
         if position not in expected_positions:
             raise ValueError(f"quantity item_position 非法: {position}")
-        rule = cell_text(entry.get("rule"))
-        if rule not in {"use_user_exact", "scale_with_anchor", "keep_historical"}:
-            raise ValueError(f"quantity rule 非法: item_position={position}")
-        user_exact_quantity = entry.get("user_exact_quantity")
-        if rule == "use_user_exact":
-            if isinstance(user_exact_quantity, bool) or not isinstance(user_exact_quantity, (int, float)):
-                raise ValueError(f"use_user_exact 必须提供正数 user_exact_quantity: item_position={position}")
-            user_exact_quantity = numeric_or_none(user_exact_quantity)
-            if user_exact_quantity is None or user_exact_quantity <= 0:
-                raise ValueError(f"use_user_exact 必须提供正数 user_exact_quantity: item_position={position}")
-        elif user_exact_quantity is not None:
-            raise ValueError(f"非 use_user_exact 的 user_exact_quantity 必须为 null: item_position={position}")
-        if anchor_source == "historical_fallback" and rule == "scale_with_anchor":
-            raise ValueError("historical_fallback 时不得使用 scale_with_anchor")
-        if rule in {"scale_with_anchor", "keep_historical"} and (historical.get(position) is None or historical[position] <= 0):
-            raise ValueError(f"historical_quantity 必须大于 0: item_position={position}")
-        parsed[position] = {"rule": rule, "user_exact_quantity": user_exact_quantity}
-    actual_positions = set(parsed)
-    if actual_positions != expected_positions:
-        raise ValueError("quantity 必须完整覆盖全部非 anchor 清单")
-    anchor = {
-        "item_position": anchor_position,
-        "user_quantity": anchor_quantity,
-        "historical_quantity": anchor_historical_quantity,
-        "quantity_source": anchor_source,
+        source = cell_text(entry.get("quantity_source"))
+        if source not in {"user_explicit", "historical_median"}:
+            raise ValueError(f"quantity_source 非法: item_position={position}")
+        explanation = cell_text(entry.get("explanation"))
+        if not explanation:
+            raise ValueError(f"quantity explanation 不得为空: item_position={position}")
+        raw_quantity = entry.get("quantity")
+        quantity = None
+        if source == "user_explicit":
+            if isinstance(raw_quantity, bool) or not isinstance(raw_quantity, (int, float)):
+                raise ValueError(f"user_explicit quantity 必须是正数: item_position={position}")
+            quantity = numeric_or_none(raw_quantity)
+            if quantity is None or quantity <= 0:
+                raise ValueError(f"user_explicit quantity 必须是正数: item_position={position}")
+        elif raw_quantity is not None:
+            raise ValueError(f"historical_median quantity 必须为 null: item_position={position}")
+        parsed[position] = {
+            "quantity_source": source,
+            "quantity": quantity,
+            "explanation": explanation,
+        }
+    if set(parsed) != expected_positions:
+        raise ValueError("quantity determination 必须完整覆盖全部最终清单")
+    return parsed
+
+
+def quantity_determination_fallback(plan_items: pd.DataFrame) -> dict[int, dict[str, Any]]:
+    return {
+        int(row["item_position"]): {
+            "quantity_source": "historical_median",
+            "quantity": None,
+            "explanation": "未能从用户描述中获得可直接采用的当前清单工程量",
+        }
+        for _index, row in plan_items.iterrows()
     }
-    return anchor, parsed
-
-
-QUANTITY_REASONS = {
-    "use_user_exact": "采用用户明确工程量",
-    "scale_with_anchor": "按历史工程量比例随主体规模缩放",
-    "keep_historical": "用户未明确该项数量，保留参考工程历史工程量",
-}
 
 
 def calculate_quantities(
-    plan_items: pd.DataFrame, anchor: dict[str, Any],
-    rules: dict[int, dict[str, Any]],
-) -> dict[int, tuple[dict[str, Any], str]]:
-    anchor_source = cell_text(anchor.get("quantity_source"))
-    scale_factor = (
-        float(anchor["user_quantity"]) / float(anchor["historical_quantity"])
-        if anchor_source == "user_explicit" else None
-    )
-    quantities: dict[int, tuple[dict[str, Any], str]] = {}
-    anchor_position = int(anchor["item_position"])
-    anchor_value = anchor["user_quantity"] if anchor_source == "user_explicit" else anchor["historical_quantity"]
-    anchor_reason_rule = "use_user_exact" if anchor_source == "user_explicit" else "keep_historical"
-    quantities[anchor_position] = (
-        {"type": "exact", "value": round(float(anchor_value), 4)},
-        QUANTITY_REASONS[anchor_reason_rule],
-    )
+    plan_items: pd.DataFrame,
+    determinations: dict[int, dict[str, Any]],
+    quantity_statistics: dict[int, dict[str, Any]],
+    sample_lookup: dict[str, dict[str, Any]],
+    warnings: list[str] | None = None,
+) -> dict[int, dict[str, Any]]:
+    quantities: dict[int, dict[str, Any]] = {}
     for _index, row in plan_items.iterrows():
         position = int(row["item_position"])
-        if position == anchor_position:
-            continue
-        rule_entry = rules[position]
-        rule = cell_text(rule_entry.get("rule"))
-        historical = numeric_or_none(row.get("quantity"))
-        if rule == "use_user_exact":
-            value = numeric_or_none(rule_entry.get("user_exact_quantity"))
-        elif rule == "scale_with_anchor":
-            value = None if historical is None or scale_factor is None else historical * scale_factor
+        determination = determinations[position]
+        source = cell_text(determination.get("quantity_source"))
+        explanation = cell_text(determination.get("explanation"))
+        stats = quantity_statistics.get(position, {})
+        fallback_used = False
+        fallback_reason = ""
+        if source == "user_explicit":
+            value = numeric_or_none(determination.get("quantity"))
+            reason = explanation
+            output_stats = {}
         else:
-            value = historical
+            value = numeric_or_none(stats.get("median"))
+            output_stats = stats
+            if value is None:
+                append_warning(warnings, f"quantity_median_unavailable:{position}")
+                stable_sample_id = cell_text(row.get("stable_sample_id"))
+                best_sample = sample_lookup.get(stable_sample_id, {})
+                best_quantity = numeric_or_none(best_sample.get("quantity"))
+                target_unit = normalized_unit(cell_text(row.get("unit_normalized")) or row.get("unit"))
+                best_unit = normalized_unit(cell_text(best_sample.get("unit_normalized")) or best_sample.get("unit"))
+                if best_quantity is None or best_quantity <= 0 or not target_unit or best_unit != target_unit:
+                    raise ValueError(f"无有效工程量中位数或最佳召回样本工程量: item_position={position}")
+                value = best_quantity
+                fallback_used = True
+                fallback_reason = "best_sample_quantity"
+                append_warning(warnings, f"quantity_best_sample_fallback:{position}")
+                reason = f"{explanation}；全库同类样本无有效中位数，暂采用最佳召回样本工程量。"
+            else:
+                unit = cell_text(row.get("unit_normalized")) or cell_text(row.get("unit"))
+                reason = (
+                    f"{explanation}；采用全库召回的{int(stats.get('sample_count') or 0)}条同类历史样本"
+                    f"工程量中位数{round(float(value), 4):g}{unit}暂估。"
+                )
         rounded = None if value is None else round(float(value), 4)
         if rounded is None or rounded <= 0:
             raise ValueError(f"最终工程量必须大于 0: item_position={position}")
-        quantities[position] = ({"type": "exact", "value": rounded}, QUANTITY_REASONS[rule])
+        quantities[position] = {
+            "quantity": {"type": "exact", "value": rounded},
+            "quantity_source": source,
+            "quantity_explanation": explanation,
+            "quantity_reason": reason,
+            "quantity_sample_count": output_stats.get("sample_count"),
+            "quantity_minimum": output_stats.get("minimum"),
+            "quantity_median": output_stats.get("median"),
+            "quantity_maximum": output_stats.get("maximum"),
+            "quantity_fallback_used": fallback_used,
+            "quantity_fallback_reason": fallback_reason,
+        }
     return quantities
 
 
@@ -2911,7 +2925,7 @@ def build_scenario_from_plan_items(
     project_package_id: str,
     plan_items: pd.DataFrame,
     sample_lookup: dict[str, dict[str, Any]],
-    quantities: dict[int, tuple[dict[str, Any], str]],
+    quantities: dict[int, dict[str, Any]],
 ) -> EstimateScenario:
     items: list[ScenarioItem] = []
     for _index, row in plan_items.iterrows():
@@ -2922,7 +2936,7 @@ def build_scenario_from_plan_items(
             raise ValueError(f"最终清单无法回查证据: item_position={position}, stable_sample_id={stable_sample_id}")
         if cell_text(sample.get("project_package_id")) != project_package_id:
             raise ValueError(f"最终清单工程包映射不一致: item_position={position}")
-        quantity, quantity_reason = quantities[position]
+        quantity_result = quantities[position]
         items.append(
             ScenarioItem(
                 project_package_id=project_package_id,
@@ -2934,9 +2948,17 @@ def build_scenario_from_plan_items(
                 original_family_id=cell_text(row.get("original_family_id")) or cell_text(sample.get("family_id")),
                 representative_family_id=cell_text(row.get("representative_family_id")) or cell_text(sample.get("family_id")),
                 selection_reason="",
-                quantity=quantity,
-                quantity_reason=quantity_reason,
+                quantity=quantity_result["quantity"],
+                quantity_reason=quantity_result["quantity_reason"],
                 item_position=position,
+                quantity_source=quantity_result["quantity_source"],
+                quantity_explanation=quantity_result["quantity_explanation"],
+                quantity_sample_count=quantity_result["quantity_sample_count"],
+                quantity_minimum=quantity_result["quantity_minimum"],
+                quantity_median=quantity_result["quantity_median"],
+                quantity_maximum=quantity_result["quantity_maximum"],
+                quantity_fallback_used=quantity_result["quantity_fallback_used"],
+                quantity_fallback_reason=quantity_result["quantity_fallback_reason"],
             )
         )
     return EstimateScenario("S001", 1, "", "", items)
@@ -2947,6 +2969,9 @@ def generate_quantity_determination(
     project_package_id: str,
     plan_items: pd.DataFrame,
     sample_lookup: dict[str, dict[str, Any]],
+    displays_with_options: pd.DataFrame,
+    candidate_families: pd.DataFrame,
+    samples: pd.DataFrame,
     warnings: list[str] | None = None,
 ) -> tuple[EstimateScenario, str, dict[str, Any]]:
     if plan_items.empty:
@@ -2961,26 +2986,30 @@ def generate_quantity_determination(
             max_tokens=max_tokens,
             system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
         )
-        anchor, rules = validate_quantity_rule_result(response.content, plan_items)
+        determinations = validate_quantity_determination_result(response.content, plan_items)
     except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
         error_message = str(exc)
-        anchor_row = plan_items.iloc[0]
-        anchor_position = int(anchor_row["item_position"])
-        anchor_historical_quantity = numeric_or_none(anchor_row.get("quantity"))
-        if anchor_historical_quantity is None or anchor_historical_quantity <= 0:
-            raise ValueError(f"anchor_historical_quantity 必须大于 0: item_position={anchor_position}")
-        anchor = {
-            "item_position": anchor_position,
-            "user_quantity": anchor_historical_quantity,
-            "historical_quantity": anchor_historical_quantity,
-            "quantity_source": "historical_fallback",
-        }
-        rules = {
-            int(row["item_position"]): {"rule": "keep_historical", "user_exact_quantity": None}
-            for _index, row in plan_items.iloc[1:].iterrows()
-        }
-        append_warning(warnings, "quantity_determination_fallback_keep_historical")
-    quantities = calculate_quantities(plan_items, anchor, rules)
+        determinations = quantity_determination_fallback(plan_items)
+        append_warning(warnings, "quantity_determination_fallback_historical_median")
+    display_map, option_map = display_option_maps(displays_with_options)
+    quantity_statistics: dict[int, dict[str, Any]] = {}
+    for _index, row in plan_items.iterrows():
+        position = int(row["item_position"])
+        if determinations[position]["quantity_source"] == "user_explicit":
+            quantity_statistics[position] = {}
+            continue
+        display_id = cell_text(row.get("display_id"))
+        option_id = cell_text(row.get("selected_option_id")) or cell_text(row.get("practice_option_id"))
+        display = display_map.get(display_id)
+        option = option_map.get((display_id, option_id))
+        if display is None or option is None:
+            raise ValueError(f"工程量统计 display/option 回查失败: item_position={position}")
+        expanded = expand_samples_for_option(option, display, candidate_families, samples)
+        target_unit = cell_text(row.get("unit_normalized")) or cell_text(row.get("unit"))
+        quantity_statistics[position] = build_quantity_statistics(expanded, target_unit)
+    quantities = calculate_quantities(
+        plan_items, determinations, quantity_statistics, sample_lookup, warnings
+    )
     scenario = build_scenario_from_plan_items(
         project_package_id, plan_items, sample_lookup, quantities
     )
@@ -3001,6 +3030,23 @@ def generate_quantity_determination(
         scenario_item_count=len(scenario.items),
     )
     trace["fallback"] = bool(error_message)
+    trace["quantity_items"] = json_text([
+        {
+            "item_position": position,
+            "quantity_source": result["quantity_source"],
+            "llm_quantity": determinations[position]["quantity"],
+            "final_quantity": result["quantity"]["value"],
+            "quantity_sample_count": result["quantity_sample_count"],
+            "quantity_minimum": result["quantity_minimum"],
+            "quantity_median": result["quantity_median"],
+            "quantity_maximum": result["quantity_maximum"],
+            "median_available": result["quantity_median"] is not None,
+            "quantity_fallback_used": result["quantity_fallback_used"],
+            "quantity_fallback_reason": result["quantity_fallback_reason"],
+            "error_message": error_message,
+        }
+        for position, result in quantities.items()
+    ])
     return scenario, prompt, trace
 
 
@@ -3079,7 +3125,7 @@ def build_final_explanation_prompt(
     )
     item_columns = [
         "清单名称", "项目特征", "单位",
-        "工程量预估", "工程量依据", "综合单价P10", "综合单价中位数", "综合单价P90",
+        "工程量", "工程量来源", "工程量说明", "综合单价P10", "综合单价中位数", "综合单价P90",
         "合价P10", "合价中位数", "合价P90", "价格证据样本数",
     ]
     items = replace_nan_records(estimate_scenarios[item_columns])
@@ -3133,6 +3179,14 @@ def parse_final_explanation_result(result: dict[str, Any], scenario: EstimateSce
             quantity=item.quantity,
             quantity_reason=item.quantity_reason,
             item_position=item.item_position,
+            quantity_source=item.quantity_source,
+            quantity_explanation=item.quantity_explanation,
+            quantity_sample_count=item.quantity_sample_count,
+            quantity_minimum=item.quantity_minimum,
+            quantity_median=item.quantity_median,
+            quantity_maximum=item.quantity_maximum,
+            quantity_fallback_used=item.quantity_fallback_used,
+            quantity_fallback_reason=item.quantity_fallback_reason,
         )
         for position, item in enumerate(scenario.items)
     ]
@@ -3203,12 +3257,12 @@ def generate_optional_final_explanation(
     )
 
 
-def price_stats_for_option(
+def expand_samples_for_option(
     option: dict[str, Any],
     display: pd.Series,
     candidate_families: pd.DataFrame,
     samples: pd.DataFrame,
-) -> dict[str, Any]:
+) -> pd.DataFrame:
     option_id = cell_text(option.get("practice_option_id")) or cell_text(option.get("option_id"))
     family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
     if not family_ids:
@@ -3250,12 +3304,7 @@ def price_stats_for_option(
     stable_ids = expanded.get("stable_sample_id", pd.Series("", index=expanded.index)).map(cell_text)
     if stable_ids.eq("").any():
         raise ValueError(f"全库价格证据 stable_sample_id 为空: option_id={option_id}")
-    duplicate_ids = stable_ids[stable_ids.duplicated(keep=False)]
-    if not duplicate_ids.empty:
-        raise ValueError(
-            f"全库价格证据 stable_sample_id 重复: option_id={option_id}, "
-            f"stable_sample_id={join_non_empty(duplicate_ids.tolist(), limit=10)}"
-        )
+    expanded = expanded.loc[~stable_ids.duplicated(keep="first")].copy()
 
     display_unit = normalized_unit(display.get("unit"))
     for row_index, row in expanded.iterrows():
@@ -3282,6 +3331,54 @@ def price_stats_for_option(
     expanded["family_id"] = expanded["normalized_signature"].map(
         lambda value: signature_family[cell_text(value)]
     )
+    return expanded
+
+
+def build_quantity_statistics(
+    retrieved_samples: pd.DataFrame,
+    target_unit: str,
+) -> dict[str, Any]:
+    normalized_target_unit = normalized_unit(target_unit)
+    valid_quantities: list[float] = []
+    seen_stable_ids: set[str] = set()
+    for row_index, row in retrieved_samples.iterrows():
+        stable_sample_id = cell_text(row.get("stable_sample_id"))
+        if stable_sample_id:
+            if stable_sample_id in seen_stable_ids:
+                continue
+            seen_stable_ids.add(stable_sample_id)
+        sample_unit = normalized_unit(cell_text(row.get("unit_normalized")) or row.get("unit"))
+        if not normalized_target_unit or sample_unit != normalized_target_unit:
+            continue
+        quantity = numeric_or_none(row.get("quantity"))
+        if quantity is None or quantity <= 0:
+            continue
+        valid_quantities.append(float(quantity))
+    if not valid_quantities:
+        return {
+            "sample_count": 0,
+            "minimum": None,
+            "median": None,
+            "maximum": None,
+            "fallback_used": False,
+        }
+    series = pd.Series(valid_quantities, dtype=float)
+    return {
+        "sample_count": int(len(series)),
+        "minimum": float(series.min()),
+        "median": float(series.median()),
+        "maximum": float(series.max()),
+        "fallback_used": False,
+    }
+
+
+def price_stats_for_option(
+    option: dict[str, Any],
+    display: pd.Series,
+    candidate_families: pd.DataFrame,
+    samples: pd.DataFrame,
+) -> dict[str, Any]:
+    expanded = expand_samples_for_option(option, display, candidate_families, samples)
 
     unit_price = p10_median_p90(expanded, "unit_price")
     labor_price = p10_median_p90(expanded, "labor_unit_price")
@@ -3356,6 +3453,7 @@ def build_scenario_outputs(
             price_stats = price_stats_for_option(option, display_row, candidate_families, samples)
             validate_price_stats(price_stats, item.stable_sample_id, item.practice_option_id)
             amount_p10, amount_mid, amount_p90 = quantity_amounts(item.quantity, price_stats)
+            quantity_value = quantity_display(item.quantity)
             family_ids = [cell_text(value) for value in option.get("family_ids", []) if cell_text(value)]
             expanded_evidence = price_stats["expanded_evidence"]
             for _evidence_index, evidence in expanded_evidence.iterrows():
@@ -3385,8 +3483,18 @@ def build_scenario_outputs(
                     "清单名称": cell_text(representative.get("representative_cost_item_name")),
                     "项目特征": cell_text(representative.get("representative_project_description")),
                     "单位": cell_text(representative.get("unit_normalized")) or cell_text(representative.get("unit")),
-                    "工程量预估": quantity_display(item.quantity),
-                    "工程量依据": item.quantity_reason,
+                    "工程量": quantity_value,
+                    "工程量来源": {
+                        "user_explicit": "用户明确工程量",
+                        "historical_median": "全库历史样本中位数",
+                    }.get(item.quantity_source, item.quantity_source),
+                    "工程量说明": item.quantity_reason,
+                    "工程量样本数": item.quantity_sample_count,
+                    "工程量最低值": item.quantity_minimum,
+                    "工程量中位数": item.quantity_median,
+                    "工程量最高值": item.quantity_maximum,
+                    "综合单价": price_stats.get("unit_price_median"),
+                    "暂估合价": amount_mid,
                     "合价P10": amount_p10,
                     "合价中位数": amount_mid,
                     "合价P90": amount_p90,
@@ -3449,11 +3557,11 @@ TEXT_IDENTIFIER_COLUMNS = {
 }
 
 TEXT_VALUE_COLUMNS = {
-    "工程量预估",
     "方案说明",
     "主要施工内容",
     "待现场确认事项",
-    "工程量依据",
+    "工程量来源",
+    "工程量说明",
     "来源样本",
     "价格证据family",
 }
@@ -3995,7 +4103,14 @@ def run_query(
         display_option_grouping_trace_frame, option_selection_trace_frame
     )
     scenario, quantity_prompt, quantity_trace = generate_quantity_determination(
-        raw_text, selected_project_package_id, plan_items, sample_lookup
+        raw_text,
+        selected_project_package_id,
+        plan_items,
+        sample_lookup,
+        displays_with_options,
+        candidate_families,
+        candidate_samples,
+        warnings,
     )
     scenarios = [scenario]
     estimate_scenarios, _price_evidence_items = build_scenario_outputs(
