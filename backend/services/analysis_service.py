@@ -9,21 +9,18 @@ from fastapi import HTTPException, UploadFile
 
 REQUIRED_RESULT_COLUMNS = [
     "工程名称",
-    "catalog_id",
     "一级分类",
     "二级分类",
-    "维修状态",
-    "标准对象",
-    "是否复合工程",
-    "复合目录",
-    "是否紧急维修",
-    "是否白蚁相关",
-    "是否建议复核",
+    "分类方式",
     "分类依据",
+    "是否复合工程",
+    "是否建议复核",
+    "结构类型",
+    "复合原因",
+    "候选分类",
 ]
 
 FOCUS_SAMPLE_LIMIT = 2000
-OUT_OF_SCOPE_ID = "OUT_OF_SCOPE"
 
 
 def _split_pipe_text(value: Any) -> List[str]:
@@ -35,14 +32,6 @@ def _split_pipe_text(value: Any) -> List[str]:
 
 def _is_yes(value: Any) -> bool:
     return value is True or str(value or "").strip() == "是"
-
-
-def _method_for(catalog_id: Any) -> str:
-    return "体系外默认分类" if str(catalog_id or "").strip() == OUT_OF_SCOPE_ID else "LLM主分类"
-
-
-def _structure_type(is_composite: bool) -> str:
-    return "composite_project" if is_composite else "single_project"
 
 
 def _read_result_rows_from_workbook(workbook: openpyxl.Workbook, source_name: str) -> List[Dict[str, Any]]:
@@ -63,29 +52,21 @@ def _read_result_rows_from_workbook(workbook: openpyxl.Workbook, source_name: st
         if project_name is None or str(project_name).strip() == "":
             continue
 
-        catalog_id = row[index["catalog_id"]]
         is_composite = _is_yes(row[index["是否复合工程"]])
-        secondary_candidates = _split_pipe_text(row[index["复合目录"]])
-        method = _method_for(catalog_id)
         records.append(
             {
                 "source_file": source_name,
                 "row_num": row_num,
                 "project_name": str(project_name),
-                "catalog_id": catalog_id,
                 "level1": row[index["一级分类"]],
                 "level2": row[index["二级分类"]],
-                "level3_item": row[index["二级分类"]],
-                "matched_level3_items": [],
-                "method": method,
-                "confidence": "",
-                "match_type": "out_of_scope" if method == "体系外默认分类" else "standard_catalog",
+                "method": row[index["分类方式"]],
                 "reason": row[index["分类依据"]],
                 "needs_review": _is_yes(row[index["是否建议复核"]]),
                 "is_composite": is_composite,
-                "structure_type": _structure_type(is_composite),
-                "composite_reason": "疑似复合工程" if is_composite else "",
-                "secondary_candidates": secondary_candidates,
+                "structure_type": row[index["结构类型"]],
+                "composite_reason": row[index["复合原因"]],
+                "secondary_candidates": _split_pipe_text(row[index["候选分类"]]),
             }
         )
     return records
@@ -111,12 +92,11 @@ def summarize_records(records: List[Dict[str, Any]], top_n: int = 20) -> Dict[st
     level1_counter = Counter(record["level1"] for record in records)
     level2_counter = Counter(record["level2"] for record in records)
     structure_counter = Counter(record["structure_type"] for record in records)
-    match_type_counter = Counter(record["match_type"] for record in records)
 
     focus_samples = [
         record
         for record in records
-        if record["needs_review"] or record["is_composite"] or record["catalog_id"] == OUT_OF_SCOPE_ID
+        if record["needs_review"] or record["is_composite"]
     ]
     focus_samples.sort(
         key=lambda item: (
@@ -130,24 +110,16 @@ def summarize_records(records: List[Dict[str, Any]], top_n: int = 20) -> Dict[st
     return {
         "summary": {
             "total_records": len(records),
-            "rule_method_count": 0,
-            "llm_method_count": method_counter.get("LLM主分类", 0),
+            "rule_method_count": method_counter.get("规则优先", 0),
+            "llm_method_count": method_counter.get("LLM 辅助分类", 0),
             "fallback_method_count": method_counter.get("体系外默认分类", 0),
             "review_count": sum(1 for record in records if record["needs_review"]),
             "composite_count": sum(1 for record in records if record["is_composite"]),
         },
-        "match_type_counts": {
-            "single": match_type_counter.get("standard_catalog", 0),
-            "cross_domain": 0,
-            "same_domain_multi_item": 0,
-            "low_confidence": 0,
-            "llm_fallback": 0,
-            "fallback": match_type_counter.get("out_of_scope", 0),
-        },
         "structure_counts": {
             "single_project": structure_counter.get("single_project", 0),
             "composite_project": structure_counter.get("composite_project", 0),
-            "multi_system_same_domain": 0,
+            "multi_system_same_domain": structure_counter.get("multi_system_same_domain", 0),
         },
         "level1_top": [{"name": name, "count": count} for name, count in level1_counter.most_common(top_n)],
         "level2_top": [{"name": name, "count": count} for name, count in level2_counter.most_common(top_n)],
