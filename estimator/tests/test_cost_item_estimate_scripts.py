@@ -21,7 +21,7 @@ except ImportError:
     pd = None
 
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_script_module(name: str, relative_path: str):

@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import argparse
-import calendar
 import gc
 import json
 import re
 import sys
 import unicodedata
-from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -16,30 +14,69 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+_REPO_BOOTSTRAP = Path(__file__).resolve().parents[2]
+if str(_REPO_BOOTSTRAP) not in sys.path:
+    sys.path.insert(0, str(_REPO_BOOTSTRAP))
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from estimator.indexing.embedding_model import (
+    encode_query,
+    encode_texts,
+    load_embedding_model as _load_embedding_model,
+    normalize_embeddings,
+    release_embedding_model,
+)
+from estimator.indexing.index_loader import load_index
+from estimator.paths import (
+    CLASSIFIER_BACKEND_DIR,
+    REPO_ROOT,
+    default_query_output_path,
+    resolve_repo_path as resolve_path,
+)
+from estimator.query_models import EstimateScenario, QueryResult, QueryRewrite, ScenarioItem
+from estimator.retrieval.constraints import (
+    build_constraint_mask,
+    ensure_project_package_candidates,
+    filter_rows_and_embeddings,
+    normalize_location,
+    parse_consultation_dates,
+    validate_query_constraints,
+)
+from estimator.retrieval.evidence_pool import (
+    attach_source_refs,
+    build_retrieved_evidence_items,
+    matched_package_maps,
+    source_identity_for_row,
+)
+from estimator.retrieval.item_retrieval import score_direct_items
+from estimator.retrieval.package_retrieval import (
+    package_dedupe_key,
+    project_package_similarity_map,
+    score_project_packages,
+    top_score_indices,
+)
+from estimator.retrieval.query_rewrite import (
+    build_query_rewrite_prompt,
+    fallback_query_rewrite,
+    query_rewrite_for_embedding as _query_rewrite_for_embedding,
+    shift_months,
+)
+from estimator.retrieval.weights import (
+    DEFAULT_PACKAGE_WEIGHT_TEMPERATURE,
+    PACKAGE_EVIDENCE_WEIGHT_COLUMNS,
+    build_package_evidence_weights,
+    evidence_package_universe,
+)
+
 SCRIPT_DIR = Path(__file__).resolve().parent
-BACKEND_DIR = REPO_ROOT / "classifier" / "backend"
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+BACKEND_DIR = CLASSIFIER_BACKEND_DIR
+if str(CLASSIFIER_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(CLASSIFIER_BACKEND_DIR))
 
 from classifier.llm_client import LLMServiceError, check_lmstudio_service, request_llm_json, request_llm_json_with_usage  # noqa: E402
 
 
-DEFAULT_PACKAGE_WEIGHT_TEMPERATURE = 0.10
 MIN_DISPLAY_PRICE_EVIDENCE_COUNT = 3
-MUNICIPALITIES = {"北京市", "上海市", "天津市", "重庆市"}
-PREFECTURE_LOCATION_PATTERN = re.compile(
-    r"^(?:[^,，/、]+省|[^,，/、]+自治区)[^,，/、省市]+市$"
-)
 
-
-def shift_months(value: date, months: int) -> date:
-    month_index = value.year * 12 + value.month - 1 + months
-    year, zero_based_month = divmod(month_index, 12)
-    month = zero_based_month + 1
-    day = min(value.day, calendar.monthrange(year, month)[1])
-    return date(year, month, day)
 
 MATCHED_PROJECT_PACKAGE_COLUMNS = [
     "rank",
@@ -104,12 +141,6 @@ CANDIDATE_FAMILY_COLUMNS = [
     "package_query_similarity最大值",
     "item_query_similarity最大值",
     "source_refs",
-]
-
-PACKAGE_EVIDENCE_WEIGHT_COLUMNS = [
-    "project_package_id",
-    "package_query_similarity",
-    "package_evidence_weight",
 ]
 
 EVIDENCE_ITEM_COLUMNS = [
@@ -299,74 +330,6 @@ LLM_TRACE_COLUMNS = [
 ]
 
 
-@dataclass(frozen=True)
-class QueryRewrite:
-    raw_query: str
-    project_package_query_text: str
-    item_query_text: str
-    location: str
-    start_date: str
-    end_date: str
-    notes: list[str]
-    success: bool
-
-
-@dataclass(frozen=True)
-class ScenarioItem:
-    project_package_id: str
-    stable_sample_id: str
-    source_ref: str
-    display_id: str
-    practice_option_id: str
-    original_option_id: str
-    original_family_id: str
-    representative_family_id: str
-    selection_reason: str
-    quantity: dict[str, Any]
-    quantity_reason: str
-    item_position: int = 0
-    quantity_source: str = ""
-    quantity_explanation: str = ""
-    quantity_sample_count: int | None = None
-    quantity_minimum: float | None = None
-    quantity_median: float | None = None
-    quantity_maximum: float | None = None
-    quantity_fallback_used: bool = False
-    quantity_fallback_reason: str = ""
-
-
-@dataclass(frozen=True)
-class EstimateScenario:
-    scenario_id: str
-    scenario_order: int
-    scenario_name: str
-    scenario_summary: str
-    items: list[ScenarioItem]
-    site_confirmation: str = ""
-
-
-@dataclass(frozen=True)
-class QueryResult:
-    rewrite: QueryRewrite
-    estimate_summary: pd.DataFrame
-    estimate_scenarios: pd.DataFrame
-    matched_project_packages: pd.DataFrame
-    candidate_families: pd.DataFrame
-    candidate_display_groups: pd.DataFrame
-    package_evidence_weights: pd.DataFrame
-    display_group_families: pd.DataFrame
-    display_option_grouping_trace: pd.DataFrame
-    option_selection_trace: pd.DataFrame
-    matched_project_examples: pd.DataFrame
-    evidence_items: pd.DataFrame
-    option_evidence_expansion: pd.DataFrame
-    price_evidence_items: pd.DataFrame
-    parse_info: pd.DataFrame
-    llm_trace: pd.DataFrame
-    success: bool = True
-    error_message: str = ""
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="自然语言维修工程造价离线查询入口")
     parser.add_argument("--index-dir", default="embeddings", help="索引目录，默认 embeddings")
@@ -401,17 +364,6 @@ def parse_args() -> argparse.Namespace:
         help=f"工程包证据权重 softmax temperature，必须大于 0，默认 {DEFAULT_PACKAGE_WEIGHT_TEMPERATURE}",
     )
     return parser.parse_args()
-
-
-def default_query_output_path() -> Path:
-    return REPO_ROOT / "query" / f"{datetime.now().strftime('%Y%m%d%H%M')}.xlsx"
-
-
-def resolve_path(raw_path: str | Path) -> Path:
-    path = Path(raw_path).expanduser()
-    if not path.is_absolute():
-        path = REPO_ROOT / path
-    return path.resolve()
 
 
 def validate_output_path(output_path: Path | None, overwrite: bool) -> None:
@@ -561,347 +513,20 @@ def trace_row(
     }
 
 
-def normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
-    array = np.asarray(embeddings, dtype=np.float32)
-    if array.ndim == 1:
-        array = array.reshape(1, -1)
-    norms = np.linalg.norm(array, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    return (array / norms).astype(np.float32, copy=False)
-
-
 def load_embedding_model(model_name: str) -> Any:
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError as exc:
-        raise RuntimeError("缺少依赖 sentence-transformers，请先安装 requirements.txt") from exc
-
-    try:
-        return SentenceTransformer(model_name, device="cpu")
-    except Exception as exc:
-        raise RuntimeError(f"embedding 模型加载失败: {model_name}: {exc}") from exc
+    return _load_embedding_model(model_name, device="cpu")
 
 
-def release_embedding_model(model: Any) -> None:
-    del model
-    gc.collect()
-    try:
-        import torch
-    except ImportError:
-        return
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-
-def encode_query(model: Any, text: str) -> np.ndarray:
-    embedding = model.encode(
-        [text or ""],
-        show_progress_bar=False,
-        convert_to_numpy=True,
-        normalize_embeddings=False,
+def query_rewrite_for_embedding(
+    query: str,
+    current_date: date | None = None,
+) -> tuple[QueryRewrite, dict[str, Any]]:
+    return _query_rewrite_for_embedding(
+        query,
+        current_date=current_date,
+        request_json=request_llm_json,
+        trace_factory=trace_row,
     )
-    return normalize_embeddings(embedding)[0]
-
-
-def encode_texts(model: Any, texts: list[str]) -> np.ndarray:
-    if not texts:
-        return np.empty((0, 0), dtype=np.float32)
-    embeddings = model.encode(
-        texts,
-        show_progress_bar=False,
-        convert_to_numpy=True,
-        normalize_embeddings=False,
-    )
-    return normalize_embeddings(embeddings)
-
-
-def load_index(index_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray, dict[str, Any]]:
-    samples_path = index_dir / "samples.parquet"
-    packages_path = index_dir / "project_packages.parquet"
-    package_embeddings_path = index_dir / "project_package_embeddings.npy"
-    item_embeddings_path = index_dir / "item_embeddings.npy"
-    meta_path = index_dir / "index_meta.json"
-
-    missing = [
-        path.name
-        for path in [samples_path, packages_path, package_embeddings_path, item_embeddings_path, meta_path]
-        if not path.exists()
-    ]
-    if missing:
-        raise ValueError(f"索引目录缺少文件: {', '.join(missing)}")
-
-    samples = pd.read_parquet(samples_path)
-    project_packages = pd.read_parquet(packages_path)
-    project_package_embeddings = np.load(package_embeddings_path)
-    item_embeddings = np.load(item_embeddings_path)
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-
-    if item_embeddings.ndim != 2 or project_package_embeddings.ndim != 2:
-        raise ValueError("embedding 必须是二维矩阵")
-    if len(samples) != item_embeddings.shape[0]:
-        raise ValueError("样本数量与 item_embeddings 数量不一致")
-    if len(project_packages) != project_package_embeddings.shape[0]:
-        raise ValueError("工程包数量与 project_package_embeddings 数量不一致")
-    if item_embeddings.shape[1] != project_package_embeddings.shape[1]:
-        raise ValueError("item embedding 与 project_package embedding 维度不一致")
-    if "sample_index" not in samples.columns:
-        raise ValueError("samples.parquet 缺少 sample_index")
-    if "project_package_id" not in samples.columns or "project_package_id" not in project_packages.columns:
-        raise ValueError("索引缺少 project_package_id")
-    return samples, project_packages, project_package_embeddings, item_embeddings, meta
-
-
-def build_query_rewrite_prompt(query: str, current_date: date | None = None) -> str:
-    current_date = current_date or date.today()
-    current_date_text = current_date.isoformat()
-    return f"""
-你是维修工程需求解析和 embedding query rewrite 助手。请把用户原始需求解析为严格 JSON object。
-
-只能输出 JSON object，不要 Markdown，不要解释，不要建议清单，不要计算价格。
-当前日期：{current_date_text}
-
-输出格式：
-{{
-  "project_package_query_text": "",
-  "item_query_text": "",
-  "location": "",
-  "start_date": "",
-  "end_date": ""
-}}
-不要增加其他字段。
-
-当前 embedding 结构：
-1. project_package_text 由“工程名称、project_name_text、cost_item_name 去重列表”组成。
-   project_package_query_text 用于匹配相似历史工程包，应描述用户明确表达或直接相关的维修工程场景，保持短检索 query，不要预设建议清单、前置项、措施项或替代工艺。
-2. item_retrieval_text 由“cost_item_name、project_description、unit_normalized”组成。
-   item_query_text 用于匹配相似清单行，应贴近用户明确表达的维修对象、材料规格和做法，不要扩展未明确发生的清单项。
-3. item_query_text 必须非空。如果用户问得很粗，也输出宽泛 item query，不要留空。
-4. location 表示项目所属的标准地级行政区域。普通地级市必须输出“省级行政区 + 地级市”，例如“浙江省嘉兴市”“江苏省苏州市”“四川省成都市”；直辖市只输出“北京市”“上海市”“天津市”“重庆市”。
-5. 用户未提出地域限制时 location 输出空字符串。不要输出简称、县、区或镇；县级行政区所属地级行政区明确时可输出标准地级区域，不确定时不要猜测。
-6. start_date 和 end_date 只能是 YYYY-MM-DD 或空字符串。所有相对时间以当前日期 {current_date_text} 为基准转换为绝对日期。
-7. “最近一年”“一年内”向前推 12 个月；“最近半年”向前推 6 个月；“最近三个月”向前推 3 个月，end_date 均为当前日期。
-8. 整年使用当年 01-01 至 12-31；整月使用当月首日至末日；月份区间使用首月首日至末月末日；某日以后截至当前日期；“截至某日”只填写 end_date。
-9. 用户未提出时间约束时 start_date 和 end_date 均输出空字符串，不输出相对时间自然语言。
-10. 不扩展用户未明确提出的清单项，不输出数量分析、材料列表、不确定性、方案建议、价格或施工清单。
-
-示例：
-用户：屋面漏水，想做3mm SBS防水，面积大概500平
-输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修 3mm SBS防水","item_query_text":"屋面卷材防水 3mm SBS防水卷材","location":"","start_date":"","end_date":""}}
-
-用户：屋面漏水帮我估价
-输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修","item_query_text":"屋面防水 防水层维修","location":"","start_date":"","end_date":""}}
-
-用户：屋面漏水，参考嘉兴一年内的造价
-输出：{{"project_package_query_text":"屋面漏水维修工程 屋面防水维修","item_query_text":"屋面防水 防水层维修","location":"浙江省嘉兴市","start_date":"{shift_months(current_date, -12).isoformat()}","end_date":"{current_date_text}"}}
-
-用户：参考上海市2025年3月的消防报警主机更换造价
-输出：{{"project_package_query_text":"消防报警主机更换工程","item_query_text":"消防报警主机更换","location":"上海市","start_date":"2025-03-01","end_date":"2025-03-31"}}
-
-用户需求：{query}
-""".strip()
-
-
-def fallback_query_rewrite(query: str, note: str) -> QueryRewrite:
-    return QueryRewrite(
-        raw_query=query,
-        project_package_query_text=query,
-        item_query_text=query,
-        location="",
-        start_date="",
-        end_date="",
-        notes=[note],
-        success=False,
-    )
-
-
-def normalize_location(value: Any) -> str:
-    text = unicodedata.normalize("NFKC", cell_text(value)).strip()
-    return re.sub(r"\s+", " ", text)
-
-
-def validate_query_constraints(
-    location: Any,
-    start_date: Any,
-    end_date: Any,
-) -> tuple[str, str, str, list[str]]:
-    notes: list[str] = []
-    normalized_location = normalize_location(location)
-    if normalized_location and normalized_location not in MUNICIPALITIES and not PREFECTURE_LOCATION_PATTERN.fullmatch(normalized_location):
-        notes.append(f"location 格式非法，已清空: {normalized_location}")
-        normalized_location = ""
-
-    parsed_dates: dict[str, str] = {}
-    for field_name, value in (("start_date", start_date), ("end_date", end_date)):
-        text = cell_text(value)
-        if not text:
-            parsed_dates[field_name] = ""
-            continue
-        try:
-            parsed_dates[field_name] = datetime.strptime(text, "%Y-%m-%d").date().isoformat()
-        except ValueError:
-            parsed_dates[field_name] = ""
-            notes.append(f"{field_name} 格式非法，已清空: {text}")
-
-    start_text = parsed_dates["start_date"]
-    end_text = parsed_dates["end_date"]
-    if start_text and end_text and start_text > end_text:
-        notes.append("start_date 晚于 end_date，两个日期约束均已清空")
-        start_text = ""
-        end_text = ""
-    return normalized_location, start_text, end_text, notes
-
-
-def parse_consultation_dates(values: pd.Series) -> pd.Series:
-    return pd.to_datetime(values, format="%Y-%m-%d", errors="coerce").dt.date
-
-
-def build_constraint_mask(
-    rows: pd.DataFrame,
-    location: str,
-    start_date: str,
-    end_date: str,
-) -> pd.Series:
-    mask = pd.Series(True, index=rows.index, dtype=bool)
-    if location:
-        if "location" not in rows.columns:
-            return pd.Series(False, index=rows.index, dtype=bool)
-        mask &= rows["location"].map(normalize_location).eq(location)
-    if start_date or end_date:
-        if "consultation_time" not in rows.columns:
-            return pd.Series(False, index=rows.index, dtype=bool)
-        dates = parse_consultation_dates(rows["consultation_time"])
-        if start_date:
-            mask &= dates.notna() & dates.ge(datetime.strptime(start_date, "%Y-%m-%d").date())
-        if end_date:
-            mask &= dates.notna() & dates.le(datetime.strptime(end_date, "%Y-%m-%d").date())
-    return mask
-
-
-def filter_rows_and_embeddings(
-    rows: pd.DataFrame,
-    embeddings: np.ndarray,
-    mask: pd.Series,
-    label: str,
-) -> tuple[pd.DataFrame, np.ndarray]:
-    if len(rows) != len(embeddings) or len(rows) != len(mask):
-        raise ValueError(f"{label} 约束过滤前 DataFrame、embedding 与 mask 行数不一致")
-    filtered_rows = rows.loc[mask].copy()
-    filtered_embeddings = embeddings[mask.to_numpy()]
-    if len(filtered_rows) != len(filtered_embeddings):
-        raise ValueError(f"约束过滤后的{label}与 embedding 行数不一致")
-    return filtered_rows, filtered_embeddings
-
-
-def ensure_project_package_candidates(rows: pd.DataFrame, rewrite: QueryRewrite) -> None:
-    if not rows.empty:
-        return
-    if rewrite.location or rewrite.start_date or rewrite.end_date:
-        raise ValueError("没有找到同时满足地域和时间约束的历史工程包。")
-    raise ValueError("没有找到历史工程包。")
-
-
-def query_rewrite_for_embedding(query: str, current_date: date | None = None) -> tuple[QueryRewrite, dict[str, Any]]:
-    prompt = build_query_rewrite_prompt(query, current_date=current_date)
-    max_tokens = 512
-    try:
-        result = request_llm_json(
-            prompt,
-            max_tokens=max_tokens,
-            system_prompt="你只输出一个 JSON object，不输出解释、Markdown 或思考过程。",
-        )
-    except (LLMServiceError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-        rewrite = fallback_query_rewrite(query, f"LLM query rewrite 失败，已回退为原始 query: {exc}")
-        return rewrite, trace_row(
-            "query_rewrite_for_embedding",
-            "生成 project_package_query_text 和 item_query_text",
-            False,
-            error=str(exc),
-            prompt=prompt,
-            max_tokens=max_tokens,
-            input_summary=query,
-        )
-
-    notes: list[str] = []
-    package_text = cell_text(result.get("project_package_query_text")) if isinstance(result, dict) else ""
-    item_text = cell_text(result.get("item_query_text")) if isinstance(result, dict) else ""
-    location, start_date, end_date, constraint_notes = validate_query_constraints(
-        result.get("location") if isinstance(result, dict) else "",
-        result.get("start_date") if isinstance(result, dict) else "",
-        result.get("end_date") if isinstance(result, dict) else "",
-    )
-    notes.extend(constraint_notes)
-    if not package_text:
-        package_text = query
-        notes.append("project_package_query_text 为空，已回退为原始 query")
-    if not item_text:
-        item_text = package_text or query
-        notes.append("item_query_text 为空，已回退为 project_package_query_text 或原始 query")
-    rewrite = QueryRewrite(
-        raw_query=query,
-        project_package_query_text=package_text,
-        item_query_text=item_text,
-        location=location,
-        start_date=start_date,
-        end_date=end_date,
-        notes=notes,
-        success=True,
-    )
-    return rewrite, trace_row(
-        "query_rewrite_for_embedding",
-        "生成 project_package_query_text 和 item_query_text",
-        True,
-        prompt=prompt,
-        max_tokens=max_tokens,
-        input_summary=query,
-    )
-
-
-def top_score_indices(scores: np.ndarray, top_k: int) -> np.ndarray:
-    if top_k <= 0 or scores.size == 0:
-        return np.array([], dtype=int)
-    count = min(int(top_k), int(scores.size))
-    if count == scores.size:
-        return np.argsort(-scores)
-    candidate = np.argpartition(-scores, count - 1)[:count]
-    return candidate[np.argsort(-scores[candidate])]
-
-
-def package_dedupe_key(row: pd.Series) -> str:
-    return " | ".join(
-        [
-            normalize_dedupe_text(row.get("工程名称")),
-            normalize_dedupe_text(row.get("project_name_text")),
-            normalize_dedupe_text(row.get("cost_item_names_summary")),
-        ]
-    )
-
-
-def score_project_packages(
-    project_packages: pd.DataFrame,
-    project_package_embeddings: np.ndarray,
-    package_query_embedding: np.ndarray,
-    top_packages: int,
-    max_packages_per_cache_subject: int = 1,
-) -> pd.DataFrame:
-    scores = project_package_embeddings @ package_query_embedding
-    indices = top_score_indices(scores, max(top_packages * 20, top_packages))
-    rows = project_packages.iloc[indices].copy()
-    rows["package_query_similarity"] = scores[indices].astype(float)
-    rows["package_dedupe_key"] = rows.apply(package_dedupe_key, axis=1)
-    rows = rows.sort_values("package_query_similarity", ascending=False)
-    rows = rows.drop_duplicates("package_dedupe_key", keep="first").copy()
-    if "cache_subject" in rows.columns and max_packages_per_cache_subject > 0:
-        rows["_cache_subject_key"] = rows["cache_subject"].map(normalize_dedupe_text)
-        empty_mask = rows["_cache_subject_key"].eq("")
-        rows.loc[empty_mask, "_cache_subject_key"] = rows.loc[empty_mask, "package_dedupe_key"]
-
-        rows["_cache_subject_rank"] = rows.groupby("_cache_subject_key").cumcount()
-        rows = rows[rows["_cache_subject_rank"] < max_packages_per_cache_subject]
-        rows = rows.drop(columns=["_cache_subject_key", "_cache_subject_rank"])
-    rows = rows.head(top_packages).copy()
-    rows = rows.drop(columns=["package_dedupe_key"])
-    rows.insert(0, "rank", range(1, len(rows) + 1))
-    return rows
 
 
 def matched_project_packages_for_output(matched: pd.DataFrame) -> pd.DataFrame:
@@ -1234,149 +859,6 @@ def matched_project_examples_frame(examples: list[dict[str, Any]]) -> pd.DataFra
                 }
             )
     return pd.DataFrame(rows, columns=MATCHED_PROJECT_EXAMPLE_COLUMNS)
-
-
-def score_direct_items(samples: pd.DataFrame, item_query_similarities: np.ndarray, top_items: int) -> pd.DataFrame:
-    indices = top_score_indices(item_query_similarities, top_items)
-    rows = samples.iloc[indices].copy()
-    rows["item_query_similarity"] = item_query_similarities[indices].astype(float)
-    return rows
-
-
-def project_package_similarity_map(project_packages: pd.DataFrame, package_query_similarities: np.ndarray) -> dict[str, float]:
-    if len(project_packages) != len(package_query_similarities):
-        raise ValueError("工程包数量与 package_query_similarities 数量不一致")
-    return {
-        cell_text(row.get("project_package_id")): float(package_query_similarities[index])
-        for index, (_row_index, row) in enumerate(project_packages.iterrows())
-        if cell_text(row.get("project_package_id"))
-    }
-
-
-def source_identity_for_row(row: pd.Series, warnings: list[str] | None = None) -> tuple[str, str, str]:
-    project_key = cell_text(row.get("project_key"))
-    if not project_key:
-        batch_id = cell_text(row.get("batch_id"))
-        source_row_id = normalize_source_row_id(row.get("source_row_id"))
-        if batch_id and source_row_id:
-            project_key = f"{batch_id}::{source_row_id}"
-            append_warning(warnings, "source_ref_recovered_from_batch_source_row")
-
-    item_row_id = cell_text(row.get("item_row_id"))
-    if not item_row_id:
-        source_row_id = normalize_source_row_id(row.get("source_row_id"))
-        seq = cell_text(row.get("seq"))
-        if source_row_id and seq:
-            item_row_id = f"{source_row_id}-{seq}"
-            append_warning(warnings, "source_ref_recovered_from_source_row_seq")
-
-    source_ref = f"{project_key}::{item_row_id}" if project_key and item_row_id else ""
-    if not source_ref:
-        append_warning(warnings, "source_ref_missing")
-    return project_key, item_row_id, source_ref
-
-
-def attach_source_refs(rows: pd.DataFrame, warnings: list[str] | None = None) -> pd.DataFrame:
-    if rows.empty:
-        return rows
-    output = rows.copy()
-    identities = output.apply(lambda row: source_identity_for_row(row, warnings), axis=1)
-    output["project_key"] = [item[0] for item in identities]
-    output["item_row_id"] = [item[1] for item in identities]
-    output["source_ref"] = [item[2] for item in identities]
-    return output
-
-
-def matched_package_maps(matched_project_packages: pd.DataFrame) -> tuple[dict[str, float], dict[str, int]]:
-    score_map: dict[str, float] = {}
-    rank_map: dict[str, int] = {}
-    for _index, row in matched_project_packages.iterrows():
-        package_id = cell_text(row.get("project_package_id"))
-        if not package_id:
-            continue
-        score_map[package_id] = float(row.get("package_query_similarity") or 0.0)
-        rank_map[package_id] = int(row.get("rank") or 0)
-    return score_map, rank_map
-
-
-def evidence_package_universe(matched_project_packages: pd.DataFrame, direct_item_hits: pd.DataFrame) -> list[str]:
-    package_ids: list[str] = []
-    seen: set[str] = set()
-    for frame in [matched_project_packages, direct_item_hits]:
-        if frame.empty or "project_package_id" not in frame.columns:
-            continue
-        for value in frame["project_package_id"].tolist():
-            package_id = cell_text(value)
-            if package_id and package_id not in seen:
-                package_ids.append(package_id)
-                seen.add(package_id)
-    return package_ids
-
-
-def build_package_evidence_weights(
-    evidence_package_ids: list[str],
-    package_query_similarity_by_id: dict[str, float],
-    temperature: float,
-) -> pd.DataFrame:
-    if temperature <= 0:
-        raise ValueError("package weight temperature 必须大于 0")
-    package_ids = [package_id for package_id in evidence_package_ids if cell_text(package_id)]
-    if not package_ids:
-        return pd.DataFrame(columns=PACKAGE_EVIDENCE_WEIGHT_COLUMNS)
-
-    similarities = np.array(
-        [float(package_query_similarity_by_id.get(package_id, 0.0)) for package_id in package_ids],
-        dtype=np.float64,
-    )
-    max_similarity = float(np.max(similarities))
-    raw_weights = np.exp((similarities - max_similarity) / float(temperature))
-    denominator = float(raw_weights.sum())
-    weights = raw_weights / denominator if denominator > 0 else np.zeros_like(raw_weights)
-    return pd.DataFrame(
-        {
-            "project_package_id": package_ids,
-            "package_query_similarity": similarities.astype(float),
-            "package_evidence_weight": weights.astype(float),
-        },
-        columns=PACKAGE_EVIDENCE_WEIGHT_COLUMNS,
-    )
-
-
-def build_retrieved_evidence_items(
-    samples: pd.DataFrame,
-    matched_project_packages: pd.DataFrame,
-    direct_item_hits: pd.DataFrame,
-    item_query_similarities: np.ndarray,
-    package_query_similarity_by_id: dict[str, float] | None = None,
-    warnings: list[str] | None = None,
-) -> pd.DataFrame:
-    package_query_similarity_map, package_rank_map = matched_package_maps(matched_project_packages)
-    package_query_similarity_by_id = package_query_similarity_by_id or package_query_similarity_map
-    matched_package_ids = list(package_query_similarity_map.keys())
-    direct_indices = {
-        int(index)
-        for index in pd.to_numeric(direct_item_hits.get("sample_index", pd.Series(dtype=int)), errors="coerce").dropna()
-    }
-
-    package_rows = samples[samples["project_package_id"].astype(str).isin(matched_package_ids)].copy()
-    candidate_indices = set(pd.to_numeric(package_rows["sample_index"], errors="coerce").dropna().astype(int).tolist())
-    candidate_indices.update(direct_indices)
-    if not candidate_indices:
-        return samples.head(0).copy()
-
-    sample_index_series = pd.to_numeric(samples["sample_index"], errors="coerce").astype("Int64")
-    rows = samples[sample_index_series.isin(candidate_indices)].copy()
-    rows["sample_index"] = pd.to_numeric(rows["sample_index"], errors="raise").astype(int)
-    if rows["sample_index"].min() < 0 or rows["sample_index"].max() >= len(item_query_similarities):
-        raise ValueError("sample_index 超出 item_embeddings 范围")
-
-    rows["package_query_similarity"] = rows["project_package_id"].map(package_query_similarity_by_id).fillna(0.0).astype(float)
-    rows["package_rank"] = rows["project_package_id"].map(package_rank_map)
-    rows["item_query_similarity"] = rows["sample_index"].map(lambda sample_index: float(item_query_similarities[int(sample_index)]))
-    rows["direct_hit"] = rows["sample_index"].isin(direct_indices)
-    rows = attach_source_refs(rows, warnings)
-    sort_columns = ["item_query_similarity", "package_query_similarity"]
-    return rows.sort_values(sort_columns, ascending=[False, False]).reset_index(drop=True)
 
 
 def numeric_values(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -2435,7 +1917,6 @@ def normalized_unit(value: Any) -> str:
     text = re.sub(r"m\s*2|m\^2", "m²", text)
     text = text.replace("毫米", "mm")
     return text.strip()
-
 
 
 def numeric_or_none(value: Any) -> float | None:
