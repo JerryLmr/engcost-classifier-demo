@@ -1926,9 +1926,23 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         ])
         warnings = []
         with patch.object(query_estimate_llm, "request_llm_json_with_usage", side_effect=RuntimeError("down")):
-            scenario, _prompt, trace = query_estimate_llm.generate_quantity_determination(
-                "未提供数量", "P1", items, lookup, displays, families, samples, warnings
+            determinations, _prompt, trace = query_estimate_llm.generate_quantity_determination(
+                "未提供数量", "P1", items, warnings
             )
+        display_map, option_map = query_estimate_llm.display_option_maps(displays)
+        expanded = query_estimate_llm.expand_samples_for_option(
+            option_map[("D1", "D1-O01")], display_map["D1"], families, samples
+        )
+        quantity_statistics = {4: query_estimate_llm.build_quantity_statistics(expanded, "m²")}
+        quantities = query_estimate_llm.calculate_quantities(
+            items, determinations, quantity_statistics, lookup, warnings
+        )
+        scenario = query_estimate_llm.build_scenario_from_plan_items(
+            "P1", items, lookup, quantities
+        )
+        trace = query_estimate_llm.attach_quantity_results_to_trace(
+            trace, determinations, quantities
+        )
         self.assertEqual(scenario.items[0].quantity["value"], 200)
         self.assertEqual(scenario.items[0].quantity_source, "historical_median")
         self.assertTrue(trace["fallback"])

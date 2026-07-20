@@ -1174,38 +1174,95 @@ def apply_workbook_style(path: Path) -> None:
     workbook.close()
 
 
-from estimator.candidates import display_groups as _candidate_display_groups
-from estimator.candidates import families as _candidate_families
 from estimator.candidates import practice_options as _practice_options
-from estimator.candidates import signatures as _candidate_signatures
 from estimator.planning import option_selection as _option_selection
-from estimator.planning import package_selection as _package_selection
 from estimator.planning import quantity_determination as _quantity_determination
 from estimator.planning import range_selection as _range_selection
-from estimator.planning import scenarios as _planning_scenarios
-from estimator.pricing import estimate_calculator as _estimate_calculator
 from estimator.pricing import evidence_expansion as _evidence_expansion
-from estimator.pricing import price_statistics as _price_statistics
-from estimator.pricing import quantity_statistics as _quantity_statistics
-from estimator.pricing import summary as _pricing_summary
-
-
-def _reexport_stage_two(module: Any) -> None:
-    for name, value in vars(module).items():
-        if name.startswith("_"):
-            continue
-        if name.isupper() or getattr(value, "__module__", None) == module.__name__:
-            globals()[name] = value
-
-
-for _stage_two_module in [
-    _candidate_signatures, _candidate_families, _candidate_display_groups,
-    _practice_options, _range_selection, _package_selection, _option_selection,
-    _planning_scenarios, _evidence_expansion, _quantity_statistics,
-    _price_statistics, _estimate_calculator, _pricing_summary,
-    _quantity_determination,
-]:
-    _reexport_stage_two(_stage_two_module)
+from estimator.candidates.signatures import (
+    append_warning,
+    cell_text,
+    json_text,
+    numeric_or_none,
+    trace_row,
+)
+from estimator.candidates.families import (
+    CANDIDATE_FAMILY_COLUMNS,
+    EVIDENCE_ITEM_COLUMNS,
+    attach_family_ids_to_evidence_items,
+    build_candidate_families,
+    numeric_values,
+)
+from estimator.candidates.display_groups import (
+    CANDIDATE_DISPLAY_GROUP_COLUMNS,
+    DISPLAY_GROUP_FAMILY_COLUMNS,
+    attach_display_support_ratios,
+    build_candidate_display_groups,
+    filter_required_display_groups,
+    normalize_display_description,
+    normalize_display_name,
+)
+from estimator.candidates.practice_options import (
+    DISPLAY_OPTION_GROUPING_TRACE_COLUMNS,
+    attach_option_support_counts,
+    build_display_option_grouping_prompt,
+    build_display_option_grouping_trace_frame,
+    display_option_maps,
+    parse_display_option_grouping_result,
+)
+from estimator.planning.package_selection import (
+    MATCHED_PROJECT_EXAMPLE_COLUMNS,
+    MATCHED_PROJECT_PACKAGE_COLUMNS,
+    build_matched_project_examples,
+    matched_project_examples_frame,
+    matched_project_packages_for_output,
+    select_representative_project_package,
+)
+from estimator.planning.range_selection import (
+    build_contiguous_item_range_prompt,
+    expand_selected_project_items,
+    validate_contiguous_range,
+)
+from estimator.planning.option_selection import (
+    OPTION_SELECTION_TRACE_COLUMNS,
+    apply_option_selection_to_grouping_trace,
+    attach_family_and_display_ids_to_selected_items,
+    attach_original_practice_options,
+    build_stable_sample_lookup,
+    choose_most_supported_option,
+    choose_representative_family,
+)
+from estimator.planning.quantity_determination import (
+    attach_quantity_results_to_trace,
+    build_quantity_determination_prompt,
+    validate_quantity_determination_result,
+)
+from estimator.planning.scenarios import build_scenario_from_plan_items
+from estimator.pricing.evidence_expansion import (
+    OPTION_EVIDENCE_EXPANSION_COLUMNS,
+    build_option_evidence_expansion_prompt,
+    expand_samples_for_option,
+    filter_option_evidence_hard_conflicts,
+    normalize_evidence_expansion_name,
+    option_evidence_expansion_candidates,
+    validate_option_evidence_expansion_result,
+)
+from estimator.pricing.quantity_statistics import build_quantity_statistics
+from estimator.pricing.price_statistics import price_stats_for_option, validate_price_stats
+from estimator.pricing.estimate_calculator import (
+    calc_amount,
+    calculate_quantities,
+    format_number_cell,
+    quantity_amounts,
+    quantity_display,
+    validate_quantity,
+)
+from estimator.pricing.summary import (
+    ESTIMATE_SUMMARY_COLUMNS,
+    build_estimate_summary,
+    filter_customer_display_outputs,
+    sum_component_amount,
+)
 
 
 def generate_display_option_grouping(*args: Any, **kwargs: Any):
@@ -1395,15 +1452,36 @@ def run_query(
     display_option_grouping_trace_frame = apply_option_selection_to_grouping_trace(
         display_option_grouping_trace_frame, option_selection_trace_frame
     )
-    scenario, quantity_prompt, quantity_trace = generate_quantity_determination(
+    determinations, quantity_prompt, quantity_trace = generate_quantity_determination(
         raw_text,
         selected_project_package_id,
         plan_items,
-        sample_lookup,
-        displays_with_options,
-        candidate_families,
-        candidate_samples,
         warnings,
+    )
+    display_map, option_map = display_option_maps(displays_with_options)
+    quantity_statistics: dict[int, dict[str, Any]] = {}
+    for _index, row in plan_items.iterrows():
+        position = int(row["item_position"])
+        if determinations[position]["quantity_source"] == "user_explicit":
+            quantity_statistics[position] = {}
+            continue
+        display_id = cell_text(row.get("display_id"))
+        option_id = cell_text(row.get("selected_option_id")) or cell_text(row.get("practice_option_id"))
+        display = display_map.get(display_id)
+        option = option_map.get((display_id, option_id))
+        if display is None or option is None:
+            raise ValueError(f"工程量统计 display/option 回查失败: item_position={position}")
+        expanded = expand_samples_for_option(option, display, candidate_families, candidate_samples)
+        target_unit = cell_text(row.get("unit_normalized")) or cell_text(row.get("unit"))
+        quantity_statistics[position] = build_quantity_statistics(expanded, target_unit)
+    quantities = calculate_quantities(
+        plan_items, determinations, quantity_statistics, sample_lookup, warnings
+    )
+    scenario = build_scenario_from_plan_items(
+        selected_project_package_id, plan_items, sample_lookup, quantities
+    )
+    quantity_trace = attach_quantity_results_to_trace(
+        quantity_trace, determinations, quantities
     )
     scenarios = [scenario]
     (

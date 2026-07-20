@@ -6,16 +6,10 @@ from typing import Any
 import pandas as pd
 
 from estimator.paths import CLASSIFIER_BACKEND_DIR
-from estimator.candidates.signatures import cell_text, join_non_empty, numeric_or_none, normalized_unit, truncate_text, json_text, append_warning, trace_row
+from estimator.candidates.signatures import append_warning, cell_text, json_text, numeric_or_none, trace_row
 if str(CLASSIFIER_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(CLASSIFIER_BACKEND_DIR))
 from classifier.llm_client import LLMServiceError, request_llm_json_with_usage  # noqa: E402
-from estimator.candidates.practice_options import display_option_maps
-from estimator.pricing.evidence_expansion import expand_samples_for_option
-from estimator.pricing.quantity_statistics import build_quantity_statistics
-from estimator.pricing.estimate_calculator import calculate_quantities
-from estimator.planning.scenarios import build_scenario_from_plan_items
-from estimator.query_models import EstimateScenario
 
 def quantity_rule_payload(raw_text: str, plan_items: pd.DataFrame) -> dict[str, Any]:
     items = [
@@ -150,14 +144,10 @@ def generate_quantity_determination(
     raw_text: str,
     project_package_id: str,
     plan_items: pd.DataFrame,
-    sample_lookup: dict[str, dict[str, Any]],
-    displays_with_options: pd.DataFrame,
-    candidate_families: pd.DataFrame,
-    samples: pd.DataFrame,
     warnings: list[str] | None = None,
     *, request_fn=request_llm_json_with_usage, trace_factory=trace_row,
     warning_fn=append_warning,
-) -> tuple[EstimateScenario, str, dict[str, Any]]:
+) -> tuple[dict[int, dict[str, Any]], str, dict[str, Any]]:
     request_llm_json_with_usage = request_fn
     trace_row = trace_factory
     append_warning = warning_fn
@@ -178,28 +168,6 @@ def generate_quantity_determination(
         error_message = str(exc)
         determinations = quantity_determination_fallback(plan_items)
         append_warning(warnings, "quantity_determination_fallback_historical_median")
-    display_map, option_map = display_option_maps(displays_with_options)
-    quantity_statistics: dict[int, dict[str, Any]] = {}
-    for _index, row in plan_items.iterrows():
-        position = int(row["item_position"])
-        if determinations[position]["quantity_source"] == "user_explicit":
-            quantity_statistics[position] = {}
-            continue
-        display_id = cell_text(row.get("display_id"))
-        option_id = cell_text(row.get("selected_option_id")) or cell_text(row.get("practice_option_id"))
-        display = display_map.get(display_id)
-        option = option_map.get((display_id, option_id))
-        if display is None or option is None:
-            raise ValueError(f"工程量统计 display/option 回查失败: item_position={position}")
-        expanded = expand_samples_for_option(option, display, candidate_families, samples)
-        target_unit = cell_text(row.get("unit_normalized")) or cell_text(row.get("unit"))
-        quantity_statistics[position] = build_quantity_statistics(expanded, target_unit)
-    quantities = calculate_quantities(
-        plan_items, determinations, quantity_statistics, sample_lookup, warnings
-    )
-    scenario = build_scenario_from_plan_items(
-        project_package_id, plan_items, sample_lookup, quantities
-    )
     trace = trace_row(
         "quantity_determination",
         "确定最终连续区间内全部清单的工程量",
@@ -214,10 +182,29 @@ def generate_quantity_determination(
         usage=response.usage if response is not None else None,
         raw_response=getattr(response, "raw_content", "") if response is not None else "",
         scenario_count=1,
-        scenario_item_count=len(scenario.items),
+        scenario_item_count=len(plan_items),
     )
     trace["fallback"] = bool(error_message)
     trace["quantity_items"] = json_text([
+        {
+            "item_position": position,
+            "quantity_source": determination["quantity_source"],
+            "llm_quantity": determination["quantity"],
+            "error_message": error_message,
+        }
+        for position, determination in determinations.items()
+    ])
+    return determinations, prompt, trace
+
+
+def attach_quantity_results_to_trace(
+    trace: dict[str, Any],
+    determinations: dict[int, dict[str, Any]],
+    quantities: dict[int, dict[str, Any]],
+) -> dict[str, Any]:
+    result_trace = trace.copy()
+    error_message = cell_text(trace.get("error_message"))
+    result_trace["quantity_items"] = json_text([
         {
             "item_position": position,
             "quantity_source": result["quantity_source"],
@@ -234,4 +221,4 @@ def generate_quantity_determination(
         }
         for position, result in quantities.items()
     ])
-    return scenario, prompt, trace
+    return result_trace
