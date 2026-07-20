@@ -9,8 +9,8 @@ _REPO_BOOTSTRAP = Path(__file__).resolve().parents[2]
 if str(_REPO_BOOTSTRAP) not in sys.path:
     sys.path.insert(0, str(_REPO_BOOTSTRAP))
 
-from estimator.output.frames import build_workbook_frames  # noqa: E402
-from estimator.output.excel_writer import write_estimate_workbook  # noqa: E402
+from estimator.reporting.frames import build_workbook_frames  # noqa: E402
+from estimator.reporting.excel_writer import write_estimate_workbook  # noqa: E402
 from estimator.paths import (  # noqa: E402
     CLASSIFIER_BACKEND_DIR,
     default_query_output_path,

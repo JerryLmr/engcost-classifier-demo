@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from estimator.output.formatting import apply_workbook_style
+from estimator.reporting.formatting import apply_workbook_style
 
 
 def write_estimate_workbook(

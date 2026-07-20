@@ -15,19 +15,19 @@ estimator/retrieval/   query rewrite、约束、召回与证据权重
 estimator/candidates/  Family、Display 与 Practice Option 候选
 estimator/planning/    工程包、区间、Option 与工程量决策
 estimator/pricing/     证据扩展、统计与金额计算
-estimator/output/      QueryResult 到 workbook frames、Excel 写入与最终说明
+estimator/reporting/   QueryResult 到 workbook frames、Excel 写入与最终说明
 estimator/query_pipeline.py  造价查询编排，返回既有 QueryResult
 estimator/scripts/     保留命令入口及 ingestion/indexing 脚本
 ```
 
-以下命令均从仓库根目录执行。估价脚本中的相对数据路径统一相对仓库根目录解析，运行数据继续写入根目录的 `excel_inputs/`、`cleaned_inputs/`、`classified_outputs/`、`samples/`、`embeddings/`、`query/`、`outputs/` 等目录。
+以下命令均从仓库根目录执行。估价脚本中的相对数据路径统一相对仓库根目录解析，导入阶段数据写入根目录的 `ingestion_data/excel_inputs/`、`ingestion_data/cleaned_inputs/`、`ingestion_data/classified_outputs/`，其余运行数据继续写入 `samples/`、`embeddings/`、`query/`、`outputs/` 等目录。
 
 ### 1. 批次导入 OCR Excel
 
 后续 OCR 文件统一放在：
 
 ```text
-excel_inputs/
+ingestion_data/excel_inputs/
 ```
 
 文件名格式：
@@ -39,15 +39,15 @@ audit_ocr_export_YYYYMMDD_NNN.xlsx
 示例：
 
 ```text
-excel_inputs/audit_ocr_export_20260630_001.xlsx
-excel_inputs/audit_ocr_export_20260630_002.xlsx
+ingestion_data/excel_inputs/audit_ocr_export_20260630_001.xlsx
+ingestion_data/excel_inputs/audit_ocr_export_20260630_002.xlsx
 ```
 
 日常导入单批次：
 
 ```bash
 .venv/bin/python estimator/scripts/run_ingest_batch.py \
-  --input excel_inputs/audit_ocr_export_20260630_001.xlsx
+  --input ingestion_data/excel_inputs/audit_ocr_export_20260630_001.xlsx
 ```
 
 不传 `--batch-id` 时，脚本会从文件名解析 `batch_id`：
@@ -60,15 +60,15 @@ audit_ocr_export_20260630_001.xlsx -> 20260630_001
 
 ```bash
 .venv/bin/python estimator/scripts/run_ingest_batch.py \
-  --input excel_inputs/audit_ocr_export_20260630_001.xlsx \
+  --input ingestion_data/excel_inputs/audit_ocr_export_20260630_001.xlsx \
   --batch-id 20260630_001
 ```
 
 单批次产物固定为：
 
 ```text
-cleaned_inputs/{batch_id}/ocr_required_cleaned.xlsx
-classified_outputs/{batch_id}/classified_projects.xlsx
+ingestion_data/cleaned_inputs/{batch_id}/ocr_required_cleaned.xlsx
+ingestion_data/classified_outputs/{batch_id}/classified_projects.xlsx
 samples/{batch_id}/cost_item_samples.xlsx
 ```
 
@@ -78,7 +78,7 @@ samples/{batch_id}/cost_item_samples.xlsx
 
 ```bash
 .venv/bin/python estimator/scripts/run_ingest_batch.py \
-  --input excel_inputs/audit_ocr_export_20260630_001.xlsx \
+  --input ingestion_data/excel_inputs/audit_ocr_export_20260630_001.xlsx \
   --overwrite
 ```
 
@@ -238,11 +238,11 @@ index_meta.json
 estimator/scripts/query_cost_estimate_llm.py
 → estimator.query_pipeline.run_estimate_query(...)
 → estimator.query_models.QueryResult
-→ estimator.output.frames.build_workbook_frames(result)
-→ estimator.output.excel_writer.write_estimate_workbook(...)
+→ estimator.reporting.frames.build_workbook_frames(result)
+→ estimator.reporting.excel_writer.write_estimate_workbook(...)
 ```
 
-查询脚本只负责参数、路径、覆盖校验、LM Studio 可用性检查、写文件和终端摘要；业务编排只存在于 `estimator/query_pipeline.py`。workbook sheet 顺序和 `QueryResult` 字段映射统一定义在 `estimator/output/columns.py`，frames 只在写 Excel 前临时构造，不存入 `QueryResult`。
+查询脚本只负责参数、路径、覆盖校验、LM Studio 可用性检查、写文件和终端摘要；业务编排只存在于 `estimator/query_pipeline.py`。workbook sheet 顺序和 `QueryResult` 字段映射统一定义在 `estimator/reporting/columns.py`，frames 只在写 Excel 前临时构造，不存入 `QueryResult`。
 
 方案生成默认关闭；需要生成说明时显式增加 `--with-explanations`。
 
@@ -356,7 +356,7 @@ LLM 职责边界：
 - option_selection Prompt：`estimator/planning/option_selection.py`，只能选择当前 display 已有 Option。
 - quantity_determination Prompt：`estimator/planning/quantity_determination.py`，只为最终区间的每个绝对 `item_position` 判断 `user_explicit` 或 `historical_median`。用户明确数量只绑定部位、项目名称、材料、规格和单位直接匹配的清单，其余项目由程序采用全库同类历史样本工程量中位数，不在项目之间推导或复制数量。
 - evidence expansion Prompt：`estimator/pricing/evidence_expansion.py`。
-- final_explanation Prompt：`estimator/output/explanation.py`，仅在传入 `--with-explanations` 且存在达到最低证据要求的展示清单时调用，只读取过滤后的清单、工程量、价格和汇总金额，生成“历史清单驱动的组合维修参考方案”。未开启或调用失败时使用程序 fallback，不影响主查询成功。
+- final_explanation Prompt：`estimator/reporting/explanation.py`，仅在传入 `--with-explanations` 且存在达到最低证据要求的展示清单时调用，只读取过滤后的清单、工程量、价格和汇总金额，生成“历史清单驱动的组合维修参考方案”。未开启或调用失败时使用程序 fallback，不影响主查询成功。
 - LLM 不生成单价、来源、清单名称、单位或合价。综合单价和合价由程序根据 scenario 选用的 practice option 回填和计算。
 
 历史工程量中位数只用于初步估算，不代表现场确认工程量。综合单价始终来自检索样本；若同类证据没有有效工程量，程序仅可明确标记后采用最佳召回样本的有效工程量，最佳样本也无有效值时直接失败。
@@ -388,14 +388,14 @@ item_row_id == "27-1"
 
 ```bash
 .venv/bin/python estimator/scripts/run_ingest_batch.py \
-  --input excel_inputs/audit_ocr_export_20260630_001.xlsx
+  --input ingestion_data/excel_inputs/audit_ocr_export_20260630_001.xlsx
 ```
 
 当天第二批：
 
 ```bash
 .venv/bin/python estimator/scripts/run_ingest_batch.py \
-  --input excel_inputs/audit_ocr_export_20260630_002.xlsx
+  --input ingestion_data/excel_inputs/audit_ocr_export_20260630_002.xlsx
 ```
 
 合并所有历史样本：
@@ -420,8 +420,8 @@ item_row_id == "27-1"
 
 ```text
 excel_outputs/
-cleaned_inputs/
-classified_outputs/
+ingestion_data/cleaned_inputs/
+ingestion_data/classified_outputs/
 samples/
 embeddings/
 query/

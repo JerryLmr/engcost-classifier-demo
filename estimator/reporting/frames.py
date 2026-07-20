@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 
 from estimator.candidates.signatures import cell_text, json_text
-from estimator.output.columns import (
+from estimator.reporting.columns import (
     ESTIMATE_SCENARIO_COLUMNS,
     LLM_TRACE_COLUMNS,
     PRICE_EVIDENCE_ITEM_COLUMNS,

@@ -20,8 +20,8 @@ from estimator.candidates import (
     signatures,
 )
 from estimator.indexing import index_loader
-from estimator.output import columns as output_columns
-from estimator.output import excel_writer, explanation, frames
+from estimator.reporting import columns as output_columns
+from estimator.reporting import excel_writer, explanation, frames
 from estimator.planning import (
     option_selection,
     package_selection,
@@ -3293,13 +3293,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             query_cli.validate_output_path(output_path, overwrite=True)
 
     def test_run_ingest_batch_parses_batch_id_from_filename(self):
-        input_path = Path("excel_inputs/audit_ocr_export_20260630_001.xlsx")
+        input_path = Path("ingestion_data/excel_inputs/audit_ocr_export_20260630_001.xlsx")
 
         self.assertEqual(run_ingest_batch.infer_batch_id(input_path), "20260630_001")
         self.assertEqual(run_ingest_batch.batch_id_from_args(input_path, "manual_001"), "manual_001")
 
         with self.assertRaisesRegex(ValueError, "无法从文件名解析 batch_id"):
-            run_ingest_batch.infer_batch_id(Path("excel_inputs/audit_ocr_export.xlsx"))
+            run_ingest_batch.infer_batch_id(Path("ingestion_data/excel_inputs/audit_ocr_export.xlsx"))
 
     def test_merge_samples_validate_output_paths_requires_overwrite_for_output_or_report(self):
         with tempfile.TemporaryDirectory() as tmpdir:

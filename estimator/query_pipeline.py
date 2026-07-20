@@ -39,8 +39,8 @@ from estimator.pricing.evidence_expansion import expand_samples_for_option
 from estimator.pricing.price_statistics import price_stats_for_option, validate_price_stats
 from estimator.pricing.quantity_statistics import build_quantity_statistics
 from estimator.pricing.summary import build_estimate_summary, filter_customer_display_outputs
-from estimator.output import explanation as _explanation
-from estimator.output.frames import build_llm_trace_frame, build_parse_info, build_scenario_output_frames
+from estimator.reporting import explanation as _explanation
+from estimator.reporting.frames import build_llm_trace_frame, build_parse_info, build_scenario_output_frames
 
 if str(CLASSIFIER_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(CLASSIFIER_BACKEND_DIR))

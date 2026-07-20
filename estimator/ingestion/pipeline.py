@@ -53,8 +53,8 @@ def batch_id_from_args(input_path: Path, explicit_batch_id: str | None) -> str:
 
 def batch_outputs(batch_id: str) -> dict[str, Path]:
     return {
-        "cleaned": REPO_ROOT / "cleaned_inputs" / batch_id / "ocr_required_cleaned.xlsx",
-        "classified": REPO_ROOT / "classified_outputs" / batch_id / "classified_projects.xlsx",
+        "cleaned": REPO_ROOT / "ingestion_data" / "cleaned_inputs" / batch_id / "ocr_required_cleaned.xlsx",
+        "classified": REPO_ROOT / "ingestion_data" / "classified_outputs" / batch_id / "classified_projects.xlsx",
         "samples": REPO_ROOT / "samples" / batch_id / "cost_item_samples.xlsx",
     }
 

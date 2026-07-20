@@ -48,11 +48,11 @@ MODULES = [
     "estimator.pricing.price_statistics",
     "estimator.pricing.estimate_calculator",
     "estimator.pricing.summary",
-    "estimator.output.columns",
-    "estimator.output.frames",
-    "estimator.output.formatting",
-    "estimator.output.excel_writer",
-    "estimator.output.explanation",
+    "estimator.reporting.columns",
+    "estimator.reporting.frames",
+    "estimator.reporting.formatting",
+    "estimator.reporting.excel_writer",
+    "estimator.reporting.explanation",
     "estimator.query_pipeline",
 ]
 
@@ -126,11 +126,11 @@ def test_query_rewrite_fixed_failure_uses_original_query() -> None:
 def test_ingestion_paths_and_commands_stay_under_repo_root() -> None:
     outputs = batch_outputs("20260720_001")
     assert outputs == {
-        "cleaned": paths.REPO_ROOT / "cleaned_inputs/20260720_001/ocr_required_cleaned.xlsx",
-        "classified": paths.REPO_ROOT / "classified_outputs/20260720_001/classified_projects.xlsx",
+        "cleaned": paths.REPO_ROOT / "ingestion_data/cleaned_inputs/20260720_001/ocr_required_cleaned.xlsx",
+        "classified": paths.REPO_ROOT / "ingestion_data/classified_outputs/20260720_001/classified_projects.xlsx",
         "samples": paths.REPO_ROOT / "samples/20260720_001/cost_item_samples.xlsx",
     }
-    commands = command_steps(paths.REPO_ROOT / "excel_inputs/input.xlsx", outputs, True)
+    commands = command_steps(paths.REPO_ROOT / "ingestion_data/excel_inputs/input.xlsx", outputs, True)
     assert [Path(command[1]).name for command in commands] == [
         "filter_required_ocr_rows.py",
         "batch_classify_excel.py",
