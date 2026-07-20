@@ -9,7 +9,8 @@ from typing import Any
 import openpyxl
 
 
-ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = Path(__file__).resolve().parent
 BATCH_SAMPLE_NAME = "cost_item_samples.xlsx"
 DEDUP_REPORT_HEADERS = [
     "dedup_type",
@@ -34,7 +35,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_path(raw_path: str) -> Path:
-    return Path(raw_path).expanduser().resolve()
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path.resolve()
 
 
 def dedup_report_path(output_path: Path) -> Path:

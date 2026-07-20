@@ -9,6 +9,7 @@ from typing import Any
 
 import openpyxl
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -109,7 +110,10 @@ def is_empty_required_value(value: object) -> bool:
 
 
 def resolve_path(raw_path: str) -> Path:
-    return Path(raw_path).expanduser().resolve()
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path.resolve()
 
 
 def validate_paths(input_path: Path, clean_output: Path, removed_output: Path | None, overwrite: bool) -> None:

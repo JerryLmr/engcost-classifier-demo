@@ -4,6 +4,16 @@
 
 当前流程不用于判断“异常 / 违规 / 不合理”，只输出相似样本和参考区间。
 
+代码目录分为：
+
+```text
+classifier/backend/    分类后端与测试
+classifier/frontend/   分类前端
+estimator/scripts/     清单样本与造价估算脚本
+```
+
+以下命令均从仓库根目录执行。估价脚本中的相对数据路径统一相对仓库根目录解析，运行数据继续写入根目录的 `excel_inputs/`、`cleaned_inputs/`、`classified_outputs/`、`samples/`、`embeddings/`、`query/`、`outputs/` 等目录。
+
 ### 1. 批次导入 OCR Excel
 
 后续 OCR 文件统一放在：
@@ -28,7 +38,7 @@ excel_inputs/audit_ocr_export_20260630_002.xlsx
 日常导入单批次：
 
 ```bash
-backend/.venv/bin/python scripts/run_ingest_batch.py \
+.venv/bin/python estimator/scripts/run_ingest_batch.py \
   --input excel_inputs/audit_ocr_export_20260630_001.xlsx
 ```
 
@@ -41,7 +51,7 @@ audit_ocr_export_20260630_001.xlsx -> 20260630_001
 如需手动指定批次：
 
 ```bash
-backend/.venv/bin/python scripts/run_ingest_batch.py \
+.venv/bin/python estimator/scripts/run_ingest_batch.py \
   --input excel_inputs/audit_ocr_export_20260630_001.xlsx \
   --batch-id 20260630_001
 ```
@@ -59,7 +69,7 @@ samples/{batch_id}/cost_item_samples.xlsx
 如果任一批次产物已存在，默认报错。确认要重跑并覆盖该批次时显式传：
 
 ```bash
-backend/.venv/bin/python scripts/run_ingest_batch.py \
+.venv/bin/python estimator/scripts/run_ingest_batch.py \
   --input excel_inputs/audit_ocr_export_20260630_001.xlsx \
   --overwrite
 ```
@@ -96,13 +106,13 @@ location
 导入一个或多个批次后，合并历史样本：
 
 ```bash
-backend/.venv/bin/python scripts/merge_cost_item_sample_batches.py
+.venv/bin/python estimator/scripts/merge_cost_item_sample_batches.py
 ```
 
 默认等价于：
 
 ```bash
-backend/.venv/bin/python scripts/merge_cost_item_sample_batches.py \
+.venv/bin/python estimator/scripts/merge_cost_item_sample_batches.py \
   --input-dir samples \
   --output samples/cost_item_samples_all.xlsx
 ```
@@ -125,7 +135,7 @@ samples/cost_item_samples_all_dedup_report.csv
 如果总样本文件或去重报告已存在，默认报错。确认要覆盖时显式传：
 
 ```bash
-backend/.venv/bin/python scripts/merge_cost_item_sample_batches.py \
+.venv/bin/python estimator/scripts/merge_cost_item_sample_batches.py \
   --overwrite
 ```
 
@@ -145,7 +155,7 @@ stable_sample_id
 合并总样本后重建本地 embedding index：
 
 ```bash
-backend/.venv/bin/python scripts/build_cost_item_embedding_index.py --overwrite
+.venv/bin/python estimator/scripts/build_cost_item_embedding_index.py --overwrite
 ```
 
 默认读取：
@@ -169,13 +179,13 @@ BAAI/bge-m3
 如果目标索引目录已存在，脚本默认不覆盖；确认要重建时必须显式加：
 
 ```bash
-backend/.venv/bin/python scripts/build_cost_item_embedding_index.py --overwrite
+.venv/bin/python estimator/scripts/build_cost_item_embedding_index.py --overwrite
 ```
 
 也可以按需传参覆盖默认值，例如：
 
 ```bash
-backend/.venv/bin/python scripts/build_cost_item_embedding_index.py \
+.venv/bin/python estimator/scripts/build_cost_item_embedding_index.py \
   --samples samples/cost_item_samples_all.xlsx \
   --output-dir embeddings \
   --model BAAI/bge-m3 \
@@ -210,7 +220,7 @@ index_meta.json
 运行 `query_cost_estimate_llm.py` 前需先启动 LM Studio Server 或兼容 OpenAI `chat/completions` 的本地 LLM 服务；脚本启动时会先检查 `LMSTUDIO_BASE_URL/models`，服务不可用会快速退出。
 
 ```bash
-backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
+.venv/bin/python estimator/scripts/query_cost_estimate_llm.py \
   --text "屋面墙面漏水，想做3mm SBS防水，面积大概500平"
 ```
 
@@ -231,7 +241,7 @@ query/YYYYMMDDHHMM.xlsx
 如果要指定其它索引目录或输出文件：
 
 ```bash
-backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
+.venv/bin/python estimator/scripts/query_cost_estimate_llm.py \
   --index-dir embeddings \
   --text "屋面漏水，想做3mm SBS防水，面积大概500平" \
   --output query/test_result.xlsx \
@@ -354,27 +364,27 @@ item_row_id == "27-1"
 第一批：
 
 ```bash
-backend/.venv/bin/python scripts/run_ingest_batch.py \
+.venv/bin/python estimator/scripts/run_ingest_batch.py \
   --input excel_inputs/audit_ocr_export_20260630_001.xlsx
 ```
 
 当天第二批：
 
 ```bash
-backend/.venv/bin/python scripts/run_ingest_batch.py \
+.venv/bin/python estimator/scripts/run_ingest_batch.py \
   --input excel_inputs/audit_ocr_export_20260630_002.xlsx
 ```
 
 合并所有历史样本：
 
 ```bash
-backend/.venv/bin/python scripts/merge_cost_item_sample_batches.py
+.venv/bin/python estimator/scripts/merge_cost_item_sample_batches.py
 ```
 
 重建 embedding：
 
 ```bash
-backend/.venv/bin/python scripts/build_cost_item_embedding_index.py --overwrite
+.venv/bin/python estimator/scripts/build_cost_item_embedding_index.py --overwrite
 ```
 
 新增 OCR 文件时，不需要人工合并 Excel。每批中间结果都会独立保留，便于检查、回滚和重跑。
@@ -401,7 +411,17 @@ outputs/
 
 如需提交示例数据，应使用脱敏的小样本文件。
 
-### 8.第一阶段启动后端
+### 8. 启动分类服务
 
-cd backend
-.venv/bin/python -m uvicorn app:app --reload
+启动后端：
+
+```bash
+.venv/bin/python -m uvicorn app:app --app-dir classifier/backend --reload
+```
+
+启动前端：
+
+```bash
+cd classifier/frontend
+npm run dev
+```

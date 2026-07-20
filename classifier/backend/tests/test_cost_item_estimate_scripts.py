@@ -21,7 +21,7 @@ except ImportError:
     pd = None
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def load_script_module(name: str, relative_path: str):
@@ -33,13 +33,21 @@ def load_script_module(name: str, relative_path: str):
     return module
 
 
-build_samples_script = load_script_module("build_cost_item_samples", "scripts/build_cost_item_samples.py")
-run_ingest_batch = load_script_module("run_ingest_batch", "scripts/run_ingest_batch.py")
-merge_samples = load_script_module("merge_cost_item_sample_batches", "scripts/merge_cost_item_sample_batches.py")
+build_samples_script = load_script_module(
+    "build_cost_item_samples", "estimator/scripts/build_cost_item_samples.py"
+)
+run_ingest_batch = load_script_module("run_ingest_batch", "estimator/scripts/run_ingest_batch.py")
+merge_samples = load_script_module(
+    "merge_cost_item_sample_batches", "estimator/scripts/merge_cost_item_sample_batches.py"
+)
 
 if np is not None and pd is not None:
-    build_index = load_script_module("build_cost_item_embedding_index", "scripts/build_cost_item_embedding_index.py")
-    query_estimate_llm = load_script_module("query_cost_estimate_llm", "scripts/query_cost_estimate_llm.py")
+    build_index = load_script_module(
+        "build_cost_item_embedding_index", "estimator/scripts/build_cost_item_embedding_index.py"
+    )
+    query_estimate_llm = load_script_module(
+        "query_cost_estimate_llm", "estimator/scripts/query_cost_estimate_llm.py"
+    )
 else:
     build_index = None
     query_estimate_llm = None
@@ -3252,10 +3260,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_legacy_query_entrypoint_removed_and_readme_points_to_official_script(self):
         legacy_name = "query_cost_" "item_estimate.py"
-        self.assertFalse((ROOT / "scripts" / legacy_name).exists())
+        self.assertFalse((ROOT / "estimator" / "scripts" / legacy_name).exists())
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("scripts/query_cost_estimate_llm.py", readme)
-        self.assertNotIn(f"scripts/{legacy_name}", readme)
+        self.assertIn("estimator/scripts/query_cost_estimate_llm.py", readme)
+        self.assertNotIn(f"estimator/scripts/{legacy_name}", readme)
         self.assertNotIn("project_name_embeddings.npy", readme)
         self.assertNotIn("project_detail_embeddings.npy", readme)
         self.assertNotIn("item_text_embeddings.npy", readme)

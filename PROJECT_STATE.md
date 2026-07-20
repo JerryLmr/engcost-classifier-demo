@@ -12,7 +12,7 @@
 - 支持自然语言造价查询：确定性选工程包、展开完整清单并裁剪连续区间；最终项在 Display 内选现有 Option，用代表 Family 展示项目特征，并按 Option 全部 Family 的 `normalized_signature` 从全量 samples 展开价格证据。
 
 ## Recent Changes
-- 新增 `scripts/merge_cost_item_sample_batches.py`，自动合并历史批次样本、追加 `batch_id` / `stable_sample_id`，并输出去重报告。
+- 完成第一轮目录整理：分类前后端归入 `classifier/`，样本与估价脚本归入 `estimator/scripts/`，运行数据和统一 Python `.venv` 保留在仓库根目录。
 - `build_cost_item_embedding_index.py` 默认读取 `samples/cost_item_samples_all.xlsx`，输出 project package / item embedding 索引。
 - 自然语言造价查询的召回证据层次统一为 `matched_project_packages` / `direct_item_hits` → `retrieved_evidence_items` → `candidate_families` → `candidate_display_groups`。
 - 删除 display 预筛选 LLM；`display_option_grouping` 只返回 Family ID 分组，Option ID 由程序稳定生成，非法输出回退为单 Family Option。
@@ -23,6 +23,7 @@
 - 最终价格统计改为按选中 Option 全部 Family 的 `normalized_signature` 精确展开全量 samples；完整证据参与计数和统计，来源样本仍稳定限量展示。
 
 ## Decisions
+- 代码按职责分为 `classifier/backend/`、`classifier/frontend/` 和 `estimator/scripts/`；分类后端与估价脚本共用仓库根目录 `.venv`，估价 CLI 的相对数据路径统一以仓库根目录为基准。
 - 当前阶段不引入数据库、Milvus 或 LangChain；样本合并后重建本地 parquet + npy 索引。
 - OCR xlsx 继续只处理 active sheet，不支持多 sheet 遍历。
 - 批次产物和索引产物不允许静默覆盖，覆盖必须显式传 `--overwrite`。

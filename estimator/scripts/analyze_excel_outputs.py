@@ -7,8 +7,9 @@ import sys
 
 import openpyxl
 
-ROOT = Path(__file__).resolve().parents[1]
-BACKEND_DIR = ROOT / "backend"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = REPO_ROOT / "classifier" / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
@@ -17,6 +18,13 @@ from services.analysis_service import load_records_from_path, summarize_records 
 
 SUMMARY_HEADERS = ["指标", "数值"]
 CLASSIFIED_SUFFIXES = ("_分类结果", "_classified")
+
+
+def resolve_path(raw_path: str) -> Path:
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path.resolve()
 
 
 def parse_args() -> argparse.Namespace:
@@ -123,13 +131,13 @@ def build_focus_rows(records: List[Dict[str, object]]) -> List[List[object]]:
 
 def main() -> int:
     args = parse_args()
-    input_dir = Path(args.input_dir).expanduser().resolve()
+    input_dir = resolve_path(args.input_dir)
     if not input_dir.exists() or not input_dir.is_dir():
         print(f"[ERROR] 输入目录不存在: {input_dir}")
         return 1
 
     output_path = (
-        Path(args.output).expanduser().resolve()
+        resolve_path(args.output)
         if args.output
         else input_dir / "分析汇总.xlsx"
     )

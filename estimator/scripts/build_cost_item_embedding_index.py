@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -116,6 +117,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=32, help="embedding 批大小")
     parser.add_argument("--overwrite", action="store_true", help="若索引输出目录已存在则覆盖")
     return parser.parse_args()
+
+
+def resolve_path(raw_path: str) -> Path:
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path.resolve()
 
 
 def validate_output_dir(output_dir: Path, overwrite: bool) -> None:
@@ -459,8 +467,8 @@ def build_cost_item_embedding_index(
 
 def main() -> int:
     args = parse_args()
-    samples_path = Path(args.samples).expanduser().resolve()
-    output_dir = Path(args.output_dir).expanduser().resolve()
+    samples_path = resolve_path(args.samples)
+    output_dir = resolve_path(args.output_dir)
 
     try:
         validate_output_dir(output_dir, args.overwrite)

@@ -7,3 +7,4 @@ sentence-transformers
 pyarrow
 requests
 python-multipart
+pytest

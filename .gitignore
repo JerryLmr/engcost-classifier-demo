@@ -7,7 +7,7 @@ __pycache__/
 *.pyd
 *.so
 
-# 虚拟环境
+# 仓库统一虚拟环境
 .venv/
 venv/
 env/

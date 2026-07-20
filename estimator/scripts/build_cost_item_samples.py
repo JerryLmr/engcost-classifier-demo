@@ -11,12 +11,20 @@ from typing import Any
 import openpyxl
 
 
-ROOT = Path(__file__).resolve().parents[1]
-BACKEND_DIR = ROOT / "backend"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = REPO_ROOT / "classifier" / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from classifier.unit_normalizer import normalize_unit  # noqa: E402
+
+
+def resolve_path(raw_path: str) -> Path:
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path.resolve()
 
 
 PROJECT_HEADERS = [
@@ -541,8 +549,8 @@ def validate_paths(input_path: Path, output_path: Path, overwrite: bool) -> None
 
 def main() -> int:
     args = parse_args()
-    input_path = Path(args.input_path).expanduser().resolve()
-    output_path = Path(args.output).expanduser().resolve()
+    input_path = resolve_path(args.input_path)
+    output_path = resolve_path(args.output)
 
     try:
         validate_paths(input_path, output_path, args.overwrite)

@@ -11,8 +11,9 @@ from pathlib import Path
 import openpyxl
 
 
-ROOT = Path(__file__).resolve().parents[1]
-BACKEND_DIR = ROOT / "backend"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = REPO_ROOT / "classifier" / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
@@ -638,25 +639,32 @@ def _is_directory_output(raw_output: str, output_path: Path) -> bool:
     )
 
 
+def resolve_path(raw_path: str) -> Path:
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path.resolve()
+
+
 def resolve_single_file_output(input_path: Path, output_arg: str | None) -> Path:
     if not output_arg:
         return input_path.with_name(classified_output_name(input_path)).resolve()
 
     raw_output = output_arg.strip()
-    output_path = Path(raw_output).expanduser()
+    output_path = resolve_path(raw_output)
     if _is_directory_output(raw_output, output_path):
         return (output_path / classified_output_name(input_path)).resolve()
     return output_path.resolve()
 
 
 def _directory_jobs(input_dir: Path, output_arg: str | None, include_classified: bool) -> list[tuple[Path, Path]]:
-    output_dir = Path(output_arg).expanduser().resolve() if output_arg else input_dir / "classified_results"
+    output_dir = resolve_path(output_arg) if output_arg else input_dir / "classified_results"
     excel_files = sorted(path for path in input_dir.iterdir() if not should_skip_file(path, include_classified))
     return [(path, output_dir / classified_output_name(path)) for path in excel_files]
 
 
 def resolve_jobs(input_paths: list[str], output_arg: str | None, include_classified: bool) -> list[tuple[Path, Path]]:
-    paths = [Path(raw).expanduser().resolve() for raw in input_paths]
+    paths = [resolve_path(raw) for raw in input_paths]
     if len(paths) == 1 and paths[0].is_dir():
         return _directory_jobs(paths[0], output_arg, include_classified)
 
@@ -667,7 +675,7 @@ def resolve_jobs(input_paths: list[str], output_arg: str | None, include_classif
         return [(paths[0], resolve_single_file_output(paths[0], output_arg))]
 
     if output_arg:
-        output_dir = Path(output_arg).expanduser().resolve()
+        output_dir = resolve_path(output_arg)
         if output_dir.suffix:
             raise ValueError("多个输入文件时 -o/--output 必须是目录")
     else:

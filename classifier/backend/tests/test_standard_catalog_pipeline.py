@@ -12,8 +12,10 @@ from unittest.mock import patch
 
 import openpyxl
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "backend"))
+ROOT = Path(__file__).resolve().parents[3]
+BACKEND_DIR = ROOT / "classifier" / "backend"
+SCRIPTS_DIR = ROOT / "estimator" / "scripts"
+sys.path.insert(0, str(BACKEND_DIR))
 
 from classifier.alias_matcher import load_text_aliases, match_aliases
 from classifier.catalog_postprocess import postprocess_item_selection
@@ -569,7 +571,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertEqual(records[0]["secondary_candidates"], ["CP-003-01", "外墙面", "面层"])
 
     def test_batch_script_outputs_new_headers_only(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -604,7 +606,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertEqual(worksheet.cell(row=2, column=3).value, OUT_OF_SCOPE_ID)
 
     def test_batch_script_preflight_failure_returns_error_without_output(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         env = os.environ.copy()
         env["LMSTUDIO_BASE_URL"] = "http://127.0.0.1:9/v1"
         with tempfile.TemporaryDirectory() as tmp:
@@ -626,7 +628,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertFalse(output_file.exists())
 
     def test_batch_script_llm_service_error_fails_without_writing_output(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -651,7 +653,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertFalse(output_file.exists())
 
     def test_batch_script_caches_repeated_project_names(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -693,7 +695,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertEqual(worksheet.cell(row=5, column=3).value, "ID-3")
 
     def test_batch_script_cache_reuses_across_files_and_preserves_ocr_fields(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -757,7 +759,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertEqual(second_sheet.cell(row=2, column=14).value, "file-c.pdf")
 
     def test_batch_script_unit_project_name_and_cache_subject_for_numbered_rooms(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -841,7 +843,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertEqual(worksheet.cell(row=3, column=21).value, "A小区屋面维修工程幢")
 
     def test_batch_script_display_name_prefixes_consultation_when_needed(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -898,7 +900,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertEqual(worksheet.cell(row=2, column=21).value, "A小区屋面维修工程幢")
 
     def test_batch_script_uses_unit_project_name_for_cache_and_logs_only(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -969,7 +971,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertNotEqual(worksheet.cell(row=2, column=21).value, "单项工程-安装")
 
     def test_batch_script_cache_subject_uses_aggressive_cache_only_normalize(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -1078,7 +1080,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertEqual(units[0]["ocr_values"]["unit_project_name"], "福泰花苑屋顶漏水维修工程-7幢")
 
     def test_batch_script_aggressive_cache_hits_numbered_fire_door_groups_without_rewriting_fields(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -1167,7 +1169,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                 self.assertEqual(output_items[0]["project_name"], f"防火门更换{row_index - 1}")
 
     def test_batch_script_aggressive_cache_keeps_semantically_different_subjects_separate(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -1238,7 +1240,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertNotEqual(worksheet.cell(row=2, column=21).value, worksheet.cell(row=3, column=21).value)
 
     def test_batch_script_strips_only_trailing_group_project_codes(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -1269,7 +1271,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             )
 
     def test_prepare_merged_items_strips_codes_from_whole_group(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -1298,7 +1300,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertTrue(all(item["sub_project_id"] == "单项工程-安装" for item in prepared))
 
     def test_batch_script_cleans_ocr_project_code_pollution_from_cache_subject_and_rows(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -1382,7 +1384,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
                 self.assertNotIn(code, worksheet.cell(row=2, column=21).value)
 
     def test_batch_script_merges_ocr_pages_cleans_sub_project_and_filters_summary(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -1500,7 +1502,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertTrue(all(row["sub_project_id"] == "单项工程-安装" for row in output_items))
 
     def test_batch_script_outputs_multiple_rows_for_multiple_sub_projects(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -1576,7 +1578,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertEqual(worksheet.cell(row=3, column=3).value, "ID-2")
 
     def test_filter_required_ocr_rows_cli_splits_cleaned_and_removed_rows(self):
-        script = ROOT / "scripts" / "filter_required_ocr_rows.py"
+        script = SCRIPTS_DIR / "filter_required_ocr_rows.py"
         headers = [
             "row_label",
             "file_name",
@@ -1658,7 +1660,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertEqual(removed_sheet.cell(row=3, column=4).value, "missing-two-more")
 
     def test_filter_required_ocr_rows_empty_value_detection(self):
-        script = ROOT / "scripts" / "filter_required_ocr_rows.py"
+        script = SCRIPTS_DIR / "filter_required_ocr_rows.py"
         spec = importlib.util.spec_from_file_location("filter_required_ocr_rows", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)
@@ -1673,7 +1675,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
         self.assertFalse(module.is_empty_required_value(0))
 
     def test_filter_required_ocr_rows_missing_headers_fail_without_outputs(self):
-        script = ROOT / "scripts" / "filter_required_ocr_rows.py"
+        script = SCRIPTS_DIR / "filter_required_ocr_rows.py"
         headers = [
             "file_name",
             "consultation_project_name",
@@ -1714,7 +1716,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertFalse(removed_output.exists())
 
     def test_filter_required_ocr_rows_requires_overwrite_for_existing_outputs(self):
-        script = ROOT / "scripts" / "filter_required_ocr_rows.py"
+        script = SCRIPTS_DIR / "filter_required_ocr_rows.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -1749,7 +1751,7 @@ class StandardCatalogPipelineTestCase(unittest.TestCase):
             self.assertFalse(removed_output.exists())
 
     def test_batch_script_importable(self):
-        script = ROOT / "scripts" / "batch_classify_excel.py"
+        script = SCRIPTS_DIR / "batch_classify_excel.py"
         spec = importlib.util.spec_from_file_location("batch_classify_excel", script)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec)

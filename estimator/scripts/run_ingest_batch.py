@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = Path(__file__).resolve().parent
 EXCEL_SUFFIXES = {".xlsx", ".xlsm"}
 BATCH_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 OCR_EXPORT_PREFIX = "audit_ocr_export_"
@@ -22,7 +23,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_path(raw_path: str) -> Path:
-    return Path(raw_path).expanduser().resolve()
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path.resolve()
 
 
 def validate_batch_id(batch_id: str) -> str:
@@ -52,9 +56,9 @@ def batch_id_from_args(input_path: Path, explicit_batch_id: str | None) -> str:
 
 def batch_outputs(batch_id: str) -> dict[str, Path]:
     return {
-        "cleaned": ROOT / "cleaned_inputs" / batch_id / "ocr_required_cleaned.xlsx",
-        "classified": ROOT / "classified_outputs" / batch_id / "classified_projects.xlsx",
-        "samples": ROOT / "samples" / batch_id / "cost_item_samples.xlsx",
+        "cleaned": REPO_ROOT / "cleaned_inputs" / batch_id / "ocr_required_cleaned.xlsx",
+        "classified": REPO_ROOT / "classified_outputs" / batch_id / "classified_projects.xlsx",
+        "samples": REPO_ROOT / "samples" / batch_id / "cost_item_samples.xlsx",
     }
 
 
@@ -81,21 +85,21 @@ def validate_output_conflicts(outputs: dict[str, Path], overwrite: bool) -> None
 def command_steps(input_path: Path, outputs: dict[str, Path], overwrite: bool) -> list[list[str]]:
     filter_command = [
         sys.executable,
-        str(ROOT / "scripts" / "filter_required_ocr_rows.py"),
+        str(SCRIPT_DIR / "filter_required_ocr_rows.py"),
         str(input_path),
         "--clean-output",
         str(outputs["cleaned"]),
     ]
     classify_command = [
         sys.executable,
-        str(ROOT / "scripts" / "batch_classify_excel.py"),
+        str(SCRIPT_DIR / "batch_classify_excel.py"),
         str(outputs["cleaned"]),
         "-o",
         str(outputs["classified"]),
     ]
     samples_command = [
         sys.executable,
-        str(ROOT / "scripts" / "build_cost_item_samples.py"),
+        str(SCRIPT_DIR / "build_cost_item_samples.py"),
         str(outputs["classified"]),
         "-o",
         str(outputs["samples"]),
@@ -110,7 +114,7 @@ def command_steps(input_path: Path, outputs: dict[str, Path], overwrite: bool) -
 def run_commands(commands: list[list[str]]) -> int:
     for command in commands:
         print("[RUN ] " + " ".join(command), flush=True)
-        completed = subprocess.run(command, cwd=ROOT, check=False)  # noqa: S603
+        completed = subprocess.run(command, cwd=REPO_ROOT, check=False)  # noqa: S603
         if completed.returncode != 0:
             return completed.returncode
     return 0
