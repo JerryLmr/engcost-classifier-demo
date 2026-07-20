@@ -48,6 +48,12 @@ MODULES = [
     "estimator.pricing.price_statistics",
     "estimator.pricing.estimate_calculator",
     "estimator.pricing.summary",
+    "estimator.output.columns",
+    "estimator.output.frames",
+    "estimator.output.formatting",
+    "estimator.output.excel_writer",
+    "estimator.output.explanation",
+    "estimator.query_pipeline",
 ]
 
 

@@ -1,55 +1,44 @@
 # PROJECT STATE
 
 ## Current Milestone
-- Demo 已进入第二阶段：基于已审定清单样本表构建 project package / cost item embedding 索引，为维修项目初案估算提供可追溯的历史单价和金额参考区间。
+- Stage 3 code restructuring completed.
+- Manual fixed-query regression pending.
+- 查询编排、输出 frame、Excel 写入与最终说明已有正式模块；真实固定 query 仍待用户人工回归。
 
 ## System Capabilities
-- 支持单条工程名称分类，返回一级分类、二级分类、维修状态、分类依据、复合工程、紧急维修、白蚁相关和建议复核字段。
-- 支持 OCR Excel 批量分类，只读取 active sheet，并保留 OCR 追溯字段。
-- 支持按批次导入 OCR Excel，独立生成 cleaned、removed、classified 和单批次 cost item samples。
-- 支持自动合并 `samples/*/cost_item_samples.xlsx` 为总样本，并使用不含 `project_code` / `batch_id` 的 `stable_sample_id` 去重。
-- 支持从总样本 `samples/cost_item_samples_all.xlsx` 构建 project package / item embedding 索引，保留样本明细、工程包明细、工程包向量、清单行向量和索引元数据。
-- 支持自然语言造价查询：确定性选工程包、展开完整清单并裁剪连续区间；最终项在 Display 内选现有 Option，用代表 Family 展示项目特征，并按 Option 全部 Family 的 `normalized_signature` 从全量 samples 展开价格证据。
+- 支持 OCR Excel 批次清洗、分类、样本展开与跨批次稳定去重。
+- 支持从总样本构建 project package / item embedding 索引，并保留样本、工程包、向量和索引元数据。
+- 支持自然语言造价查询：约束过滤、工程包与清单召回、Family / Display / Option 候选、连续区间选择、工程量决策、历史数量与价格统计及金额计算。
+- 支持生成固定 sheet 顺序的 XLSX；项目级说明默认关闭，可通过 `--with-explanations` 启用。
+- 支持通过 source_ref、stable_sample_id、family / display / option ID 和 LLM trace 回查估价证据与决策。
 
 ## Recent Changes
-- 完成第一轮目录整理：分类前后端归入 `classifier/`，样本与估价脚本归入 `estimator/scripts/`，运行数据和统一 Python `.venv` 保留在仓库根目录。
-- `build_cost_item_embedding_index.py` 默认读取 `samples/cost_item_samples_all.xlsx`，输出 project package / item embedding 索引。
-- 自然语言造价查询的召回证据层次统一为 `matched_project_packages` / `direct_item_hits` → `retrieved_evidence_items` → `candidate_families` → `candidate_display_groups`。
-- 删除 display 预筛选 LLM；`display_option_grouping` 只返回 Family ID 分组，Option ID 由程序稳定生成，非法输出回退为单 Family Option。
-- range 后新增 Option Selection：单 Option 直接沿用，多 Option 只能选现有 ID，代表 Family 按真实证据确定性选择。
-- 删除旧 `historical_plan_determination` 自由选择链路，新增确定性工程包选择、完整工程展开、连续区间选择和独立 quantity determination。
-- 查询 CLI 新增 `--with-explanations`；项目级和清单级解释默认关闭，XLSX 仍保留既有结构和完整价格、工程量、来源及统计结果。
-- Option Grouping 延后至代表工程连续区间确定后，仅处理最终区间所需 Display；局部 sample lookup 只服务最终估价链路，完整历史工程展示直接读取 samples。
-- 最终价格统计改为按选中 Option 全部 Family 的 `normalized_signature` 精确展开全量 samples；完整证据参与计数和统计，来源样本仍稳定限量展示。
+- Estimator 第一阶段拆分 `ingestion / indexing / retrieval`，相对数据路径统一按仓库根目录解析。
+- Estimator 第二阶段拆分 `candidates / planning / pricing`，quantity decision 与 pricing calculation 保持独立。
+- Estimator Stage 3 新增 `query_pipeline.py` 和 `output/`，正式查询 pipeline 返回既有 `QueryResult`，不写文件。
+- Workbook frames 仅在写 Excel 前由 `build_workbook_frames(result)` 临时生成；sheet 顺序与 `QueryResult` 字段映射只定义一份。
+- `estimator/scripts/query_cost_estimate_llm.py` 收敛为正式命令入口，不再 re-export 业务函数或维护旧 facade。
+- 现有 estimator 测试已改为直接 import 和 patch 正式模块。
 
 ## Decisions
-- 代码按职责分为 `classifier/backend/`、`classifier/frontend/` 和 `estimator/scripts/`；分类后端与估价脚本共用仓库根目录 `.venv`，估价 CLI 的相对数据路径统一以仓库根目录为基准。
-- 当前阶段不引入数据库、Milvus 或 LangChain；样本合并后重建本地 parquet + npy 索引。
-- OCR xlsx 继续只处理 active sheet，不支持多 sheet 遍历。
-- 批次产物和索引产物不允许静默覆盖，覆盖必须显式传 `--overwrite`。
-- `batch_id` 只负责来源追踪；`stable_sample_id` 负责样本去重，且不包含 `project_code` 或 `batch_id`。
-- 索引构建阶段不再调用 LLM 清洗工程名称，只读取 batch 分类产出的 `project_name_text`；为空时 warning 并回退原始工程名称。
-- 查询阶段 LLM 不生成清单名称、项目特征、单位、单价、来源或金额；价格和金额由程序按同一 `fine_signature` 历史样本确定性回填和计算。
-- 工程包选择不调用 LLM：全部召回包参与平均清单数计算，最终候选仅限相似度前 5，距离相同时选择相似度排名更高者。
-- 连续区间和 quantity 使用完整工程包中的绝对 `item_position`；quantity 读取最终代表 Family 的真实清单名称、项目特征和单位。
-- Option 只是一组业务等价的 Family ID，不生成工艺摘要；不确定或选择失败时保留原 Option。
-- 最终价格证据只按 Option 全部 Family 的 `normalized_signature` 从全量 samples 精确匹配；不使用 embedding、不回退本次召回 evidence 或 Family 统计，缺失映射、样本 ID 异常和单位不兼容均直接报错。
-- selected items 必须通过 `stable_sample_id → family_id → display_id` 严格唯一映射；缺失或重复直接报错，不设置兼容 lookup 或旧流程 fallback。
-- 项目级和清单级解释只读取已经确定的工程、区间、quantity 和价格结果，不参与任何选择或计算。
-- dedup_selection 只抑制最终展示项，不创建新 family，不合并 source_refs、本次召回样本、工程量或价格区间。
+- 代码按职责分为 `classifier/` 与 estimator 的 `ingestion / indexing / retrieval / candidates / planning / pricing / output`；估价查询入口仍为 `estimator/scripts/query_cost_estimate_llm.py`。
+- `QueryResult` 是 pipeline 的唯一结果容器，不新增 frames、traces、metadata 或重复 DataFrame 副本。
+- Writer 只接收已准备好的 workbook frames；业务模块和 query pipeline 不依赖旧查询脚本。
+- 当前阶段不引入数据库、Milvus、LangChain、`estimator/cli` 或共享 `estimator/llm` 包。
+- 批次产物、索引产物和查询输出不允许静默覆盖，覆盖必须显式传 `--overwrite`。
+- LLM 不生成单价、来源、清单名称、单位或金额；价格、工程量统计和金额由程序确定性处理。
+- Option 是同一展示项下业务等价 Family 的集合；最终价格证据按 Option Family 的 normalized signature 从全量样本精确展开。
 
 ## Known Limitations
-- 当前分类体系仍是项目内自行定义，个别样本是否属于“体系外”依赖业务口径。
-- 完整分类质量仍依赖本地 LLM 回归，自动测试主要验证链路、字段结构和标准目录 id 校验。
-- OCR 多 sheet 文件需要人工确保数据 sheet 是 active sheet。
-- 当前合并总样本只合并 `samples` sheet，不合并各批次 `parse_errors`。
-- 首次构建或查询 embedding 索引时可能需要下载 `BAAI/bge-m3` 或用户指定的 sentence-transformers 模型。
-- 当前造价查询不对用户 query 额外执行目录分类，也不加一级分类硬过滤；价格区间只作为初案估算参考。
-- 新 fine_signature 聚合偏保守，宁可拆细施工做法，也不跨规格、材料或工艺混合价格。
+- 真实固定 query 尚未在本次职责迁移后人工回归；当前结论只覆盖 mock、import、CLI help 和自动测试。
+- 完整分类质量仍依赖本地 LLM 与真实数据回归；自动测试主要验证链路、字段结构和标准目录 ID 校验。
+- OCR 仍只读取 active sheet；总样本合并只合并 `samples` sheet。
+- 首次构建或查询索引时可能需要下载 `BAAI/bge-m3` 或用户指定模型。
+- 当前造价查询不执行额外目录分类或一级分类硬过滤，价格区间只作为初案参考。
 - 初版不允许跨历史工程补项或创建新清单。
 
 ## Next Steps
-- 使用真实新增 OCR 批次验证批次导入、样本去重报告和索引重建流程。
-- 根据样本规模增长情况，再评估是否引入 FAISS 或其它向量索引。
-- 与业务方确认剩余分类边界后，再决定是否调整分类体系或继续细化目录。
-- 使用屋面 3mm/4mm SBS、五层垂直运输/脚手架和消防主机真实查询回归 Option Selection 与空项目特征展示。
+- 用户使用固定屋面 3mm SBS query 人工比较 Stage 3 前后的 sheet、列、ID、选择、统计、金额、fallback 和 trace。
+- 人工回归通过后再准备 Stage 3 提交。
+- 使用真实新增 OCR 批次验证导入、样本去重和索引重建流程。
+- 根据样本规模增长情况评估是否引入 FAISS 或其它向量索引。

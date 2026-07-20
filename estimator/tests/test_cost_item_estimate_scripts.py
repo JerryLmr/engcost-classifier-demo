@@ -13,6 +13,40 @@ from unittest.mock import patch
 
 import openpyxl
 
+from estimator.candidates import (
+    display_groups as candidate_display_groups_module,
+    families as candidate_families_module,
+    practice_options,
+    signatures,
+)
+from estimator.indexing import index_loader
+from estimator.output import columns as output_columns
+from estimator.output import excel_writer, explanation, frames
+from estimator.planning import (
+    option_selection,
+    package_selection,
+    quantity_determination,
+    range_selection,
+    scenarios,
+)
+from estimator.pricing import (
+    estimate_calculator,
+    evidence_expansion,
+    price_statistics,
+    quantity_statistics as quantity_statistics_module,
+    summary as pricing_summary_module,
+)
+from estimator import query_models, query_pipeline
+from estimator.retrieval import (
+    constraints,
+    evidence_pool,
+    item_retrieval,
+    package_retrieval,
+    query_rewrite,
+    weights as retrieval_weights_module,
+)
+from estimator.scripts import query_cost_estimate_llm as query_cli
+
 try:
     import numpy as np
     import pandas as pd
@@ -45,12 +79,8 @@ if np is not None and pd is not None:
     build_index = load_script_module(
         "build_cost_item_embedding_index", "estimator/scripts/build_cost_item_embedding_index.py"
     )
-    query_estimate_llm = load_script_module(
-        "query_cost_estimate_llm", "estimator/scripts/query_cost_estimate_llm.py"
-    )
 else:
     build_index = None
-    query_estimate_llm = None
 
 
 class MergeCostItemSampleBatchesTestCase(unittest.TestCase):
@@ -528,7 +558,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_query_parse_args_uses_new_top_package_and_item_options(self):
         with patch.object(sys, "argv", ["query_cost_estimate_llm.py", "--text", "屋面漏水"]):
-            args = query_estimate_llm.parse_args()
+            args = query_cli.parse_args()
 
         self.assertEqual(args.index_dir, "embeddings")
         self.assertEqual(args.top_packages, 20)
@@ -566,12 +596,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "--llm-check-timeout",
                     "1.5",
                 ],
-            ), patch.object(query_estimate_llm, "check_lmstudio_service", side_effect=check_service) as check_mock, patch.object(
-                query_estimate_llm,
-                "run_query",
+            ), patch.object(query_cli, "check_lmstudio_service", side_effect=check_service) as check_mock, patch.object(
+                query_cli,
+                "run_estimate_query",
                 side_effect=run_query,
-            ) as run_mock, patch.object(query_estimate_llm, "print_terminal_summary"):
-                exit_code = query_estimate_llm.main()
+            ) as run_mock, patch.object(query_cli, "build_workbook_frames", return_value={}), patch.object(
+                query_cli, "write_estimate_workbook"
+            ), patch.object(query_cli, "print_terminal_summary"):
+                exit_code = query_cli.main()
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(call_order, ["check:1.5", "run_query"])
@@ -586,21 +618,23 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 sys,
                 "argv",
                 ["query_cost_estimate_llm.py", "--text", "屋面漏水", "--output", str(output_path)],
-            ), patch.object(query_estimate_llm, "check_lmstudio_service"), patch.object(
-                query_estimate_llm, "run_query", return_value=result
-            ), patch.object(query_estimate_llm, "print_terminal_summary"), patch("builtins.print") as print_mock:
-                exit_code = query_estimate_llm.main()
+            ), patch.object(query_cli, "check_lmstudio_service"), patch.object(
+                query_cli, "run_estimate_query", return_value=result
+            ), patch.object(query_cli, "build_workbook_frames", return_value={}), patch.object(
+                query_cli, "write_estimate_workbook"
+            ), patch.object(query_cli, "print_terminal_summary"), patch("builtins.print") as print_mock:
+                exit_code = query_cli.main()
 
         self.assertEqual(exit_code, 0)
         print_mock.assert_not_called()
 
     def test_query_main_returns_before_run_query_when_llm_service_unavailable(self):
         with patch.object(sys, "argv", ["query_cost_estimate_llm.py", "--text", "屋面漏水"]), patch.object(
-            query_estimate_llm,
+            query_cli,
             "check_lmstudio_service",
             side_effect=RuntimeError("LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1"),
-        ) as check_mock, patch.object(query_estimate_llm, "run_query") as run_mock, patch("builtins.print") as print_mock:
-            exit_code = query_estimate_llm.main()
+        ) as check_mock, patch.object(query_cli, "run_estimate_query") as run_mock, patch("builtins.print") as print_mock:
+            exit_code = query_cli.main()
 
         self.assertEqual(exit_code, 1)
         check_mock.assert_called_once_with(timeout_seconds=3.0)
@@ -621,7 +655,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             np.save(index_dir / "item_embeddings.npy", np.zeros((len(samples), 2), dtype=np.float32))
             (index_dir / "index_meta.json").write_text('{"model": "demo-model"}', encoding="utf-8")
 
-            loaded_samples, loaded_packages, package_embeddings, item_embeddings, meta = query_estimate_llm.load_index(index_dir)
+            loaded_samples, loaded_packages, package_embeddings, item_embeddings, meta = index_loader.load_index(index_dir)
 
         self.assertEqual(len(loaded_samples), 4)
         self.assertEqual(len(loaded_packages), 3)
@@ -640,9 +674,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "extra_specs": ["3mm SBS"],
             "likely_catalog": {"SHOULD": "IGNORE"},
         }
-        with patch.object(query_estimate_llm, "request_llm_json", return_value=llm_result):
-            rewrite, trace = query_estimate_llm.query_rewrite_for_embedding(
-                "屋面漏水", current_date=query_estimate_llm.date(2026, 7, 14)
+        with patch.object(query_rewrite, "request_llm_json", return_value=llm_result):
+            rewrite, trace = query_rewrite.query_rewrite_for_embedding(
+                "屋面漏水", current_date=query_rewrite.date(2026, 7, 14)
             )
 
         self.assertTrue(rewrite.success)
@@ -653,8 +687,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(trace["stage"], "query_rewrite_for_embedding")
         self.assertIn("当前日期：2026-07-14", trace["prompt"])
 
-        with patch.object(query_estimate_llm, "request_llm_json", side_effect=query_estimate_llm.LLMServiceError("down")):
-            fallback, trace = query_estimate_llm.query_rewrite_for_embedding("屋面漏水")
+        with patch.object(query_rewrite, "request_llm_json", side_effect=query_rewrite.LLMServiceError("down")):
+            fallback, trace = query_rewrite.query_rewrite_for_embedding("屋面漏水")
 
         self.assertFalse(fallback.success)
         self.assertEqual(fallback.project_package_query_text, "屋面漏水")
@@ -665,24 +699,24 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
     def test_query_constraint_validation_accepts_only_standard_locations_and_strict_dates(self):
         for location in ["浙江省嘉兴市", "浙江省杭州市", "江苏省苏州市", "上海市", "北京市"]:
             with self.subTest(location=location):
-                self.assertEqual(query_estimate_llm.validate_query_constraints(location, "", "")[:3], (location, "", ""))
+                self.assertEqual(constraints.validate_query_constraints(location, "", "")[:3], (location, "", ""))
 
         for location in ["嘉兴", "嘉兴市", "平湖市", "浙江省", "浙江省嘉兴市/上海市"]:
             with self.subTest(location=location):
-                normalized, start, end, notes = query_estimate_llm.validate_query_constraints(location, "", "")
+                normalized, start, end, notes = constraints.validate_query_constraints(location, "", "")
                 self.assertEqual((normalized, start, end), ("", "", ""))
                 self.assertTrue(notes)
 
         self.assertEqual(
-            query_estimate_llm.validate_query_constraints("", "2025-07-14", "2026-07-14")[:3],
+            constraints.validate_query_constraints("", "2025-07-14", "2026-07-14")[:3],
             ("", "2025-07-14", "2026-07-14"),
         )
         self.assertEqual(
-            query_estimate_llm.validate_query_constraints("", "2025-13-01", "2025-02-30")[:3],
+            constraints.validate_query_constraints("", "2025-13-01", "2025-02-30")[:3],
             ("", "", ""),
         )
         self.assertEqual(
-            query_estimate_llm.validate_query_constraints("", "2026-01-01", "2025-01-01")[:3],
+            constraints.validate_query_constraints("", "2026-01-01", "2025-01-01")[:3],
             ("", "", ""),
         )
 
@@ -693,53 +727,53 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {"location": "上海市", "consultation_time": "2026-01-01"},
             {"location": "浙江省嘉兴市", "consultation_time": "2025-02-30"},
         ])
-        self.assertEqual(query_estimate_llm.build_constraint_mask(rows, "", "", "").tolist(), [True] * 4)
+        self.assertEqual(constraints.build_constraint_mask(rows, "", "", "").tolist(), [True] * 4)
         self.assertEqual(
-            query_estimate_llm.build_constraint_mask(rows, "浙江省嘉兴市", "2025-07-14", "2026-07-14").tolist(),
+            constraints.build_constraint_mask(rows, "浙江省嘉兴市", "2025-07-14", "2026-07-14").tolist(),
             [True, True, False, False],
         )
-        parsed = query_estimate_llm.parse_consultation_dates(rows["consultation_time"])
+        parsed = constraints.parse_consultation_dates(rows["consultation_time"])
         self.assertEqual(int(parsed.isna().sum()), 1)
 
     def test_constraint_filter_keeps_dataframe_and_embedding_rows_aligned(self):
         rows = pd.DataFrame({"value": ["a", "b", "c"]}, index=[10, 20, 30])
         embeddings = np.array([[1, 0], [2, 0], [3, 0]], dtype=np.float32)
         mask = pd.Series([True, False, True], index=rows.index)
-        filtered_rows, filtered_embeddings = query_estimate_llm.filter_rows_and_embeddings(
+        filtered_rows, filtered_embeddings = constraints.filter_rows_and_embeddings(
             rows, embeddings, mask, "测试数据"
         )
         self.assertEqual(filtered_rows["value"].tolist(), ["a", "c"])
         self.assertEqual(filtered_embeddings.tolist(), [[1.0, 0.0], [3.0, 0.0]])
         with self.assertRaisesRegex(ValueError, "过滤前"):
-            query_estimate_llm.filter_rows_and_embeddings(rows, embeddings[:2], mask, "测试数据")
+            constraints.filter_rows_and_embeddings(rows, embeddings[:2], mask, "测试数据")
 
     def test_empty_constrained_packages_fail_without_fallback_and_empty_direct_items_stay_empty(self):
-        rewrite = query_estimate_llm.QueryRewrite(
+        rewrite = query_models.QueryRewrite(
             "屋面", "屋面工程", "屋面防水", "浙江省嘉兴市", "2025-01-01", "2025-12-31", [], True
         )
         with self.assertRaisesRegex(ValueError, "没有找到同时满足地域和时间约束"):
-            query_estimate_llm.ensure_project_package_candidates(pd.DataFrame(), rewrite)
+            constraints.ensure_project_package_candidates(pd.DataFrame(), rewrite)
 
-        direct = query_estimate_llm.score_direct_items(
+        direct = item_retrieval.score_direct_items(
             pd.DataFrame(columns=["sample_index"]), np.array([], dtype=np.float32), top_items=300
         )
         self.assertTrue(direct.empty)
 
     def test_package_evidence_weights_use_continuous_softmax(self):
-        weights = query_estimate_llm.build_package_evidence_weights(
+        weights = retrieval_weights_module.build_package_evidence_weights(
             ["p1", "p2", "p3"],
             {"p1": 0.9, "p2": 0.6, "p3": 0.7},
             temperature=0.1,
         )
 
-        self.assertEqual(weights.columns.tolist(), query_estimate_llm.PACKAGE_EVIDENCE_WEIGHT_COLUMNS)
+        self.assertEqual(weights.columns.tolist(), retrieval_weights_module.PACKAGE_EVIDENCE_WEIGHT_COLUMNS)
         self.assertAlmostEqual(float(weights["package_evidence_weight"].sum()), 1.0)
         p1 = weights[weights["project_package_id"].eq("p1")].iloc[0]
         p2 = weights[weights["project_package_id"].eq("p2")].iloc[0]
         self.assertGreater(float(p1["package_evidence_weight"]), float(p2["package_evidence_weight"]))
         with self.assertRaisesRegex(ValueError, "必须大于 0"):
-            query_estimate_llm.build_package_evidence_weights(["p1"], {"p1": 0.9}, temperature=0)
-        empty = query_estimate_llm.build_package_evidence_weights([], {}, temperature=0.1)
+            retrieval_weights_module.build_package_evidence_weights(["p1"], {"p1": 0.9}, temperature=0)
+        empty = retrieval_weights_module.build_package_evidence_weights([], {}, temperature=0.1)
         self.assertTrue(empty.empty)
 
     def test_package_recall_dedupes_repeated_packages_before_top_k(self):
@@ -749,7 +783,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         packages = pd.concat([packages, pd.DataFrame([duplicate])], ignore_index=True)
         embeddings = np.array([[0.9, 0.1], [0.2, 0.8], [0.1, 0.9], [1.0, 0.0]], dtype=np.float32)
 
-        matched = query_estimate_llm.score_project_packages(
+        matched = package_retrieval.score_project_packages(
             packages,
             embeddings,
             np.array([1.0, 0.0], dtype=np.float32),
@@ -770,7 +804,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         item_query_similarities = np.array([0.95, 0.2, 0.3, 0.7], dtype=np.float32)
         package_similarity_by_id = {"batch-a::2": 0.9, "batch-a::3": 0.6, "batch-a::4": 0.4}
 
-        retrieved_evidence_items = query_estimate_llm.build_retrieved_evidence_items(
+        retrieved_evidence_items = evidence_pool.build_retrieved_evidence_items(
             samples,
             matched,
             direct,
@@ -820,10 +854,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         candidates["source_ref"] = ["batch-a::2::2-1", "batch-a::5::5-1", "batch-a::6::6-1"]
 
         with patch("builtins.print") as print_mock:
-            families = query_estimate_llm.build_candidate_families(candidates)
+            families = candidate_families_module.build_candidate_families(candidates)
         print_mock.assert_not_called()
 
-        self.assertEqual(families.columns.tolist(), query_estimate_llm.CANDIDATE_FAMILY_COLUMNS)
+        self.assertEqual(families.columns.tolist(), candidate_families_module.CANDIDATE_FAMILY_COLUMNS)
         self.assertEqual(len(families), 2)
         roof3 = families[families["representative_project_description"].str.contains("3.0mm")].iloc[0]
         roof4 = families[families["representative_project_description"].str.contains("4.0mm")].iloc[0]
@@ -842,12 +876,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(roof4["family_id"], "F002")
         self.assertEqual(roof4["本次召回综合单价最低值"], 120.0)
 
-        evidence = query_estimate_llm.attach_family_ids_to_evidence_items(candidates, families)
+        evidence = candidate_families_module.attach_family_ids_to_evidence_items(candidates, families)
         family_by_signature = dict(zip(families["normalized_signature"], families["family_id"], strict=False))
         self.assertEqual(len(evidence), len(candidates))
         self.assertIn("family_id", evidence.columns)
         self.assertIn("normalized_signature", evidence.columns)
-        self.assertFalse(evidence["family_id"].map(query_estimate_llm.cell_text).eq("").any())
+        self.assertFalse(evidence["family_id"].map(signatures.cell_text).eq("").any())
         for _index, row in evidence.iterrows():
             self.assertEqual(row["family_id"], family_by_signature[row["normalized_signature"]])
 
@@ -903,7 +937,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     "item_query_similarity最大值": 0.5,
                 },
             ],
-            columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
+            columns=candidate_families_module.CANDIDATE_FAMILY_COLUMNS,
         )
         evidence = pd.DataFrame(
             [
@@ -914,7 +948,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ]
         )
 
-        groups, group_families = query_estimate_llm.build_candidate_display_groups(families, evidence)
+        groups, group_families = candidate_display_groups_module.build_candidate_display_groups(families, evidence)
 
         self.assertEqual(len(groups), 2)
         roof = groups[groups["display_name"].eq("屋面卷材防水")].iloc[0]
@@ -932,9 +966,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"family_id": "F001", "representative_cost_item_name": "垃圾外运", "representative_project_description": "按项", "unit": "项", "unit_normalized": "项", "本次召回样本数": 1, "本次召回工程包数": 1, "item_query_similarity最大值": 0.9},
                 {"family_id": "F002", "representative_cost_item_name": "垃圾外运", "representative_project_description": "按方", "unit": "m³", "unit_normalized": "m³", "本次召回样本数": 1, "本次召回工程包数": 1, "item_query_similarity最大值": 0.8},
             ],
-            columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
+            columns=candidate_families_module.CANDIDATE_FAMILY_COLUMNS,
         )
-        groups, _families = query_estimate_llm.build_candidate_display_groups(families, pd.DataFrame([{"family_id": "F001", "project_package_id": "p1"}, {"family_id": "F002", "project_package_id": "p2"}]))
+        groups, _families = candidate_display_groups_module.build_candidate_display_groups(families, pd.DataFrame([{"family_id": "F001", "project_package_id": "p1"}, {"family_id": "F002", "project_package_id": "p2"}]))
 
         self.assertEqual(len(groups), 2)
         self.assertEqual(set(groups["unit"]), {"项", "m³"})
@@ -945,7 +979,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"family_id": "F001", "representative_cost_item_name": "屋面卷材防水", "representative_project_description": "3mm", "unit": "m²", "unit_normalized": "m²", "本次召回样本数": 2, "本次召回工程包数": 2, "item_query_similarity最大值": 0.9},
                 {"family_id": "F002", "representative_cost_item_name": "屋面卷材防水", "representative_project_description": "4mm", "unit": "m²", "unit_normalized": "m²", "本次召回样本数": 2, "本次召回工程包数": 2, "item_query_similarity最大值": 0.8},
             ],
-            columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
+            columns=candidate_families_module.CANDIDATE_FAMILY_COLUMNS,
         )
         evidence = pd.DataFrame(
             [
@@ -956,7 +990,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ]
         )
 
-        groups, _families = query_estimate_llm.build_candidate_display_groups(families, evidence)
+        groups, _families = candidate_display_groups_module.build_candidate_display_groups(families, evidence)
 
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups.iloc[0]["retrieval_package_count"], 3)
@@ -967,7 +1001,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"display_id": "D001", "display_key": "a|m²", "display_name": "A", "unit": "m²", "family_count": 2, "family_ids": "F001,F002", "top_family_examples": "[]"},
                 {"display_id": "D002", "display_key": "b|m²", "display_name": "B", "unit": "m²", "family_count": 1, "family_ids": "F003", "top_family_examples": "[]"},
             ],
-            columns=query_estimate_llm.CANDIDATE_DISPLAY_GROUP_COLUMNS,
+            columns=candidate_display_groups_module.CANDIDATE_DISPLAY_GROUP_COLUMNS,
         )
         display_families = pd.DataFrame(
             [
@@ -990,10 +1024,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"project_package_id": "p2", "package_query_similarity": 0.8, "package_evidence_weight": 0.3},
                 {"project_package_id": "p3", "package_query_similarity": 0.7, "package_evidence_weight": 0.2},
             ],
-            columns=query_estimate_llm.PACKAGE_EVIDENCE_WEIGHT_COLUMNS,
+            columns=retrieval_weights_module.PACKAGE_EVIDENCE_WEIGHT_COLUMNS,
         )
 
-        output = query_estimate_llm.attach_display_support_ratios(groups, display_families, evidence, weights)
+        output = candidate_display_groups_module.attach_display_support_ratios(groups, display_families, evidence, weights)
         d001 = output[output["display_id"].eq("D001")].iloc[0]
 
         self.assertAlmostEqual(float(d001["retrieval_package_support_ratio"]), 0.8)
@@ -1002,7 +1036,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertAlmostEqual(float(d001["direct_item_similarity_max"]), 0.9)
 
     def test_normalize_display_description_repairs_only_leading_ocr_numbering(self):
-        normalize = query_estimate_llm.normalize_display_description
+        normalize = candidate_display_groups_module.normalize_display_description
 
         self.assertEqual(normalize("1.3.0mmSBS防水卷材"), "3.0mmSBS防水卷材")
         self.assertEqual(normalize("1.4.0mmSBS防水卷材"), "4.0mmSBS防水卷材")
@@ -1015,7 +1049,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         rows["item_row_id"] = ""
         warnings: list[str] = []
 
-        recovered = query_estimate_llm.attach_source_refs(rows, warnings)
+        recovered = evidence_pool.attach_source_refs(rows, warnings)
 
         self.assertEqual(recovered.iloc[0]["project_key"], "batch-a::2")
         self.assertEqual(recovered.iloc[0]["item_row_id"], "2-1")
@@ -1046,7 +1080,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         samples["stable_sample_id"] = [f"sid-{index}" for index in range(len(samples))]
         samples["source_ref"] = ["duplicate-ref" if index < 2 else f"ref-{index}" for index in range(len(samples))]
 
-        examples = query_estimate_llm.build_matched_project_examples(matched, samples)
+        examples = package_selection.build_matched_project_examples(matched, samples)
 
         self.assertEqual([example["project_package_id"] for example in examples], ["P1", "P2", "P3"])
         self.assertEqual([item["cost_item_name"] for item in examples[0]["items"]], ["第一项", "第二项", "第十项"])
@@ -1062,7 +1096,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "project_key": "batch::2", "item_row_id": "2-1", "cost_item_name": "清单项",
         }])
 
-        examples = query_estimate_llm.build_matched_project_examples(matched, samples)
+        examples = package_selection.build_matched_project_examples(matched, samples)
 
         self.assertEqual(examples[0]["items"][0]["source_ref"], "batch::2::2-1")
 
@@ -1079,20 +1113,20 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         candidate_families = pd.DataFrame([
             {"family_id": "F-A", "representative_cost_item_name": "A", "unit": "m²", "本次召回样本数": 1},
             {"family_id": "F-B", "representative_cost_item_name": "B", "unit": "m²", "本次召回样本数": 1},
-        ], columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS)
+        ], columns=candidate_families_module.CANDIDATE_FAMILY_COLUMNS)
         matched = pd.DataFrame([{"rank": 1, "project_package_id": "P1"}])
         samples = pd.DataFrame([
             {"project_package_id": "P1", "stable_sample_id": "sid-a", "seq": 1, "cost_item_name": "Display A 清单"},
             {"project_package_id": "P1", "stable_sample_id": "sid-b", "seq": 2, "cost_item_name": "Display B 清单"},
         ])
 
-        required, filtered_groups, filtered_families = query_estimate_llm.filter_required_display_groups(
+        required, filtered_groups, filtered_families = candidate_display_groups_module.filter_required_display_groups(
             plan_items, display_groups, display_families
         )
-        grouped, *_rest = query_estimate_llm.generate_display_option_grouping(
+        grouped, *_rest = practice_options.generate_display_option_grouping(
             filtered_groups, filtered_families, candidate_families, []
         )
-        examples = query_estimate_llm.build_matched_project_examples(matched, samples)
+        examples = package_selection.build_matched_project_examples(matched, samples)
 
         self.assertEqual(required, ["D-A"])
         self.assertEqual(grouped["display_id"].tolist(), ["D-A"])
@@ -1115,7 +1149,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {"family_id": "F002", "display_id": "D001"},
         ])
 
-        result = query_estimate_llm.attach_family_and_display_ids_to_selected_items(
+        result = option_selection.attach_family_and_display_ids_to_selected_items(
             selected, evidence, display_families
         )
 
@@ -1125,13 +1159,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
     def test_selected_items_mapping_rejects_missing_and_duplicate_mappings(self):
         selected = pd.DataFrame([{"stable_sample_id": "sid-1"}])
         with self.assertRaisesRegex(ValueError, "每行必须唯一映射"):
-            query_estimate_llm.attach_family_and_display_ids_to_selected_items(
+            option_selection.attach_family_and_display_ids_to_selected_items(
                 selected,
                 pd.DataFrame([{"stable_sample_id": "sid-2", "family_id": "F001"}]),
                 pd.DataFrame([{"family_id": "F001", "display_id": "D001"}]),
             )
         with self.assertRaisesRegex(ValueError, "family_id 必须唯一映射"):
-            query_estimate_llm.attach_family_and_display_ids_to_selected_items(
+            option_selection.attach_family_and_display_ids_to_selected_items(
                 selected,
                 pd.DataFrame([{"stable_sample_id": "sid-1", "family_id": "F001"}]),
                 pd.DataFrame([
@@ -1154,7 +1188,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {"display_id": "D003", "family_id": "F004"},
         ])
 
-        required, filtered_groups, filtered_families = query_estimate_llm.filter_required_display_groups(
+        required, filtered_groups, filtered_families = candidate_display_groups_module.filter_required_display_groups(
             plan_items, groups, families
         )
 
@@ -1171,11 +1205,11 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"practice_option_id": "D001-O02", "family_ids": ["F002"]},
             ],
         }])
-        result = query_estimate_llm.attach_original_practice_options(plan_items, displays)
+        result = option_selection.attach_original_practice_options(plan_items, displays)
         self.assertEqual(result["practice_option_id"].tolist(), ["D001-O01", "D001-O02"])
 
         with self.assertRaisesRegex(ValueError, "唯一映射"):
-            query_estimate_llm.attach_original_practice_options(
+            option_selection.attach_original_practice_options(
                 plan_items.head(1),
                 pd.DataFrame([{
                     "practice_options": [
@@ -1226,10 +1260,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"family_id": "F001", "本次召回综合单价最低值": 80, "本次召回综合单价中位数": 90, "本次召回综合单价最高值": 100},
                 {"family_id": "F002", "本次召回综合单价最低值": 100, "本次召回综合单价中位数": 110, "本次召回综合单价最高值": 120},
             ],
-            columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
+            columns=candidate_families_module.CANDIDATE_FAMILY_COLUMNS,
         )
 
-        prompt, record = query_estimate_llm.build_display_option_grouping_prompt(
+        prompt, record = practice_options.build_display_option_grouping_prompt(
             display_groups, display_families, candidate_families
         )
 
@@ -1273,7 +1307,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ]
         )
 
-        displays_with_options, meta = query_estimate_llm.parse_display_option_grouping_result(
+        displays_with_options, meta = practice_options.parse_display_option_grouping_result(
             self.grouping_result(["F004", "F007", "F010"], [["F007", "F004"], ["F010"]]),
             display_groups,
             display_families,
@@ -1303,7 +1337,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         display_families = pd.DataFrame(
             [{"display_id": "D001", "family_id": family_id, "unit": "m²"} for family_id in ["F001", "F002", "F003", "F004"]]
         )
-        displays_with_options, meta = query_estimate_llm.parse_display_option_grouping_result(
+        displays_with_options, meta = practice_options.parse_display_option_grouping_result(
             self.grouping_result(
                 ["F001", "F002", "F003", "F004"],
                 [["F003", "F004"], ["F002", "F001"]],
@@ -1388,7 +1422,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                     {"display_id": "D001", "family_id": family_id, "unit": "m²", "本次召回样本数": 1}
                     for family_id in family_ids
                 ])
-                grouped, meta = query_estimate_llm.parse_display_option_grouping_result(
+                grouped, meta = practice_options.parse_display_option_grouping_result(
                     self.grouping_result(family_ids, groups, tags), displays, display_families, []
                 )
                 options = grouped.loc[0, "practice_options"]
@@ -1411,7 +1445,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         def assert_invalid(result, message):
             with self.assertRaisesRegex(ValueError, message):
-                query_estimate_llm.parse_display_option_grouping_result(
+                practice_options.parse_display_option_grouping_result(
                     result,
                     display_groups,
                     display_families,
@@ -1463,7 +1497,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "单位必须一致"):
-            query_estimate_llm.parse_display_option_grouping_result(
+            practice_options.parse_display_option_grouping_result(
                 self.grouping_result(["F001", "F002"], [["F001", "F002"]]),
                 display_groups,
                 display_families,
@@ -1490,7 +1524,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"family_id": "F002", "representative_cost_item_name": "墙面防水", "representative_project_description": "1.5mm涂膜", "unit": "m²", "unit_normalized": "m²", "本次召回样本数": 2},
                 {"family_id": "F003", "representative_cost_item_name": "墙面防水", "representative_project_description": "2.0mm涂膜", "unit": "m²", "unit_normalized": "m²", "本次召回样本数": 3},
             ],
-            columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
+            columns=candidate_families_module.CANDIDATE_FAMILY_COLUMNS,
         )
         response = types.SimpleNamespace(
             content=self.grouping_result(
@@ -1501,12 +1535,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             raw_content="{}",
         )
 
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response) as llm_mock:
+        with patch.object(practice_options, "request_llm_json_with_usage", return_value=response) as llm_mock:
             (
                 displays_with_options, _success, _fallback, _error, _prompt,
                 _summary_trace, meta, trace_frame, per_display_traces,
-            ) = query_estimate_llm.generate_display_option_grouping(
-                display_groups, display_families, candidate_families, []
+            ) = practice_options.generate_display_option_grouping(
+                display_groups, display_families, candidate_families, [], request_fn=llm_mock
             )
 
         llm_mock.assert_called_once()
@@ -1547,18 +1581,18 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         families = pd.DataFrame([
             {"family_id": family_id, "representative_cost_item_name": family_id, "unit": "m²", "本次召回样本数": 1}
             for family_id in ["F001", "F002", "F003", "F004"]
-        ], columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS)
+        ], columns=candidate_families_module.CANDIDATE_FAMILY_COLUMNS)
         responses = [
             types.SimpleNamespace(content=self.grouping_result(["F001", "F002"], [["F001", "F999"]]), usage={"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13}, raw_content="bad"),
             types.SimpleNamespace(content=self.grouping_result(["F003", "F004"], [["F003", "F004"]]), usage={"prompt_tokens": 21, "completion_tokens": 3, "total_tokens": 24}, raw_content="good"),
         ]
         warnings = []
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage", side_effect=responses) as llm_mock:
+        with patch.object(practice_options, "request_llm_json_with_usage", side_effect=responses) as llm_mock:
             (
                 grouped, success, fallback, error, _prompt, _summary_trace,
                 _meta, _trace_frame, per_display_traces,
-            ) = query_estimate_llm.generate_display_option_grouping(
-                displays, display_families, families, warnings
+            ) = practice_options.generate_display_option_grouping(
+                displays, display_families, families, warnings, request_fn=llm_mock
             )
         self.assertEqual(llm_mock.call_count, 2)
         first_input = llm_mock.call_args_list[0].args[0].split("【输入数据】", 1)[1]
@@ -1642,15 +1676,15 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"family_id": "F002", "unit": "m²", "unit_normalized": "m²"},
                 {"family_id": "F003", "unit": "m²", "unit_normalized": "m²"},
             ],
-            columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS,
+            columns=candidate_families_module.CANDIDATE_FAMILY_COLUMNS,
         )
 
-        trace = query_estimate_llm.build_display_option_grouping_trace_frame(displays_with_options, display_families, families).set_index("family_id")
+        trace = practice_options.build_display_option_grouping_trace_frame(displays_with_options, display_families, families).set_index("family_id")
 
-        self.assertIn("practice_option_id", query_estimate_llm.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS)
-        self.assertNotIn("is_current_default_option", query_estimate_llm.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS)
-        self.assertNotIn("included_in_current_price_scope", query_estimate_llm.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS)
-        self.assertNotIn("group_reason", query_estimate_llm.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS)
+        self.assertIn("practice_option_id", practice_options.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS)
+        self.assertNotIn("is_current_default_option", practice_options.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS)
+        self.assertNotIn("included_in_current_price_scope", practice_options.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS)
+        self.assertNotIn("group_reason", practice_options.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS)
         self.assertEqual(trace.index.tolist(), ["F001", "F002", "F003"])
         self.assertEqual(trace.loc["F001", "practice_option_id"], "D001-O01")
         self.assertEqual(trace.loc["F003", "practice_option_id"], "D001-O02")
@@ -1666,7 +1700,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
                 {"project_package_id": "P6", "package_query_similarity": 0.99, "item_count": 100},
             ]
         )
-        selected, ranked = query_estimate_llm.select_representative_project_package(packages)
+        selected, ranked = package_selection.select_representative_project_package(packages)
 
         self.assertAlmostEqual(ranked["item_count_average"].iloc[0], 21.5)
         self.assertEqual(ranked["project_package_id"].tolist()[:3], ["P6", "P1", "P2"])
@@ -1687,11 +1721,11 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ]), "first"),
         ]:
             with self.subTest(expected=expected):
-                selected, ranked = query_estimate_llm.select_representative_project_package(packages)
+                selected, ranked = package_selection.select_representative_project_package(packages)
                 self.assertEqual(selected["project_package_id"], expected)
                 self.assertEqual(len(ranked), len(packages))
         with self.assertRaisesRegex(ValueError, "为空"):
-            query_estimate_llm.select_representative_project_package(pd.DataFrame())
+            package_selection.select_representative_project_package(pd.DataFrame())
 
     def test_expand_selected_project_uses_all_items_original_order_and_positions(self):
         samples = pd.DataFrame([
@@ -1701,11 +1735,11 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {"project_package_id": "P1", "stable_sample_id": "s2", "item_row_id": "7-2", "seq": 2},
         ])
         selected = pd.Series({"project_package_id": "P1", "item_count": 3})
-        output = query_estimate_llm.expand_selected_project_items(samples, selected)
+        output = range_selection.expand_selected_project_items(samples, selected)
         self.assertEqual(output["stable_sample_id"].tolist(), ["s1", "s2", "s3"])
         self.assertEqual(output["item_position"].tolist(), [0, 1, 2])
         with self.assertRaisesRegex(ValueError, "数量与 item_count 不一致"):
-            query_estimate_llm.expand_selected_project_items(
+            range_selection.expand_selected_project_items(
                 samples, pd.Series({"project_package_id": "P1", "item_count": 2})
             )
 
@@ -1715,7 +1749,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ({"start_item_position": 2, "end_item_position": 2}, (2, 2)),
             ({"start_item_position": 0, "end_item_position": 4}, (0, 4)),
         ]:
-            self.assertEqual(query_estimate_llm.validate_contiguous_range(payload, 5), expected)
+            self.assertEqual(range_selection.validate_contiguous_range(payload, 5), expected)
         invalid = [
             {"start_item_position": -1, "end_item_position": 2},
             {"start_item_position": 0, "end_item_position": 5},
@@ -1727,7 +1761,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         ]
         for payload in invalid:
             with self.subTest(payload=payload), self.assertRaises(ValueError):
-                query_estimate_llm.validate_contiguous_range(payload, 5)
+                range_selection.validate_contiguous_range(payload, 5)
 
     def test_range_prompt_uses_minimal_items_but_quantity_prompt_keeps_quantity_context(self):
         items = pd.DataFrame([{
@@ -1738,7 +1772,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "unit_normalized": "m²",
             "quantity": 100,
         }])
-        range_prompt = query_estimate_llm.build_contiguous_item_range_prompt("屋面维修", "历史工程", items)
+        range_prompt = range_selection.build_contiguous_item_range_prompt("屋面维修", "历史工程", items)
         range_payload = json.loads(range_prompt.split("输入：\n", 1)[1])
         self.assertEqual(
             range_payload["items"],
@@ -1749,7 +1783,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             }],
         )
 
-        quantity_prompt = query_estimate_llm.build_quantity_determination_prompt("屋面维修", items)
+        quantity_prompt = quantity_determination.build_quantity_determination_prompt("屋面维修", items)
         quantity_payload = json.loads(quantity_prompt.split("输入：\n", 1)[1])
         self.assertEqual(set(quantity_payload), {"user_query", "items"})
         self.assertEqual(quantity_payload["items"], [{
@@ -1772,12 +1806,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         ]
         for failure in failures:
             with self.subTest(failure=repr(failure)), patch.object(
-                query_estimate_llm,
+                range_selection,
                 "request_llm_json_with_usage",
                 side_effect=failure if isinstance(failure, Exception) else None,
                 return_value=None if isinstance(failure, Exception) else failure,
-            ):
-                start, end, meta = query_estimate_llm.select_contiguous_item_range("需求", "工程", items)
+            ) as request_mock:
+                start, end, meta = range_selection.select_contiguous_item_range(
+                    "需求", "工程", items, request_fn=request_mock
+                )
                 self.assertEqual((start, end), (0, 2))
                 self.assertTrue(meta["fallback"])
                 self.assertEqual(meta["range_selection_status"], "fallback_full_project")
@@ -1802,7 +1838,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_quantity_explicit_binding_does_not_copy_or_scale(self):
         items = self.quantity_rule_items()
-        determinations = query_estimate_llm.validate_quantity_determination_result(
+        determinations = quantity_determination.validate_quantity_determination_result(
             self.quantity_result(explicit_position=4), items
         )
         stats = {
@@ -1810,7 +1846,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             4: {},
             6: {"sample_count": 3, "minimum": 40, "median": 60, "maximum": 80},
         }
-        quantities = query_estimate_llm.calculate_quantities(items, determinations, stats, {})
+        quantities = estimate_calculator.calculate_quantities(items, determinations, stats, {})
         self.assertEqual(quantities[0]["quantity"]["value"], 20)
         self.assertEqual(quantities[4]["quantity"]["value"], 500)
         self.assertEqual(quantities[6]["quantity"]["value"], 60)
@@ -1819,7 +1855,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
     def test_quantity_result_strict_validation(self):
         items = self.quantity_rule_items()
         valid = self.quantity_result(explicit_position=4)
-        parsed = query_estimate_llm.validate_quantity_determination_result(valid, items)
+        parsed = quantity_determination.validate_quantity_determination_result(valid, items)
         self.assertEqual(set(parsed), {0, 4, 6})
         invalid_results = [
             {**valid, "extra": 1},
@@ -1834,7 +1870,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         ]
         for result in invalid_results:
             with self.subTest(result=result), self.assertRaises(ValueError):
-                query_estimate_llm.validate_quantity_determination_result(result, items)
+                quantity_determination.validate_quantity_determination_result(result, items)
 
     def test_quantity_queries_without_direct_item_quantity_remain_historical_median(self):
         items = self.quantity_rule_items()
@@ -1846,9 +1882,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         ]
         for query in queries:
             with self.subTest(query=query):
-                prompt = query_estimate_llm.build_quantity_determination_prompt(query, items)
+                prompt = quantity_determination.build_quantity_determination_prompt(query, items)
                 self.assertEqual(json.loads(prompt.split("输入：\n", 1)[1])["user_query"], query)
-                parsed = query_estimate_llm.validate_quantity_determination_result(
+                parsed = quantity_determination.validate_quantity_determination_result(
                     self.quantity_result(), items
                 )
                 self.assertEqual(
@@ -1867,12 +1903,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {"stable_sample_id": "s6", "unit": "m²", "quantity": 0},
             {"stable_sample_id": "s7", "unit": "m²", "quantity": "abc"},
         ])
-        stats = query_estimate_llm.build_quantity_statistics(samples, "m²")
+        stats = quantity_statistics_module.build_quantity_statistics(samples, "m²")
         self.assertEqual(stats["sample_count"], 3)
         self.assertEqual(stats["minimum"], 100)
         self.assertEqual(stats["median"], 200)
         self.assertEqual(stats["maximum"], 10000)
-        simple_stats = query_estimate_llm.build_quantity_statistics(pd.DataFrame([
+        simple_stats = quantity_statistics_module.build_quantity_statistics(pd.DataFrame([
             {"stable_sample_id": "a", "unit": "m²", "quantity": 100},
             {"stable_sample_id": "b", "unit": "m²", "quantity": 200},
             {"stable_sample_id": "c", "unit": "m²", "quantity": 300},
@@ -1887,7 +1923,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "quantity_source": "historical_median", "quantity": None, "explanation": "没有用户数量",
         }}
         warnings = []
-        quantities = query_estimate_llm.calculate_quantities(
+        quantities = estimate_calculator.calculate_quantities(
             items, determinations,
             {0: {"sample_count": 0, "minimum": None, "median": None, "maximum": None}},
             {"best": {"quantity": 88, "unit": "m²"}}, warnings,
@@ -1897,7 +1933,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertIn("quantity_median_unavailable:0", warnings)
         self.assertIn("quantity_best_sample_fallback:0", warnings)
         with self.assertRaisesRegex(ValueError, "无有效工程量"):
-            query_estimate_llm.calculate_quantities(
+            estimate_calculator.calculate_quantities(
                 items, determinations, {0: {"median": None}}, {"best": {"quantity": None, "unit": "m²"}}
             )
 
@@ -1925,22 +1961,24 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {"stable_sample_id": "s3", "normalized_signature": "sig", "unit": "m²", "quantity": 300},
         ])
         warnings = []
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage", side_effect=RuntimeError("down")):
-            determinations, _prompt, trace = query_estimate_llm.generate_quantity_determination(
-                "未提供数量", "P1", items, warnings
+        with patch.object(
+            quantity_determination, "request_llm_json_with_usage", side_effect=RuntimeError("down")
+        ) as request_mock:
+            determinations, _prompt, trace = quantity_determination.generate_quantity_determination(
+                "未提供数量", "P1", items, warnings, request_fn=request_mock
             )
-        display_map, option_map = query_estimate_llm.display_option_maps(displays)
-        expanded = query_estimate_llm.expand_samples_for_option(
+        display_map, option_map = practice_options.display_option_maps(displays)
+        expanded = evidence_expansion.expand_samples_for_option(
             option_map[("D1", "D1-O01")], display_map["D1"], families, samples
         )
-        quantity_statistics = {4: query_estimate_llm.build_quantity_statistics(expanded, "m²")}
-        quantities = query_estimate_llm.calculate_quantities(
+        quantity_statistics = {4: quantity_statistics_module.build_quantity_statistics(expanded, "m²")}
+        quantities = estimate_calculator.calculate_quantities(
             items, determinations, quantity_statistics, lookup, warnings
         )
-        scenario = query_estimate_llm.build_scenario_from_plan_items(
+        scenario = scenarios.build_scenario_from_plan_items(
             "P1", items, lookup, quantities
         )
-        trace = query_estimate_llm.attach_quantity_results_to_trace(
+        trace = quantity_determination.attach_quantity_results_to_trace(
             trace, determinations, quantities
         )
         self.assertEqual(scenario.items[0].quantity["value"], 200)
@@ -1954,7 +1992,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         lookup = {"sid": {
             "project_package_id": "P1", "source_ref": "ref", "display_id": "D1", "practice_option_id": "D1-O2"
         }}
-        scenario = query_estimate_llm.build_scenario_from_plan_items(
+        scenario = scenarios.build_scenario_from_plan_items(
             "P1", plan_items, lookup, {5: {
                 "quantity": {"type": "exact", "value": 1},
                 "quantity_reason": "依据", "quantity_source": "user_explicit",
@@ -1975,9 +2013,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "representative_project_description": "", "unit": "台", "normalized_signature": "电话主机||台",
             "本次召回样本数": 1,
         }])
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage") as llm_mock:
-            selected, trace, llm_traces = query_estimate_llm.select_final_options(
-                "消防主机", plan, lookup, displays, families, []
+        with patch.object(option_selection, "request_llm_json_with_usage") as llm_mock:
+            selected, trace, llm_traces = option_selection.select_final_options(
+                "消防主机", plan, lookup, displays, families, [], request_fn=llm_mock
             )
         llm_mock.assert_not_called()
         self.assertEqual(selected.loc[0, "project_description"], "")
@@ -2000,9 +2038,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         response = types.SimpleNamespace(
             content={"decision": "explicit_match", "selected_option_id": "D1-O02"}, usage={}, raw_content="{}"
         )
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response) as llm_mock:
-            selected, trace, _llm_traces = query_estimate_llm.select_final_options(
-                "使用3mm SBS", plan, lookup, displays, families, []
+        with patch.object(option_selection, "request_llm_json_with_usage", return_value=response) as llm_mock:
+            selected, trace, _llm_traces = option_selection.select_final_options(
+                "使用3mm SBS", plan, lookup, displays, families, [], request_fn=llm_mock
             )
         prompt = llm_mock.call_args.args[0]
         self.assertNotIn('"family_id"', prompt)
@@ -2024,13 +2062,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {"family_id": "F2", "project_package_id": "P2"},
             {"family_id": "F3", "project_package_id": ""},
         ])
-        supported = query_estimate_llm.attach_option_support_counts(displays, evidence)
+        supported = practice_options.attach_option_support_counts(displays, evidence)
         options = supported.loc[0, "practice_options"]
         self.assertEqual((options[0]["option_sample_count"], options[0]["option_package_count"]), (3, 2))
         self.assertEqual((options[1]["option_sample_count"], options[1]["option_package_count"]), (1, 0))
 
     def test_most_supported_option_uses_sample_package_original_and_stable_ties(self):
-        choose = query_estimate_llm.choose_most_supported_option
+        choose = option_selection.choose_most_supported_option
         options = [
             {"practice_option_id": "O1", "option_sample_count": 2, "option_package_count": 1},
             {"practice_option_id": "O2", "option_sample_count": 3, "option_package_count": 1},
@@ -2062,17 +2100,19 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         no_match = types.SimpleNamespace(
             content={"decision": "no_explicit_match", "selected_option_id": ""}, usage={}, raw_content="{}"
         )
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=no_match):
-            selected, trace, _ = query_estimate_llm.select_final_options(
-                "屋面漏水维修", plan, lookup, displays, families, [], evidence
+        with patch.object(option_selection, "request_llm_json_with_usage", return_value=no_match) as request_mock:
+            selected, trace, _ = option_selection.select_final_options(
+                "屋面漏水维修", plan, lookup, displays, families, [], evidence,
+                request_fn=request_mock,
             )
         self.assertEqual(selected.loc[0, "selected_option_id"], "D1-O02")
         self.assertEqual(trace.loc[0, "selection_reason"], "no_explicit_match_selected_by_sample_count")
 
         warnings = []
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage", side_effect=RuntimeError("down")):
-            selected, trace, _ = query_estimate_llm.select_final_options(
-                "屋面漏水维修", plan, lookup, displays, families, warnings, evidence
+        with patch.object(option_selection, "request_llm_json_with_usage", side_effect=RuntimeError("down")) as request_mock:
+            selected, trace, _ = option_selection.select_final_options(
+                "屋面漏水维修", plan, lookup, displays, families, warnings, evidence,
+                request_fn=request_mock,
             )
         self.assertEqual(selected.loc[0, "selected_option_id"], "D1-O02")
         self.assertEqual(trace.loc[0, "selection_reason"], "llm_failed_selected_by_support")
@@ -2088,9 +2128,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 response = types.SimpleNamespace(content=invalid, usage={}, raw_content="{}")
                 warnings = []
-                with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response):
-                    selected, trace, _ = query_estimate_llm.select_final_options(
-                        "屋面漏水维修", plan, lookup, displays, families, warnings, evidence
+                with patch.object(option_selection, "request_llm_json_with_usage", return_value=response) as request_mock:
+                    selected, trace, _ = option_selection.select_final_options(
+                        "屋面漏水维修", plan, lookup, displays, families, warnings, evidence,
+                        request_fn=request_mock,
                     )
                 self.assertEqual(selected.loc[0, "selected_option_id"], "D1-O02")
                 self.assertEqual(trace.loc[0, "selection_reason"], "llm_failed_selected_by_support")
@@ -2101,13 +2142,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "F1": pd.Series({"本次召回样本数": 1, "本次召回工程包数": 1}),
             "F2": pd.Series({"本次召回样本数": 3, "本次召回工程包数": 1}),
         }
-        selected, reason = query_estimate_llm.choose_representative_family(
+        selected, reason = option_selection.choose_representative_family(
             {"family_ids": ["F1", "F2"]}, "F1", family_map
         )
         self.assertEqual((selected, reason), ("F2", "selected_option_family_sample_count_max"))
 
         trace = pd.DataFrame([{
-            **{column: "" for column in query_estimate_llm.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS},
+            **{column: "" for column in practice_options.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS},
             "display_id": "D1", "practice_option_id": "O2", "family_id": "F2",
             "option_sample_count": 3, "option_package_count": 1,
         }])
@@ -2118,21 +2159,21 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "selection_reason": "no_explicit_match_selected_by_sample_count",
             "representative_selection_reason": reason,
         }])
-        enriched = query_estimate_llm.apply_option_selection_to_grouping_trace(trace, selection).iloc[0]
+        enriched = option_selection.apply_option_selection_to_grouping_trace(trace, selection).iloc[0]
         self.assertTrue(enriched["is_selected_option"])
         self.assertTrue(enriched["is_representative_family"])
         self.assertEqual(enriched["representative_selection_reason"], reason)
 
     def test_query_parse_args_explanations_default_false_and_flag_true(self):
         with patch.object(sys, "argv", ["query_cost_estimate_llm.py", "--text", "test"]):
-            self.assertFalse(query_estimate_llm.parse_args().with_explanations)
+            self.assertFalse(query_cli.parse_args().with_explanations)
         with patch.object(sys, "argv", ["query_cost_estimate_llm.py", "--text", "test", "--with-explanations"]):
-            self.assertTrue(query_estimate_llm.parse_args().with_explanations)
+            self.assertTrue(query_cli.parse_args().with_explanations)
 
     def test_optional_explanations_skip_or_call_existing_generator(self):
-        scenario = query_estimate_llm.EstimateScenario("S001", 1, "", "", [])
-        with patch.object(query_estimate_llm, "generate_final_explanation") as generator:
-            output, success, error, prompt, trace = query_estimate_llm.generate_optional_final_explanation(
+        scenario = query_models.EstimateScenario("S001", 1, "", "", [])
+        with patch.object(explanation, "generate_final_explanation") as generator:
+            output, success, error, prompt, trace = explanation.generate_optional_final_explanation(
                 False, "需求", scenario, pd.DataFrame(), []
             )
         generator.assert_not_called()
@@ -2142,25 +2183,25 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(trace["stage"], "final_explanation")
 
         expected = (scenario, True, "", "prompt", {"stage": "final_explanation"})
-        with patch.object(query_estimate_llm, "generate_final_explanation", return_value=expected) as generator:
-            actual = query_estimate_llm.generate_optional_final_explanation(
+        with patch.object(explanation, "generate_final_explanation", return_value=expected) as generator:
+            actual = explanation.generate_optional_final_explanation(
                 True, "需求", scenario, pd.DataFrame()
             )
         generator.assert_called_once()
         self.assertEqual(actual, expected)
 
     def test_scenario_outputs_skip_unitless_item_without_blocking_normal_item(self):
-        normal_item = query_estimate_llm.ScenarioItem(
+        normal_item = query_models.ScenarioItem(
             "package-1", "sid-waterproof", "ref-waterproof", "D1", "D1-O01",
             "D1-O01", "F1", "F1", "选用防水做法", {"type": "exact", "value": 10}, "按面积计算", 17,
             quantity_source="historical_median", quantity_explanation="没有用户数量",
             quantity_sample_count=3, quantity_minimum=5, quantity_median=10, quantity_maximum=15,
         )
-        unitless_item = query_estimate_llm.ScenarioItem(
+        unitless_item = query_models.ScenarioItem(
             "package-1", "sid-measures", "ref-measures", "D2", "D2-O01",
             "D2-O01", "F2", "F2", "其他措施费", {"type": "exact", "value": 1}, "按项计算",
         )
-        scenario = query_estimate_llm.EstimateScenario(
+        scenario = query_models.EstimateScenario(
             "S001", 1, "防水方案", "", [normal_item, unitless_item]
         )
         displays = pd.DataFrame([
@@ -2193,8 +2234,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ]),
         }
 
-        with patch.object(query_estimate_llm, "price_stats_for_option", return_value=price_stats) as price_lookup:
-            output, price_evidence = query_estimate_llm.build_scenario_outputs(
+        with patch.object(query_pipeline, "price_stats_for_option", return_value=price_stats) as price_lookup:
+            output, price_evidence = query_pipeline.build_scenario_outputs(
                 [scenario], displays, families, pd.DataFrame(), {17: ["F1", "F-extra"]}
             )
 
@@ -2217,7 +2258,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertNotIn("工程量说明", output.columns)
 
     def test_estimate_scenario_columns_remove_quantity_count_and_follow_display_order(self):
-        columns = query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS
+        columns = output_columns.ESTIMATE_SCENARIO_COLUMNS
         self.assertNotIn("工程量样本数", columns)
         self.assertNotIn("工程量来源", columns)
         self.assertNotIn("工程量说明", columns)
@@ -2240,14 +2281,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         ])
 
     def test_historical_quantity_display_uses_expanded_price_evidence_count(self):
-        item = query_estimate_llm.ScenarioItem(
+        item = query_models.ScenarioItem(
             "P1", "sid-selected", "selected-ref", "D1", "D1-O01", "D1-O01",
             "F1", "F1", "", {"type": "exact", "value": 720},
             "原说明包含4条同类历史样本", 5,
             quantity_source="historical_median", quantity_sample_count=4,
             quantity_minimum=600, quantity_median=720, quantity_maximum=900,
         )
-        scenario = query_estimate_llm.EstimateScenario("S001", 1, "", "", [item])
+        scenario = query_models.EstimateScenario("S001", 1, "", "", [item])
         displays = pd.DataFrame([{
             "display_id": "D1", "unit": "m",
             "practice_options": [{"practice_option_id": "D1-O01", "family_ids": ["F1"]}],
@@ -2269,8 +2310,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "expanded_evidence": expanded_evidence,
         }
 
-        with patch.object(query_estimate_llm, "price_stats_for_option", return_value=price_stats):
-            output, price_evidence = query_estimate_llm.build_scenario_outputs(
+        with patch.object(query_pipeline, "price_stats_for_option", return_value=price_stats):
+            output, price_evidence = query_pipeline.build_scenario_outputs(
                 [scenario], displays, families, pd.DataFrame()
             )
 
@@ -2310,16 +2351,16 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ("historical_median", True, "全库同类样本无有效中位数，暂采用最佳召回样本工程量。"),
         ]
         for source, fallback_used, reason in cases:
-            item = query_estimate_llm.ScenarioItem(
+            item = query_models.ScenarioItem(
                 "P1", "sid-selected", "selected-ref", "D1", "D1-O01", "D1-O01",
                 "F1", "F1", "", {"type": "exact", "value": 8}, reason, 1,
                 quantity_source=source, quantity_fallback_used=fallback_used,
             )
-            scenario = query_estimate_llm.EstimateScenario("S001", 1, "", "", [item])
+            scenario = query_models.EstimateScenario("S001", 1, "", "", [item])
             with self.subTest(source=source), patch.object(
-                query_estimate_llm, "price_stats_for_option", return_value=price_stats
+                query_pipeline, "price_stats_for_option", return_value=price_stats
             ):
-                output, _price_evidence = query_estimate_llm.build_scenario_outputs(
+                output, _price_evidence = query_pipeline.build_scenario_outputs(
                     [scenario], displays, families, pd.DataFrame()
                 )
             self.assertNotIn("工程量说明", output.columns)
@@ -2335,7 +2376,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         }
 
     def evidence_expansion_item(self) -> object:
-        return query_estimate_llm.ScenarioItem(
+        return query_models.ScenarioItem(
             "P1", "selected", "selected-ref", "D1", "D1-O01", "D1-O01",
             "F1", "F1", "", {"type": "exact", "value": 1}, "", 3,
             quantity_source="historical_median",
@@ -2345,16 +2386,16 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         plain = "更换曳引钢丝绳(含人工)"
         model = "更换曳引钢丝绳(P185012C000-01L221)(含人工)"
 
-        self.assertEqual(query_estimate_llm.normalize_evidence_expansion_name(plain), "更换曳引钢丝绳")
+        self.assertEqual(evidence_expansion.normalize_evidence_expansion_name(plain), "更换曳引钢丝绳")
         self.assertEqual(
-            query_estimate_llm.normalize_evidence_expansion_name("更换曳引钢丝绳(含拆除及安装人工费)"),
+            evidence_expansion.normalize_evidence_expansion_name("更换曳引钢丝绳(含拆除及安装人工费)"),
             "更换曳引钢丝绳",
         )
         self.assertEqual(
-            query_estimate_llm.normalize_evidence_expansion_name(model),
+            evidence_expansion.normalize_evidence_expansion_name(model),
             "更换曳引钢丝绳(P185012C000-01L221)",
         )
-        self.assertEqual(query_estimate_llm.normalize_display_name(plain), "更换曳引钢丝绳(含人工")
+        self.assertEqual(candidate_display_groups_module.normalize_display_name(plain), "更换曳引钢丝绳(含人工")
 
     def test_evidence_expansion_candidates_are_deduplicated_unit_exact_and_limited(self):
         item = self.evidence_expansion_item()
@@ -2365,7 +2406,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             rows.append(self.price_family(f"F{index}", f"sig-{index}"))
         rows.insert(3, self.price_family("F3", "duplicate-signature"))
 
-        original, target, candidates = query_estimate_llm.option_evidence_expansion_candidates(
+        original, target, candidates = evidence_expansion.option_evidence_expansion_candidates(
             item, option, pd.DataFrame(rows)
         )
 
@@ -2393,7 +2434,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         return tags
 
     def test_evidence_expansion_validates_llm_output_strictly(self):
-        parsed, accepted = query_estimate_llm.validate_option_evidence_expansion_result(
+        parsed, accepted = evidence_expansion.validate_option_evidence_expansion_result(
             {
                 "families": [self.evidence_tags("F1"), self.evidence_tags("F2")],
                 "accepted_family_ids": ["F2"],
@@ -2422,7 +2463,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         ]
         for result in invalid_results:
             with self.subTest(result=result), self.assertRaises(ValueError):
-                query_estimate_llm.validate_option_evidence_expansion_result(
+                evidence_expansion.validate_option_evidence_expansion_result(
                     result, "F1", ["F2"]
                 )
 
@@ -2433,7 +2474,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "F3": {"object_action": "限速器钢丝绳更换", "thickness": "", "material": "", "level": ""},
         }
         self.assertEqual(
-            query_estimate_llm.filter_option_evidence_hard_conflicts(
+            evidence_expansion.filter_option_evidence_hard_conflicts(
                 ["F2", "F3"], "F1", tags, "m", {"F2": "m", "F3": "m"}
             ),
             ["F2", "F3"],
@@ -2450,7 +2491,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "F7": {"object_action": "卷材防水新做", "thickness": "3mm", "material": "SBS", "level": "2层"},
         }
         self.assertEqual(
-            query_estimate_llm.filter_option_evidence_hard_conflicts(
+            evidence_expansion.filter_option_evidence_hard_conflicts(
                 ["F2", "F3", "F4", "F5", "F6", "F7"],
                 "F1",
                 tags,
@@ -2468,7 +2509,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "F4": {"object_action": "多线盘更换", "thickness": "", "material": "", "level": ""},
         }
         self.assertEqual(
-            query_estimate_llm.filter_option_evidence_hard_conflicts(
+            evidence_expansion.filter_option_evidence_hard_conflicts(
                 ["F2"],
                 "F1",
                 fire_tags,
@@ -2478,7 +2519,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             ["F2"],
         )
         self.assertEqual(
-            query_estimate_llm.filter_option_evidence_hard_conflicts(
+            evidence_expansion.filter_option_evidence_hard_conflicts(
                 [], "F1", fire_tags, "台", {"F2": "台", "F3": "台", "F4": "台"}
             ),
             [],
@@ -2486,7 +2527,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_evidence_expansion_uses_selected_representative_without_reselection(self):
         original = self.evidence_expansion_item()
-        item = query_estimate_llm.ScenarioItem(
+        item = query_models.ScenarioItem(
             original.project_package_id, original.stable_sample_id, original.source_ref,
             original.display_id, original.practice_option_id, original.original_option_id,
             original.original_family_id, "F2", original.selection_reason, original.quantity,
@@ -2501,7 +2542,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         ])
 
         original_family_ids, representative, candidates = (
-            query_estimate_llm.option_evidence_expansion_candidates(item, option, families)
+            evidence_expansion.option_evidence_expansion_candidates(item, option, families)
         )
 
         self.assertEqual(original_family_ids, ["F1", "F2"])
@@ -2518,7 +2559,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "family_id": "F2", "cost_item_name": "清单F2",
             "project_description": "特征F2", "unit": "m²",
         }]
-        prompt = query_estimate_llm.build_option_evidence_expansion_prompt(representative, candidates)
+        prompt = evidence_expansion.build_option_evidence_expansion_prompt(representative, candidates)
         payload = json.loads(prompt.split("输入：\n", 1)[1])
         self.assertEqual(payload, {
             "representative_family": representative,
@@ -2556,9 +2597,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             content=response_content, usage={}, raw_content=json.dumps(response_content, ensure_ascii=False)
         )
 
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response):
-            expanded, sheet, traces = query_estimate_llm.expand_option_price_evidence_families(
-                [item], displays, families, samples, []
+        with patch.object(evidence_expansion, "request_llm_json_with_usage", return_value=response) as request_mock:
+            expanded, sheet, traces = evidence_expansion.expand_option_price_evidence_families(
+                [item], displays, families, samples, [], request_fn=request_mock
             )
 
         self.assertEqual(expanded, {3: ["F1", "F2", "F3"]})
@@ -2585,9 +2626,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             for index in range(1, 11)
         ])
 
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage") as llm:
-            expanded, sheet, traces = query_estimate_llm.expand_option_price_evidence_families(
-                [item], displays, families, samples, []
+        with patch.object(evidence_expansion, "request_llm_json_with_usage") as llm:
+            expanded, sheet, traces = evidence_expansion.expand_option_price_evidence_families(
+                [item], displays, families, samples, [], request_fn=llm
             )
 
         llm.assert_not_called()
@@ -2622,10 +2663,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         response = types.SimpleNamespace(content=response_content, usage={}, raw_content="")
 
         with patch.object(
-            query_estimate_llm, "request_llm_json_with_usage", return_value=response
+            evidence_expansion, "request_llm_json_with_usage", return_value=response
         ) as llm:
-            expanded, _sheet, _traces = query_estimate_llm.expand_option_price_evidence_families(
-                [item], displays, families, samples, []
+            expanded, _sheet, _traces = evidence_expansion.expand_option_price_evidence_families(
+                [item], displays, families, samples, [], request_fn=llm
             )
 
         llm.assert_called_once()
@@ -2641,9 +2682,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         samples = pd.DataFrame([self.price_sample("sid-1", "sig-1", 10)])
         warnings = []
 
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage") as llm:
-            expanded, sheet, traces = query_estimate_llm.expand_option_price_evidence_families(
-                [item], displays, families, samples, warnings
+        with patch.object(evidence_expansion, "request_llm_json_with_usage") as llm:
+            expanded, sheet, traces = evidence_expansion.expand_option_price_evidence_families(
+                [item], displays, families, samples, warnings, request_fn=llm
             )
 
         llm.assert_not_called()
@@ -2656,7 +2697,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_evidence_expansion_invalid_representative_falls_back_without_reselection(self):
         original = self.evidence_expansion_item()
-        item = query_estimate_llm.ScenarioItem(
+        item = query_models.ScenarioItem(
             original.project_package_id, original.stable_sample_id, original.source_ref,
             original.display_id, original.practice_option_id, original.original_option_id,
             original.original_family_id, "F2", original.selection_reason, original.quantity,
@@ -2673,9 +2714,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         samples = pd.DataFrame([self.price_sample("sid-1", "sig-1", 10)])
         warnings = []
 
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage") as llm:
-            expanded, _sheet, traces = query_estimate_llm.expand_option_price_evidence_families(
-                [item], displays, families, samples, warnings
+        with patch.object(evidence_expansion, "request_llm_json_with_usage") as llm:
+            expanded, _sheet, traces = evidence_expansion.expand_option_price_evidence_families(
+                [item], displays, families, samples, warnings, request_fn=llm
             )
 
         llm.assert_not_called()
@@ -2695,9 +2736,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         samples = pd.DataFrame([self.price_sample("sid-1", "sig-1", 10)])
         warnings = []
 
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage", side_effect=RuntimeError("down")):
-            expanded, sheet, traces = query_estimate_llm.expand_option_price_evidence_families(
-                [item], displays, families, samples, warnings
+        with patch.object(evidence_expansion, "request_llm_json_with_usage", side_effect=RuntimeError("down")) as request_mock:
+            expanded, sheet, traces = evidence_expansion.expand_option_price_evidence_families(
+                [item], displays, families, samples, warnings, request_fn=request_mock
             )
 
         self.assertEqual(expanded, {3: ["F1"]})
@@ -2737,7 +2778,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             for index, price in enumerate([10, 20, 30, 40, 50], start=1)
         ])
 
-        stats = query_estimate_llm.price_stats_for_option(
+        stats = price_statistics.price_stats_for_option(
             option, pd.Series({"unit": "m²"}), families, samples
         )
 
@@ -2759,7 +2800,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             for index in range(1, 12)
         ])
 
-        stats = query_estimate_llm.price_stats_for_option(
+        stats = price_statistics.price_stats_for_option(
             option, pd.Series({"unit": "m²"}), families, samples
         )
 
@@ -2793,13 +2834,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         ])
         embeddings = np.zeros((len(samples), 1), dtype=np.float32)
 
-        constrained_mask = query_estimate_llm.build_constraint_mask(
+        constrained_mask = constraints.build_constraint_mask(
             samples, "浙江省嘉兴市", "2025-01-01", "2025-12-31"
         )
-        candidate_samples, _candidate_embeddings = query_estimate_llm.filter_rows_and_embeddings(
+        candidate_samples, _candidate_embeddings = constraints.filter_rows_and_embeddings(
             samples, embeddings, constrained_mask, "清单样本"
         )
-        constrained_stats = query_estimate_llm.price_stats_for_option(
+        constrained_stats = price_statistics.price_stats_for_option(
             option, pd.Series({"unit": "m²"}), families, candidate_samples
         )
 
@@ -2810,11 +2851,11 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             (100.0, 150.0, 200.0),
         )
 
-        unconstrained_mask = query_estimate_llm.build_constraint_mask(samples, "", "", "")
-        all_candidate_samples, _all_candidate_embeddings = query_estimate_llm.filter_rows_and_embeddings(
+        unconstrained_mask = constraints.build_constraint_mask(samples, "", "", "")
+        all_candidate_samples, _all_candidate_embeddings = constraints.filter_rows_and_embeddings(
             samples, embeddings, unconstrained_mask, "清单样本"
         )
-        unconstrained_stats = query_estimate_llm.price_stats_for_option(
+        unconstrained_stats = price_statistics.price_stats_for_option(
             option, pd.Series({"unit": "m²"}), families, all_candidate_samples
         )
 
@@ -2834,7 +2875,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             for index in range(1, 9)
         ])
 
-        stats = query_estimate_llm.price_stats_for_option(
+        stats = price_statistics.price_stats_for_option(
             option, pd.Series({"unit": "m²"}), families, samples
         )
 
@@ -2849,7 +2890,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             for index in range(1, 16)
         ])
 
-        stats = query_estimate_llm.price_stats_for_option(
+        stats = price_statistics.price_stats_for_option(
             option, pd.Series({"unit": "m²"}), families, samples
         )
 
@@ -2869,7 +2910,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             self.price_sample("sid-2", "shared", 20),
         ])
 
-        stats = query_estimate_llm.price_stats_for_option(
+        stats = price_statistics.price_stats_for_option(
             option, pd.Series({"unit": "m²"}), families, samples
         )
 
@@ -2888,14 +2929,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         option = {"practice_option_id": "D001-O01", "family_ids": ["F001"]}
         for families, expected in cases:
             with self.subTest(expected=expected), self.assertRaisesRegex(ValueError, f"D001-O01.*F001|F001.*{expected}") as raised:
-                query_estimate_llm.price_stats_for_option(option, display, families, samples)
+                price_statistics.price_stats_for_option(option, display, families, samples)
             self.assertIn("F001", str(raised.exception))
             self.assertIn("D001-O01", str(raised.exception))
 
     def test_option_price_stats_falls_back_to_source_ref_and_rejects_incompatible_units(self):
         option = {"practice_option_id": "D001-O01", "family_ids": ["F001"]}
         families = pd.DataFrame([self.price_family("F001", "sig-1")])
-        source_deduplicated = query_estimate_llm.price_stats_for_option(
+        source_deduplicated = price_statistics.price_stats_for_option(
             option,
             pd.Series({"unit": "m²"}),
             families,
@@ -2906,14 +2947,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
         self.assertEqual(source_deduplicated["evidence_count"], 1)
         with self.assertRaisesRegex(ValueError, "单位不兼容"):
-            query_estimate_llm.price_stats_for_option(
+            price_statistics.price_stats_for_option(
                 option,
                 pd.Series({"unit": "m²"}),
                 families,
                 pd.DataFrame([self.price_sample("sid-1", "sig-1", 10, unit="m")]),
             )
 
-        duplicate_stats = query_estimate_llm.price_stats_for_option(
+        duplicate_stats = price_statistics.price_stats_for_option(
             option,
             pd.Series({"unit": "m²"}),
             families,
@@ -2933,14 +2974,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         }])
         samples = pd.DataFrame([self.price_sample("sid-1", "sig-1", "")])
 
-        stats = query_estimate_llm.price_stats_for_option(
+        stats = price_statistics.price_stats_for_option(
             option, pd.Series({"unit": "m²"}), families, samples
         )
         with self.assertRaisesRegex(ValueError, "unit_price"):
-            query_estimate_llm.validate_price_stats(stats, "selected-id", "D001-O01")
+            price_statistics.validate_price_stats(stats, "selected-id", "D001-O01")
 
     def test_quantity_validation(self):
-        self.assertEqual(query_estimate_llm.validate_quantity({"type": "exact", "value": 10}), {"type": "exact", "value": 10.0})
+        self.assertEqual(estimate_calculator.validate_quantity({"type": "exact", "value": 10}), {"type": "exact", "value": 10.0})
         for quantity in [
             {"type": "exact", "value": 0},
             {"type": "exact", "value": -1},
@@ -2948,18 +2989,18 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {"type": "unknown"},
         ]:
             with self.assertRaises(ValueError):
-                query_estimate_llm.validate_quantity(quantity)
+                estimate_calculator.validate_quantity(quantity)
 
     def test_parse_info_records_exact_only_quantity_and_explanation_config(self):
-        self.assertEqual(query_estimate_llm.quantity_determination_status({"error_message": ""}), "success")
-        self.assertEqual(query_estimate_llm.quantity_determination_status({"error_message": "invalid"}), "failed")
+        self.assertEqual(frames.quantity_determination_status({"error_message": ""}), "success")
+        self.assertEqual(frames.quantity_determination_status({"error_message": "invalid"}), "failed")
         self.assertEqual(
-            query_estimate_llm.quantity_determination_status({"error_message": "invalid", "fallback": True}),
+            frames.quantity_determination_status({"error_message": "invalid", "fallback": True}),
             "fallback",
         )
         trace = {"prompt_chars": 10, "prompt_tokens": 4, "completion_tokens": 2}
-        parse_info = query_estimate_llm.build_parse_info(
-            rewrite=query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", "浙江省嘉兴市", "2025-01-01", "2025-12-31", [], True),
+        parse_info = frames.build_parse_info(
+            rewrite=query_models.QueryRewrite("屋面", "屋面工程", "屋面防水", "浙江省嘉兴市", "2025-01-01", "2025-12-31", [], True),
             top_packages=20,
             top_items=300,
             max_packages_per_cache_subject=1,
@@ -2997,7 +3038,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             final_explanation_trace=trace,
             final_explanation_error="invalid explanation",
             output_path=Path("query.xlsx"),
-            started_at=query_estimate_llm.datetime.now(),
+            started_at=frames.datetime.now(),
             index_dir=Path("embeddings"),
             include_debug_text=True,
             display_option_grouping_prompt="grouping",
@@ -3022,7 +3063,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(values["quantity_determination_prompt_preview"], "quantity")
 
     def test_estimate_summary_uses_final_columns_and_sums_all_items(self):
-        scenario = query_estimate_llm.EstimateScenario(
+        scenario = query_models.EstimateScenario(
             "S001", 1, "维修方案", "方案说明", [], "确认现场"
         )
         estimate_scenarios = pd.DataFrame([
@@ -3036,9 +3077,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {"project_key": "", "project_package_id": "PKG3", "工程名称": "独立名称"},
         ])
 
-        summary = query_estimate_llm.build_estimate_summary("原始问题", [scenario], estimate_scenarios, price_evidence)
+        summary = pricing_summary_module.build_estimate_summary("原始问题", [scenario], estimate_scenarios, price_evidence)
 
-        self.assertEqual(summary.columns.tolist(), query_estimate_llm.ESTIMATE_SUMMARY_COLUMNS)
+        self.assertEqual(summary.columns.tolist(), pricing_summary_module.ESTIMATE_SUMMARY_COLUMNS)
         self.assertEqual(
             summary.loc[0, ["合价P10", "合价中位数", "合价P90"]].tolist(),
             [11.5, 22.5, 33.5],
@@ -3051,13 +3092,13 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
     def test_customer_display_filter_keeps_threshold_and_complete_debug_evidence(self):
         items = [
-            query_estimate_llm.ScenarioItem(
+            query_models.ScenarioItem(
                 "PKG", f"sid-{position}", f"ref-{position}", f"D{position}", f"O{position}",
                 f"O{position}", f"F{position}", f"F{position}", "", {"type": "exact", "value": 1}, "", position,
             )
             for position in [1, 2, 3]
         ]
-        scenario = query_estimate_llm.EstimateScenario("S001", 1, "", "", items)
+        scenario = query_models.EstimateScenario("S001", 1, "", "", items)
         rows = pd.DataFrame([
             {"final_item_position": 1, "清单名称": "A", "价格证据样本数": 2},
             {"final_item_position": 2, "清单名称": "B", "价格证据样本数": 3},
@@ -3069,7 +3110,7 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             for index in range(count)
         ])
 
-        filtered_scenario, display_rows, display_evidence = query_estimate_llm.filter_customer_display_outputs(
+        filtered_scenario, display_rows, display_evidence = pricing_summary_module.filter_customer_display_outputs(
             scenario, rows, all_evidence
         )
 
@@ -3099,9 +3140,9 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             {"project_key": "", "project_package_id": "PKG1"},
             {"project_key": "", "project_package_id": "PKG2"},
         ])
-        scenario = query_estimate_llm.EstimateScenario("S001", 1, "方案", "说明", [], "确认")
+        scenario = query_models.EstimateScenario("S001", 1, "方案", "说明", [], "确认")
 
-        summary = query_estimate_llm.build_estimate_summary("问题", [scenario], rows, evidence).iloc[0]
+        summary = pricing_summary_module.build_estimate_summary("问题", [scenario], rows, evidence).iloc[0]
 
         self.assertEqual(summary["主要施工内容"], "A")
         self.assertEqual(summary["计价项目数"], 2)
@@ -3116,15 +3157,15 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             "cost_item_name": "B", "project_description": "3mm", "unit": "m²",
             "quantity": 10, "unit_price": 20, "estimated_amount": 200,
         }]
-        prompt = query_estimate_llm.build_final_explanation_prompt("原始问题", final_items, 100, 200, 300)
+        prompt = explanation.build_final_explanation_prompt("原始问题", final_items, 100, 200, 300)
         payload = json.loads(prompt.split("输入：\n", 1)[1])
         self.assertEqual(set(payload), {"user_query", "final_items", "total_price"})
         self.assertEqual(payload["final_items"], final_items)
         self.assertNotIn("evidence_count", prompt.split("输入：\n", 1)[1])
 
-        scenario = query_estimate_llm.EstimateScenario("S001", 1, "", "", [])
+        scenario = query_models.EstimateScenario("S001", 1, "", "", [])
         valid = {"scenario_name": "方案", "scenario_summary": "说明", "site_confirmation": "确认"}
-        parsed = query_estimate_llm.parse_final_explanation_result(valid, scenario)
+        parsed = explanation.parse_final_explanation_result(valid, scenario)
         self.assertEqual(parsed.site_confirmation, "确认")
         invalid_results = [
             {**valid, "extra": "x"},
@@ -3136,14 +3177,14 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         ]
         for invalid in invalid_results:
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
-                query_estimate_llm.parse_final_explanation_result(invalid, scenario)
+                explanation.parse_final_explanation_result(invalid, scenario)
 
     def test_invalid_final_explanation_uses_filtered_fallback_without_failing_query(self):
-        item = query_estimate_llm.ScenarioItem(
+        item = query_models.ScenarioItem(
             "PKG", "sid-b", "ref-b", "D2", "O2", "O2", "F2", "F2", "",
             {"type": "exact", "value": 2}, "", 2,
         )
-        scenario = query_estimate_llm.EstimateScenario("S001", 1, "", "", [item])
+        scenario = query_models.EstimateScenario("S001", 1, "", "", [item])
         rows = pd.DataFrame([{
             "清单名称": "清单B", "项目特征": "特征B", "单位": "m", "工程量": 2,
             "综合单价P10": 10, "综合单价中位数": 20, "综合单价P90": 30,
@@ -3154,8 +3195,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         )
         warnings = []
 
-        with patch.object(query_estimate_llm, "request_llm_json_with_usage", return_value=response):
-            output, success, error, prompt, trace = query_estimate_llm.generate_final_explanation(
+        with patch.object(explanation, "request_llm_json_with_usage", return_value=response):
+            output, success, error, prompt, trace = explanation.generate_final_explanation(
                 "原始问题", scenario, rows, warnings
             )
 
@@ -3167,12 +3208,12 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(trace["parsed_status"], "failed")
 
     def test_all_filtered_summary_is_one_fixed_row_and_no_amounts(self):
-        base = query_estimate_llm.EstimateScenario("S001", 1, "", "", [])
-        scenario = query_estimate_llm.insufficient_evidence_scenario(base)
-        rows = pd.DataFrame(columns=query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS)
-        evidence = pd.DataFrame(columns=query_estimate_llm.PRICE_EVIDENCE_ITEM_COLUMNS)
+        base = query_models.EstimateScenario("S001", 1, "", "", [])
+        scenario = explanation.insufficient_evidence_scenario(base)
+        rows = pd.DataFrame(columns=output_columns.ESTIMATE_SCENARIO_COLUMNS)
+        evidence = pd.DataFrame(columns=output_columns.PRICE_EVIDENCE_ITEM_COLUMNS)
 
-        summary = query_estimate_llm.build_estimate_summary("原始问题", [scenario], rows, evidence)
+        summary = pricing_summary_module.build_estimate_summary("原始问题", [scenario], rows, evidence)
 
         self.assertEqual(len(summary), 1)
         self.assertEqual(summary.loc[0, "方案名称"], "历史价格证据不足")
@@ -3181,8 +3222,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(summary.loc[0, "参考样本数"], 0)
         self.assertEqual(summary.loc[0, "合价中位数"], "")
 
-        with patch.object(query_estimate_llm, "generate_optional_final_explanation") as generator:
-            explained, success, error, prompt, trace = query_estimate_llm.generate_customer_explanation(
+        with patch.object(explanation, "generate_optional_final_explanation") as generator:
+            explained, success, error, prompt, trace = explanation.generate_customer_explanation(
                 True, "原始问题", base, rows
             )
         generator.assert_not_called()
@@ -3192,34 +3233,34 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
         self.assertEqual(trace["parsed_status"], "skipped")
 
     def test_workbook_includes_new_columns_and_two_stage_trace(self):
-        result = query_estimate_llm.QueryResult(
-            rewrite=query_estimate_llm.QueryRewrite("屋面", "屋面工程", "屋面防水", "", "", "", [], True),
-            estimate_summary=pd.DataFrame(columns=query_estimate_llm.ESTIMATE_SUMMARY_COLUMNS),
-            estimate_scenarios=pd.DataFrame(columns=query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS),
-            matched_project_packages=pd.DataFrame(columns=query_estimate_llm.MATCHED_PROJECT_PACKAGE_COLUMNS),
-            candidate_families=pd.DataFrame(columns=query_estimate_llm.CANDIDATE_FAMILY_COLUMNS),
-            candidate_display_groups=pd.DataFrame(columns=query_estimate_llm.CANDIDATE_DISPLAY_GROUP_COLUMNS),
-            package_evidence_weights=pd.DataFrame(columns=query_estimate_llm.PACKAGE_EVIDENCE_WEIGHT_COLUMNS),
-            display_group_families=pd.DataFrame(columns=query_estimate_llm.DISPLAY_GROUP_FAMILY_COLUMNS),
-            display_option_grouping_trace=pd.DataFrame(columns=query_estimate_llm.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS),
-            option_selection_trace=pd.DataFrame(columns=query_estimate_llm.OPTION_SELECTION_TRACE_COLUMNS),
-            matched_project_examples=pd.DataFrame(columns=query_estimate_llm.MATCHED_PROJECT_EXAMPLE_COLUMNS),
-            evidence_items=pd.DataFrame(columns=query_estimate_llm.EVIDENCE_ITEM_COLUMNS),
+        result = query_models.QueryResult(
+            rewrite=query_models.QueryRewrite("屋面", "屋面工程", "屋面防水", "", "", "", [], True),
+            estimate_summary=pd.DataFrame(columns=pricing_summary_module.ESTIMATE_SUMMARY_COLUMNS),
+            estimate_scenarios=pd.DataFrame(columns=output_columns.ESTIMATE_SCENARIO_COLUMNS),
+            matched_project_packages=pd.DataFrame(columns=package_selection.MATCHED_PROJECT_PACKAGE_COLUMNS),
+            candidate_families=pd.DataFrame(columns=candidate_families_module.CANDIDATE_FAMILY_COLUMNS),
+            candidate_display_groups=pd.DataFrame(columns=candidate_display_groups_module.CANDIDATE_DISPLAY_GROUP_COLUMNS),
+            package_evidence_weights=pd.DataFrame(columns=retrieval_weights_module.PACKAGE_EVIDENCE_WEIGHT_COLUMNS),
+            display_group_families=pd.DataFrame(columns=candidate_display_groups_module.DISPLAY_GROUP_FAMILY_COLUMNS),
+            display_option_grouping_trace=pd.DataFrame(columns=practice_options.DISPLAY_OPTION_GROUPING_TRACE_COLUMNS),
+            option_selection_trace=pd.DataFrame(columns=option_selection.OPTION_SELECTION_TRACE_COLUMNS),
+            matched_project_examples=pd.DataFrame(columns=package_selection.MATCHED_PROJECT_EXAMPLE_COLUMNS),
+            evidence_items=pd.DataFrame(columns=candidate_families_module.EVIDENCE_ITEM_COLUMNS),
             option_evidence_expansion=pd.DataFrame(
-                columns=query_estimate_llm.OPTION_EVIDENCE_EXPANSION_COLUMNS
+                columns=evidence_expansion.OPTION_EVIDENCE_EXPANSION_COLUMNS
             ),
-            price_evidence_items=pd.DataFrame(columns=query_estimate_llm.PRICE_EVIDENCE_ITEM_COLUMNS),
+            price_evidence_items=pd.DataFrame(columns=output_columns.PRICE_EVIDENCE_ITEM_COLUMNS),
             parse_info=pd.DataFrame([{"字段": "final_explanation_status", "值": "failed"}]),
             llm_trace=pd.DataFrame(
                 [{"stage": stage} for stage in ["query_rewrite_for_embedding", "display_option_grouping", "range_selection", "quantity_determination", "final_explanation"]],
-                columns=query_estimate_llm.LLM_TRACE_COLUMNS,
+                columns=output_columns.LLM_TRACE_COLUMNS,
             ),
             success=False,
             error_message="explanation failed",
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "result.xlsx"
-            query_estimate_llm.write_query_result_workbook(path, result)
+            excel_writer.write_estimate_workbook(path, frames.build_workbook_frames(result))
             workbook = openpyxl.load_workbook(path, data_only=True)
             scenario_headers = [cell.value for cell in workbook["estimate_scenarios"][1]]
             expansion_headers = [cell.value for cell in workbook["option_evidence_expansion"][1]]
@@ -3231,10 +3272,10 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
 
         self.assertEqual(
             scenario_headers,
-            query_estimate_llm.ESTIMATE_SCENARIO_COLUMNS,
+            output_columns.ESTIMATE_SCENARIO_COLUMNS,
         )
-        self.assertEqual(price_evidence_headers, query_estimate_llm.PRICE_EVIDENCE_ITEM_COLUMNS)
-        self.assertEqual(expansion_headers, query_estimate_llm.OPTION_EVIDENCE_EXPANSION_COLUMNS)
+        self.assertEqual(price_evidence_headers, output_columns.PRICE_EVIDENCE_ITEM_COLUMNS)
+        self.assertEqual(expansion_headers, evidence_expansion.OPTION_EVIDENCE_EXPANSION_COLUMNS)
         self.assertEqual(
             sheetnames[1:4],
             ["estimate_scenarios", "option_evidence_expansion", "price_evidence_items"],
@@ -3248,8 +3289,8 @@ class CostItemEstimateScriptTestCase(unittest.TestCase):
             output_path.write_text("existing", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "输出已存在，请加 --overwrite"):
-                query_estimate_llm.validate_output_path(output_path, overwrite=False)
-            query_estimate_llm.validate_output_path(output_path, overwrite=True)
+                query_cli.validate_output_path(output_path, overwrite=False)
+            query_cli.validate_output_path(output_path, overwrite=True)
 
     def test_run_ingest_batch_parses_batch_id_from_filename(self):
         input_path = Path("excel_inputs/audit_ocr_export_20260630_001.xlsx")
