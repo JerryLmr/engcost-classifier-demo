@@ -211,7 +211,7 @@ index_meta.json
 
 ```bash
 backend/.venv/bin/python scripts/query_cost_estimate_llm.py \
-  --text "屋面漏水，想做3mm SBS防水，面积大概500平"
+  --text "屋面墙面漏水，想做3mm SBS防水，面积大概500平"
 ```
 
 方案生成默认关闭；需要生成说明时显式增加 `--with-explanations`。
@@ -400,3 +400,8 @@ outputs/
 ```
 
 如需提交示例数据，应使用脱敏的小样本文件。
+
+### 8.第一阶段启动后端
+
+cd backend
+.venv/bin/python -m uvicorn app:app --reload
