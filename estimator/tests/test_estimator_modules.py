@@ -34,6 +34,20 @@ MODULES = [
     "estimator.retrieval.item_retrieval",
     "estimator.retrieval.evidence_pool",
     "estimator.retrieval.weights",
+    "estimator.candidates.signatures",
+    "estimator.candidates.families",
+    "estimator.candidates.display_groups",
+    "estimator.candidates.practice_options",
+    "estimator.planning.package_selection",
+    "estimator.planning.range_selection",
+    "estimator.planning.option_selection",
+    "estimator.planning.quantity_determination",
+    "estimator.planning.scenarios",
+    "estimator.pricing.evidence_expansion",
+    "estimator.pricing.quantity_statistics",
+    "estimator.pricing.price_statistics",
+    "estimator.pricing.estimate_calculator",
+    "estimator.pricing.summary",
 ]
 
 

@@ -14,7 +14,7 @@ import pandas as pd
 from estimator.paths import REPO_ROOT, resolve_repo_path
 from estimator.indexing.embedding_model import encode_texts, load_embedding_model, normalize_embeddings
 
-from estimator.scripts.cost_item_signature import (
+from estimator.candidates.signatures import (
     build_normalized_signature,
     normalize_project_description,
     normalize_unit,
